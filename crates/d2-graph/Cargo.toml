@@ -1,0 +1,17 @@
+[package]
+name = "d2-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+d2-ast = { path = "../d2-ast" }
+d2-target = { path = "../d2-target" }
+d2-themes = { path = "../d2-themes" }
+d2-color = { path = "../d2-color" }
+d2-geo = { path = "../d2-geo" }
+d2-label = { path = "../d2-label" }
+d2-shape = { path = "../d2-shape" }
+d2-textmeasure = { path = "../d2-textmeasure" }
+d2-fonts = { path = "../d2-fonts" }

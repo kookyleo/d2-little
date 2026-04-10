@@ -12,6 +12,13 @@ members = [
     "crates/d2-themes",
     "crates/d2-target",
     "crates/d2-shape",
+    "crates/d2-ir",
+    "crates/d2-compiler",
+    "crates/d2-graph",
+    "crates/d2-dagre-layout",
+    "crates/d2-exporter",
+    "crates/d2-svg-render",
+    "crates/d2-lib",
 ]
 resolver = "3"
 
