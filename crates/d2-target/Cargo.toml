@@ -1,0 +1,12 @@
+[package]
+name = "d2-target"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+d2-geo = { path = "../d2-geo" }
+d2-color = { path = "../d2-color" }
+d2-themes = { path = "../d2-themes" }
+d2-label = { path = "../d2-label" }

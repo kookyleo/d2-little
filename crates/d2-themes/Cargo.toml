@@ -1,0 +1,9 @@
+[package]
+name = "d2-themes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+d2-color = { path = "../d2-color" }

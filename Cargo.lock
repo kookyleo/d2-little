@@ -83,11 +83,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2-shape"
+version = "0.1.0"
+dependencies = [
+ "d2-geo",
+ "d2-label",
+ "d2-svg-path",
+ "d2-target",
+]
+
+[[package]]
 name = "d2-svg-path"
 version = "0.1.0"
 dependencies = [
  "base32",
  "d2-geo",
+]
+
+[[package]]
+name = "d2-target"
+version = "0.1.0"
+dependencies = [
+ "d2-color",
+ "d2-geo",
+ "d2-label",
+ "d2-themes",
 ]
 
 [[package]]
@@ -97,6 +117,13 @@ dependencies = [
  "d2-fonts",
  "rusttype",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "d2-themes"
+version = "0.1.0"
+dependencies = [
+ "d2-color",
 ]
 
 [[package]]

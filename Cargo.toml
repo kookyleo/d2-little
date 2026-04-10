@@ -9,6 +9,9 @@ members = [
     "crates/d2-font",
     "crates/d2-fonts",
     "crates/d2-textmeasure",
+    "crates/d2-themes",
+    "crates/d2-target",
+    "crates/d2-shape",
 ]
 resolver = "3"
 

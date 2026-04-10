@@ -622,6 +622,12 @@ pub trait Intersectable {
     fn intersections(&self, segment: &Segment) -> Vec<Point>;
 }
 
+impl Intersectable for Segment {
+    fn intersections(&self, segment: &Segment) -> Vec<Point> {
+        Segment::intersections(self, segment)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PathElement
 // ---------------------------------------------------------------------------
@@ -631,6 +637,15 @@ pub trait Intersectable {
 pub enum PathElement {
     Segment(Segment),
     Bezier(BezierCurve),
+}
+
+impl Intersectable for PathElement {
+    fn intersections(&self, segment: &Segment) -> Vec<Point> {
+        match self {
+            PathElement::Segment(s) => s.intersections(segment),
+            PathElement::Bezier(b) => b.intersections(segment),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

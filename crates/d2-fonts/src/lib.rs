@@ -222,4 +222,44 @@ mod tests {
         assert_eq!(d2_font_to_family("mono"), Some(FontFamily::SourceCodePro));
         assert_eq!(d2_font_to_family("unknown"), None);
     }
+
+    #[test]
+    fn test_sfnt2woff_with_real_font() {
+        let ttf = lookup_font_face(FontFamily::SourceSansPro, FontStyle::Regular);
+        let woff = d2_font::sfnt2woff(ttf).expect("sfnt2woff should succeed");
+        // WOFF starts with magic 0x774F4646
+        assert_eq!(&woff[0..4], &[0x77, 0x4F, 0x46, 0x46]);
+        // WOFF should be smaller than TTF (compression)
+        assert!(
+            woff.len() < ttf.len(),
+            "WOFF ({}) should be smaller than TTF ({})",
+            woff.len(),
+            ttf.len()
+        );
+    }
+
+    #[test]
+    fn test_utf8_cut_font() {
+        let ttf = lookup_font_face(FontFamily::SourceSansPro, FontStyle::Regular);
+        let subset = d2_font::utf8_cut_font(ttf, "Hello");
+        assert!(subset.is_some(), "subsetting should succeed");
+        let subset = subset.unwrap();
+        // Subset should be smaller than the original
+        assert!(
+            subset.len() < ttf.len(),
+            "subset ({}) should be smaller than original ({})",
+            subset.len(),
+            ttf.len()
+        );
+        // Subset should still be a valid TTF (starts with 0x00010000)
+        assert_eq!(&subset[0..4], &[0x00, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_get_encoded_subset() {
+        let font = Font::new(FontFamily::SourceSansPro, FontStyle::Regular, FONT_SIZE_M);
+        let encoded = font.get_encoded_subset("Test");
+        assert!(encoded.starts_with("data:application/font-woff;base64,"));
+        assert!(encoded.len() > 40); // should have actual base64 data
+    }
 }
