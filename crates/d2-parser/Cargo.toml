@@ -1,0 +1,11 @@
+[package]
+name = "d2-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+d2-ast = { path = "../d2-ast" }
+
+[dev-dependencies]

@@ -1,0 +1,11 @@
+[package]
+name = "d2-textmeasure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+d2-fonts = { path = "../d2-fonts" }
+rusttype = "0.9"
+unicode-segmentation = "1"

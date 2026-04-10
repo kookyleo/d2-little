@@ -4,6 +4,11 @@ members = [
     "crates/d2-svg-path",
     "crates/d2-color",
     "crates/d2-label",
+    "crates/d2-ast",
+    "crates/d2-parser",
+    "crates/d2-font",
+    "crates/d2-fonts",
+    "crates/d2-textmeasure",
 ]
 resolver = "3"
 
