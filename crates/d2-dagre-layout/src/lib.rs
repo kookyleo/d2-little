@@ -113,6 +113,13 @@ fn get_edge_endpoints(g: &Graph, edge_idx: usize) -> (ObjId, ObjId) {
 
 /// Check if `obj` is equal to or a descendant of `container`.
 fn in_container(obj_id: ObjId, container_id: ObjId, g: &Graph) -> Option<ObjId> {
+    in_container_depth(obj_id, container_id, g, 0)
+}
+
+fn in_container_depth(obj_id: ObjId, container_id: ObjId, g: &Graph, depth: usize) -> Option<ObjId> {
+    if depth > 100 {
+        return None; // prevent infinite recursion from cyclic parent pointers
+    }
     if obj_id == container_id {
         return Some(obj_id);
     }
@@ -120,7 +127,7 @@ fn in_container(obj_id: ObjId, container_id: ObjId, g: &Graph) -> Option<ObjId> 
         return Some(obj_id);
     }
     if let Some(parent) = g.objects[obj_id].parent {
-        return in_container(parent, container_id, g);
+        return in_container_depth(parent, container_id, g, depth + 1);
     }
     None
 }
