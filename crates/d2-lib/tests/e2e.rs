@@ -11,7 +11,7 @@ use std::path::PathBuf;
 fn fixture_path(category: &str, name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("fixtures")
+        .join("e2e_testdata")
         .join(category)
         .join(name)
         .join("dagre")
