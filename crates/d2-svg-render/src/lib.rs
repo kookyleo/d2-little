@@ -2597,7 +2597,7 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
 
     let (fit_open, xml_tag, fit_close, id_attr, tag) = if opts.master_id.is_empty() {
         let version_attr = if opts.omit_version != Some(true) {
-            r#"data-d2-version="0.7.1""#
+            r#"data-d2-version="v0.7.1-HEAD""#
         } else {
             ""
         };

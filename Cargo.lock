@@ -43,15 +43,15 @@ dependencies = [
 
 [[package]]
 name = "d2-ast"
-version = "0.1.0"
+version = "0.7.1"
 
 [[package]]
 name = "d2-color"
-version = "0.1.0"
+version = "0.7.1"
 
 [[package]]
 name = "d2-compiler"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
  "d2-color",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "d2-dagre-layout"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-geo",
  "d2-graph",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "d2-exporter"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-color",
  "d2-fonts",
@@ -89,14 +89,14 @@ dependencies = [
 
 [[package]]
 name = "d2-font"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "d2-fonts"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "d2-font",
@@ -104,11 +104,11 @@ dependencies = [
 
 [[package]]
 name = "d2-geo"
-version = "0.1.0"
+version = "0.7.1"
 
 [[package]]
 name = "d2-graph"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
  "d2-color",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "d2-ir"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
  "d2-parser",
@@ -132,14 +132,14 @@ dependencies = [
 
 [[package]]
 name = "d2-label"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-geo",
 ]
 
 [[package]]
 name = "d2-lib"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
  "d2-compiler",
@@ -158,14 +158,14 @@ dependencies = [
 
 [[package]]
 name = "d2-parser"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
 ]
 
 [[package]]
 name = "d2-shape"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-geo",
  "d2-label",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "d2-svg-path"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "base32",
  "d2-geo",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "d2-svg-render"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-ast",
  "d2-color",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "d2-target"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-color",
  "d2-geo",
@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "d2-textmeasure"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-fonts",
  "rusttype",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "d2-themes"
-version = "0.1.0"
+version = "0.7.1"
 dependencies = [
  "d2-color",
 ]
