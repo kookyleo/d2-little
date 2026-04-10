@@ -1092,18 +1092,13 @@ impl Parser {
                                 rawb.push('-');
                                 break;
                             }
-                            Some(next_ch) => {
+                            Some(_) => {
+                                // The '-' is part of the key (e.g. stroke-dash).
+                                // We already consumed '-'. Just push it and let
+                                // the outer loop process the next char normally.
                                 sb.push('-');
                                 rawb.push('-');
-                                // Continue with next_ch being processed in next iteration
-                                self.unread(next_ch);
-                                self.read(); // re-consume the '-' position fix: we already consumed '-'
-                                // Actually we need to handle this differently - '-' is already consumed
-                                // and next_ch is not consumed. Just continue.
-                                self.unread(next_ch);
-                                if !ch.is_whitespace() {
-                                    last_non_space = self.pos;
-                                }
+                                last_non_space = self.pos;
                                 continue;
                             }
                         }
