@@ -380,9 +380,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
     // Register all objects with the mapper
     let mut mapper = ObjectMapper::new();
-    let obj_ids: Vec<ObjId> = (0..g.objects.len())
-        .filter(|&i| i != g.root)
-        .collect();
+    let obj_ids: Vec<ObjId> = (0..g.objects.len()).filter(|&i| i != g.root).collect();
     for &obj_id in &obj_ids {
         mapper.register(obj_id);
     }
@@ -429,8 +427,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 .filter(|e2| {
                     let (s2, d2) = (e2.src, e2.dst);
                     // Simplified: check direct src/dst match
-                    (s2 == edge.src && d2 == edge.dst)
-                        || (s2 == edge.dst && d2 == edge.src)
+                    (s2 == edge.src && d2 == edge.dst) || (s2 == edge.dst && d2 == edge.src)
                 })
                 .count();
 

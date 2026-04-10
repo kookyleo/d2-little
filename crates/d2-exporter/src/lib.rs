@@ -163,9 +163,7 @@ fn apply_theme(
     if obj.shape.value == d2_target::SHAPE_TEXT {
         shape.text.color = d2_color::N1.to_owned();
     }
-    if obj.shape.value == d2_target::SHAPE_SQL_TABLE
-        || obj.shape.value == d2_target::SHAPE_CLASS
-    {
+    if obj.shape.value == d2_target::SHAPE_SQL_TABLE || obj.shape.value == d2_target::SHAPE_CLASS {
         shape.primary_accent_color = d2_color::B2.to_owned();
         shape.secondary_accent_color = d2_color::AA2.to_owned();
         shape.neutral_accent_color = d2_color::N2.to_owned();

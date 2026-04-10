@@ -8,7 +8,7 @@ use std::fmt::Write as FmtWrite;
 use d2_color;
 use d2_geo;
 use d2_label;
-use d2_shape;
+use d2_shape::{self, ShapeOps};
 use d2_svg_path;
 use d2_target;
 use d2_themes;
@@ -494,26 +494,36 @@ fn arrowhead_marker(
             let rotation_angle = std::f64::consts::PI / 4.0;
             let ox = width / 2.0;
             let oy = height / 2.0;
-            let new_ox =
-                rotation_angle.cos() * ox - rotation_angle.sin() * oy;
-            let new_oy =
-                rotation_angle.sin() * ox + rotation_angle.cos() * oy;
+            let new_ox = rotation_angle.cos() * ox - rotation_angle.sin() * oy;
+            let new_oy = rotation_angle.sin() * ox + rotation_angle.cos() * oy;
 
             let mut cross_el = d2_themes::ThemableElement::new("polygon", inline_theme);
             cross_el.points = format!(
                 "{},{} {},{} {},{} {},{}, {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{}",
-                0.0, height/2.0+inset,
-                width/2.0-inset, height/2.0+inset,
-                width/2.0-inset, height,
-                width/2.0+inset, height,
-                width/2.0+inset, height/2.0+inset,
-                width, height/2.0+inset,
-                width, height/2.0-inset,
-                width/2.0+inset, height/2.0-inset,
-                width/2.0+inset, 0.0,
-                width/2.0-inset, 0.0,
-                width/2.0-inset, height/2.0-inset,
-                0.0, height/2.0-inset,
+                0.0,
+                height / 2.0 + inset,
+                width / 2.0 - inset,
+                height / 2.0 + inset,
+                width / 2.0 - inset,
+                height,
+                width / 2.0 + inset,
+                height,
+                width / 2.0 + inset,
+                height / 2.0 + inset,
+                width,
+                height / 2.0 + inset,
+                width,
+                height / 2.0 - inset,
+                width / 2.0 + inset,
+                height / 2.0 - inset,
+                width / 2.0 + inset,
+                0.0,
+                width / 2.0 - inset,
+                0.0,
+                width / 2.0 - inset,
+                height / 2.0 - inset,
+                0.0,
+                height / 2.0 - inset,
             );
             cross_el.transform = format!(
                 "translate({}, {}) rotate(45)",
@@ -523,9 +533,16 @@ fn arrowhead_marker(
 
             let mut child_path = d2_themes::ThemableElement::new("path", inline_theme);
             if is_target {
-                child_path.d = format!("M{},{} {},{}", width/2.0, height/2.0, width, height/2.0);
+                child_path.d = format!(
+                    "M{},{} {},{}",
+                    width / 2.0,
+                    height / 2.0,
+                    width,
+                    height / 2.0
+                );
             } else {
-                child_path.d = format!("M{},{} {},{}", width/2.0, height/2.0, 0.0, height/2.0);
+                child_path.d =
+                    format!("M{},{} {},{}", width / 2.0, height / 2.0, 0.0, height / 2.0);
             }
 
             let mut g_el = d2_themes::ThemableElement::new("g", inline_theme);
@@ -570,21 +587,31 @@ fn arrowhead_marker(
                 d2_target::Arrowhead::CfMany | d2_target::Arrowhead::CfManyRequired => {
                     child_path.d = format!(
                         "M{},{} {},{} M{},{} {},{} M{},{} {},{}",
-                        width - 3.0, height / 2.0,
-                        width + offset, height / 2.0,
-                        offset + 3.0, height / 2.0,
-                        width + offset, 0.0,
-                        offset + 3.0, height / 2.0,
-                        width + offset, height,
+                        width - 3.0,
+                        height / 2.0,
+                        width + offset,
+                        height / 2.0,
+                        offset + 3.0,
+                        height / 2.0,
+                        width + offset,
+                        0.0,
+                        offset + 3.0,
+                        height / 2.0,
+                        width + offset,
+                        height,
                     );
                 }
                 _ => {
                     child_path.d = format!(
                         "M{},{} {},{} M{},{} {},{}",
-                        width - 3.0, height / 2.0,
-                        width + offset, height / 2.0,
-                        offset * 2.0, 0.0,
-                        offset * 2.0, height,
+                        width - 3.0,
+                        height / 2.0,
+                        width + offset,
+                        height / 2.0,
+                        offset * 2.0,
+                        0.0,
+                        offset * 2.0,
+                        height,
                     );
                 }
             }
@@ -628,16 +655,7 @@ fn arrowhead_marker(
 
     format!(
         r#"<marker id="{}" markerWidth="{}" markerHeight="{}" refX="{}" refY="{}" viewBox="{} {} {} {}" orient="auto" markerUnits="userSpaceOnUse"> {} </marker>"#,
-        id,
-        final_width,
-        height,
-        ref_x,
-        ref_y,
-        0.0,
-        0.0,
-        final_width,
-        height,
-        path
+        id, final_width, height, ref_x, ref_y, 0.0, 0.0, final_width, height, path
     )
 }
 
@@ -716,9 +734,12 @@ fn path_data(
         while i < route.len() - 3 {
             path.push(format!(
                 "C {} {} {} {} {} {}",
-                route[i].x, route[i].y,
-                route[i + 1].x, route[i + 1].y,
-                route[i + 2].x, route[i + 2].y
+                route[i].x,
+                route[i].y,
+                route[i + 1].x,
+                route[i + 1].y,
+                route[i + 2].x,
+                route[i + 2].y
             ));
             i += 3;
         }
@@ -774,11 +795,7 @@ fn path_data(
             let ctx = cux * units;
             let cty = cuy * units;
 
-            path.push(format!(
-                "L {} {}",
-                prev_target.x - ptx,
-                prev_target.y - pty
-            ));
+            path.push(format!("L {} {}", prev_target.x - ptx, prev_target.y - pty));
 
             if units < border_radius && i < route.len() - 2 {
                 let next_target = &route[i + 2];
@@ -805,18 +822,16 @@ fn path_data(
             } else {
                 path.push(format!(
                     "S {} {} {} {}",
-                    prev_target.x, prev_target.y,
-                    prev_target.x + ctx, prev_target.y + cty
+                    prev_target.x,
+                    prev_target.y,
+                    prev_target.x + ctx,
+                    prev_target.y + cty
                 ));
             }
         }
 
         let last = &route[route.len() - 1];
-        path.push(format!(
-            "L {} {}",
-            last.x + dst_adj.x,
-            last.y + dst_adj.y
-        ));
+        path.push(format!("L {} {}", last.x + dst_adj.x, last.y + dst_adj.y));
     }
 
     path.join(" ")
@@ -867,8 +882,7 @@ fn draw_connection(
         String::new()
     };
 
-    let id_encoded =
-        base64_url_encode(&d2_svg_path::escape_text(&connection.id));
+    let id_encoded = base64_url_encode(&d2_svg_path::escape_text(&connection.id));
     let mut classes = vec![id_encoded];
     classes.extend(connection.classes.iter().cloned());
     let class_str = format!(r#" class="{}""#, classes.join(" "));
@@ -1007,8 +1021,7 @@ fn draw_shape(
         String::new()
     };
 
-    let id_encoded =
-        base64_url_encode(&d2_svg_path::escape_text(&target_shape.id));
+    let id_encoded = base64_url_encode(&d2_svg_path::escape_text(&target_shape.id));
     let mut classes = vec![id_encoded];
     if target_shape.animated {
         classes.push("animated-shape".to_owned());
@@ -1027,7 +1040,10 @@ fn draw_shape(
     // Shadow attribute
     let shadow_attr = if target_shape.shadow {
         match target_shape.type_.as_str() {
-            d2_target::SHAPE_TEXT | d2_target::SHAPE_CODE | d2_target::SHAPE_CLASS | d2_target::SHAPE_SQL_TABLE => "",
+            d2_target::SHAPE_TEXT
+            | d2_target::SHAPE_CODE
+            | d2_target::SHAPE_CLASS
+            | d2_target::SHAPE_SQL_TABLE => "",
             _ => r#"filter="url(#shadow-filter)" "#,
         }
     } else {
@@ -1052,14 +1068,50 @@ fn draw_shape(
         d2_target::SHAPE_OVAL => {
             if target_shape.double_border {
                 if let Some(ref mtl) = multiple_tl {
-                    buf.push_str(&render_double_oval(mtl, width, height, &fill, "", &stroke, &style, inline_theme));
+                    buf.push_str(&render_double_oval(
+                        mtl,
+                        width,
+                        height,
+                        &fill,
+                        "",
+                        &stroke,
+                        &style,
+                        inline_theme,
+                    ));
                 }
-                buf.push_str(&render_double_oval(&tl, width, height, &fill, &target_shape.fill_pattern, &stroke, &style, inline_theme));
+                buf.push_str(&render_double_oval(
+                    &tl,
+                    width,
+                    height,
+                    &fill,
+                    &target_shape.fill_pattern,
+                    &stroke,
+                    &style,
+                    inline_theme,
+                ));
             } else {
                 if let Some(ref mtl) = multiple_tl {
-                    buf.push_str(&render_oval(mtl, width, height, &fill, "", &stroke, &style, inline_theme));
+                    buf.push_str(&render_oval(
+                        mtl,
+                        width,
+                        height,
+                        &fill,
+                        "",
+                        &stroke,
+                        &style,
+                        inline_theme,
+                    ));
                 }
-                buf.push_str(&render_oval(&tl, width, height, &fill, &target_shape.fill_pattern, &stroke, &style, inline_theme));
+                buf.push_str(&render_oval(
+                    &tl,
+                    width,
+                    height,
+                    &fill,
+                    &target_shape.fill_pattern,
+                    &stroke,
+                    &style,
+                    inline_theme,
+                ));
             }
         }
         d2_target::SHAPE_IMAGE => {
@@ -1508,7 +1560,16 @@ fn render_double_oval(
     );
     format!(
         "{}{}",
-        render_oval(tl, width, height, fill, fill_pattern, stroke, style, inline_theme),
+        render_oval(
+            tl,
+            width,
+            height,
+            fill,
+            fill_pattern,
+            stroke,
+            style,
+            inline_theme
+        ),
         render_oval(
             &inner_tl,
             width - 10.0,
@@ -1542,16 +1603,26 @@ fn render_3d_rect(
     // Border path segments
     let border_d = format!(
         "M{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} M{},{} L{},{}",
-        px, py,
-        px + off, py - off,
-        px + w + off, py - off,
-        px + w + off, py + h - off,
-        px + w, py + h,
-        px, py + h,
-        px, py,
-        px + w, py,
-        px + w, py,
-        px + w + off, py - off,
+        px,
+        py,
+        px + off,
+        py - off,
+        px + w + off,
+        py - off,
+        px + w + off,
+        py + h - off,
+        px + w,
+        py + h,
+        px,
+        py + h,
+        px,
+        py,
+        px + w,
+        py,
+        px + w,
+        py,
+        px + w + off,
+        py - off,
     );
 
     let (_, border_stroke) = shape_theme(target_shape);
@@ -1574,23 +1645,34 @@ fn render_3d_rect(
     // Compact border segments for mask path
     let mask_border_d = format!(
         "M{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}M{},{}L{},{}",
-        px, py,
-        px + off, py - off,
-        px + w + off, py - off,
-        px + w + off, py + h - off,
-        px + w, py + h,
-        px, py + h,
-        px, py,
-        px + w, py,
-        px + w, py,
-        px + w + off, py - off,
+        px,
+        py,
+        px + off,
+        py - off,
+        px + w + off,
+        py - off,
+        px + w + off,
+        py + h - off,
+        px + w,
+        py + h,
+        px,
+        py + h,
+        px,
+        py,
+        px + w,
+        py,
+        px + w,
+        py,
+        px + w + off,
+        py - off,
     );
 
     write!(
         result,
         r#"<path d="{}" style="{};stroke:#000;fill:none;opacity:1;"/></mask></defs>"#,
         mask_border_d, style,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Main rectangle
     let (main_fill, _) = shape_theme(target_shape);
@@ -1609,15 +1691,22 @@ fn render_3d_rect(
     // Side polygons
     let side_points = format!(
         "{},{} {},{} {},{} {},{} {},{} {},{}",
-        px, py,
-        px + off, py - off,
-        px + w + off, py - off,
-        px + w + off, py + h - off,
-        px + w, py + h,
-        px + w, py,
+        px,
+        py,
+        px + off,
+        py - off,
+        px + w + off,
+        py - off,
+        px + w + off,
+        py + h - off,
+        px + w,
+        py + h,
+        px + w,
+        py,
     );
 
-    let darker_color = d2_color::darken(&target_shape.fill).unwrap_or_else(|_| target_shape.fill.clone());
+    let darker_color =
+        d2_color::darken(&target_shape.fill).unwrap_or_else(|_| target_shape.fill.clone());
     let mut side_el = d2_themes::ThemableElement::new("polygon", inline_theme);
     side_el.fill = darker_color;
     side_el.points = side_points;
@@ -1714,7 +1803,8 @@ fn draw_class(
         // Header text
         let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
         text_el.x = Some(shape.pos.x as f64 + shape.width as f64 / 2.0);
-        text_el.y = Some(shape.pos.y as f64 + (header_height as f64 + shape.text.font_size as f64) / 2.0);
+        text_el.y =
+            Some(shape.pos.y as f64 + (header_height as f64 + shape.text.font_size as f64) / 2.0);
         text_el.fill = fill.clone();
         text_el.class_name = "text-bold".to_owned();
         text_el.style = format!("text-anchor:middle;font-size:{}px", shape.text.font_size);
@@ -1730,7 +1820,8 @@ fn draw_class(
     for field in &shape.class.fields {
         let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
         text_el.x = Some(shape.pos.x as f64 + d2_target::PREFIX_PADDING as f64);
-        text_el.y = Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
+        text_el.y =
+            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
         text_el.fill = shape.get_font_color().to_owned();
         text_el.class_name = "text".to_owned();
         text_el.style = format!("font-size:{}px", shape.text.font_size);
@@ -1760,7 +1851,8 @@ fn draw_class(
     for method in &shape.class.methods {
         let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
         text_el.x = Some(shape.pos.x as f64 + d2_target::PREFIX_PADDING as f64);
-        text_el.y = Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
+        text_el.y =
+            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
         text_el.fill = shape.get_font_color().to_owned();
         text_el.class_name = "text".to_owned();
         text_el.style = format!("font-size:{}px", shape.text.font_size);
@@ -1843,7 +1935,8 @@ fn draw_table(
         // Column name
         let mut name_el = d2_themes::ThemableElement::new("text", inline_theme);
         name_el.x = Some(shape.pos.x as f64 + d2_target::NAME_PADDING as f64);
-        name_el.y = Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
+        name_el.y =
+            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
         name_el.fill = shape.get_font_color().to_owned();
         name_el.class_name = "text".to_owned();
         name_el.style = format!("font-size:{}px", shape.text.font_size);
@@ -1853,7 +1946,8 @@ fn draw_table(
         // Column type
         let mut type_el = d2_themes::ThemableElement::new("text", inline_theme);
         type_el.x = Some(shape.pos.x as f64 + shape.width as f64 / 2.0);
-        type_el.y = Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
+        type_el.y =
+            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
         type_el.fill = shape.get_font_color().to_owned();
         type_el.class_name = "text".to_owned();
         type_el.style = format!("font-size:{}px", shape.text.font_size);
@@ -1864,8 +1958,12 @@ fn draw_table(
         let constraint = col.constraint_abbr();
         if !constraint.is_empty() {
             let mut constr_el = d2_themes::ThemableElement::new("text", inline_theme);
-            constr_el.x = Some(shape.pos.x as f64 + shape.width as f64 - d2_target::CONSTRAINT_PADDING as f64);
-            constr_el.y = Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
+            constr_el.x = Some(
+                shape.pos.x as f64 + shape.width as f64 - d2_target::CONSTRAINT_PADDING as f64,
+            );
+            constr_el.y = Some(
+                current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0,
+            );
             constr_el.fill = shape.get_font_color().to_owned();
             constr_el.class_name = "text".to_owned();
             constr_el.style = format!("text-anchor:end;font-size:{}px", shape.text.font_size);
@@ -1882,17 +1980,17 @@ fn draw_table(
 // ---------------------------------------------------------------------------
 
 fn define_shadow_filter(buf: &mut String) {
-    buf.push_str(
-        r#"<defs>
-	<filter id="shadow-filter" width="200%" height="200%" x="-50%" y="-50%">
-		<feGaussianBlur stdDeviation="1.7 " in="SourceGraphic"></feGaussianBlur>
-		<feFlood flood-color="#3d4574" flood-opacity="0.4" result="ShadowFeFlood" in="SourceGraphic"></feFlood>
-		<feComposite in="ShadowFeFlood" in2="SourceAlpha" operator="in" result="ShadowFeComposite"></feComposite>
-		<feOffset dx="3" dy="5" result="ShadowFeOffset" in="ShadowFeComposite"></feOffset>
-		<feBlend in="SourceGraphic" in2="ShadowFeOffset" mode="normal" result="ShadowFeBlend"></feBlend>
-	</filter>
-</defs>"#,
-    );
+    buf.push_str(concat!(
+        "<defs>\n",
+        "\t<filter id=\"shadow-filter\" width=\"200%\" height=\"200%\" x=\"-50%\" y=\"-50%\">\n",
+        "\t\t<feGaussianBlur stdDeviation=\"1.7 \" in=\"SourceGraphic\"></feGaussianBlur>\n",
+        "\t\t<feFlood flood-color=\"#3d4574\" flood-opacity=\"0.4\" result=\"ShadowFeFlood\" in=\"SourceGraphic\"></feFlood>\n",
+        "\t\t<feComposite in=\"ShadowFeFlood\" in2=\"SourceAlpha\" operator=\"in\" result=\"ShadowFeComposite\"></feComposite>\n",
+        "\t\t<feOffset dx=\"3\" dy=\"5\" result=\"ShadowFeOffset\" in=\"ShadowFeComposite\"></feOffset>\n",
+        "\t\t<feBlend in=\"SourceGraphic\" in2=\"ShadowFeOffset\" mode=\"normal\" result=\"ShadowFeBlend\"></feBlend>\n",
+        "\t</filter>\n",
+        "</defs>",
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1939,8 +2037,7 @@ struct Base64Encoder<W: std::io::Write> {
     len: usize,
 }
 
-const B64URL_TABLE: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const B64URL_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 impl<W: std::io::Write> Base64Encoder<W> {
     fn new(writer: W) -> Self {
@@ -1958,9 +2055,7 @@ impl<W: std::io::Write> Base64Encoder<W> {
         let b0 = self.buf[0];
         let b1 = if self.len > 1 { self.buf[1] } else { 0 };
         let b2 = if self.len > 2 { self.buf[2] } else { 0 };
-        let _ = self
-            .writer
-            .write_all(&[B64URL_TABLE[(b0 >> 2) as usize]]);
+        let _ = self.writer.write_all(&[B64URL_TABLE[(b0 >> 2) as usize]]);
         let _ = self
             .writer
             .write_all(&[B64URL_TABLE[((b0 & 0x03) << 4 | b1 >> 4) as usize]]);
@@ -1972,9 +2067,7 @@ impl<W: std::io::Write> Base64Encoder<W> {
             let _ = self.writer.write_all(b"=");
         }
         if self.len > 2 {
-            let _ = self
-                .writer
-                .write_all(&[B64URL_TABLE[(b2 & 0x3f) as usize]]);
+            let _ = self.writer.write_all(&[B64URL_TABLE[(b2 & 0x3f) as usize]]);
         } else {
             let _ = self.writer.write_all(b"=");
         }
@@ -2149,7 +2242,12 @@ pub fn embed_fonts(
     append_on_trigger(
         buf,
         source,
-        &[r#"class="text""#, r#"class="text "#, r#"class="md""#, r#"class="md "#],
+        &[
+            r#"class="text""#,
+            r#"class="text "#,
+            r#"class="md""#,
+            r#"class="md "#,
+        ],
         &format!(
             r#"
 .{dh} .text {{
@@ -2344,9 +2442,8 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
 
     // Build ID-to-shape map and sort objects
     let mut id_to_shape: HashMap<String, &d2_target::Shape> = HashMap::new();
-    let mut all_objects: Vec<DiagramObject> = Vec::with_capacity(
-        diagram.shapes.len() + diagram.connections.len(),
-    );
+    let mut all_objects: Vec<DiagramObject> =
+        Vec::with_capacity(diagram.shapes.len() + diagram.connections.len());
 
     for s in &diagram.shapes {
         id_to_shape.insert(s.id.clone(), s);
@@ -2794,6 +2891,7 @@ mod tests {
         shape.pos = d2_target::Point::new(100, 100);
         shape.width = 200;
         shape.height = 100;
+        shape.stroke_width = 0; // Zero stroke to simplify bounding box
         diagram.shapes.push(shape);
 
         let (left, top, w, h) = dimensions(&diagram, 50);

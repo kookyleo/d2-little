@@ -69,6 +69,253 @@ pub struct Style {
     pub font: Option<ScalarValue>,
     pub double_border: Option<ScalarValue>,
     pub animated: Option<ScalarValue>,
+    pub filled: Option<ScalarValue>,
+    pub text_transform: Option<ScalarValue>,
+}
+
+impl Style {
+    /// Initialize a style field to `Some(ScalarValue::default())` so `apply` can set it.
+    pub fn init_field(&mut self, key: &str) {
+        match key {
+            "opacity" => {
+                if self.opacity.is_none() {
+                    self.opacity = Some(ScalarValue::default());
+                }
+            }
+            "stroke" => {
+                if self.stroke.is_none() {
+                    self.stroke = Some(ScalarValue::default());
+                }
+            }
+            "fill" => {
+                if self.fill.is_none() {
+                    self.fill = Some(ScalarValue::default());
+                }
+            }
+            "fill-pattern" => {
+                if self.fill_pattern.is_none() {
+                    self.fill_pattern = Some(ScalarValue::default());
+                }
+            }
+            "stroke-width" => {
+                if self.stroke_width.is_none() {
+                    self.stroke_width = Some(ScalarValue::default());
+                }
+            }
+            "stroke-dash" => {
+                if self.stroke_dash.is_none() {
+                    self.stroke_dash = Some(ScalarValue::default());
+                }
+            }
+            "border-radius" => {
+                if self.border_radius.is_none() {
+                    self.border_radius = Some(ScalarValue::default());
+                }
+            }
+            "shadow" => {
+                if self.shadow.is_none() {
+                    self.shadow = Some(ScalarValue::default());
+                }
+            }
+            "3d" => {
+                if self.three_dee.is_none() {
+                    self.three_dee = Some(ScalarValue::default());
+                }
+            }
+            "multiple" => {
+                if self.multiple.is_none() {
+                    self.multiple = Some(ScalarValue::default());
+                }
+            }
+            "font" => {
+                if self.font.is_none() {
+                    self.font = Some(ScalarValue::default());
+                }
+            }
+            "font-size" => {
+                if self.font_size.is_none() {
+                    self.font_size = Some(ScalarValue::default());
+                }
+            }
+            "font-color" => {
+                if self.font_color.is_none() {
+                    self.font_color = Some(ScalarValue::default());
+                }
+            }
+            "animated" => {
+                if self.animated.is_none() {
+                    self.animated = Some(ScalarValue::default());
+                }
+            }
+            "bold" => {
+                if self.bold.is_none() {
+                    self.bold = Some(ScalarValue::default());
+                }
+            }
+            "italic" => {
+                if self.italic.is_none() {
+                    self.italic = Some(ScalarValue::default());
+                }
+            }
+            "underline" => {
+                if self.underline.is_none() {
+                    self.underline = Some(ScalarValue::default());
+                }
+            }
+            "filled" => {
+                if self.filled.is_none() {
+                    self.filled = Some(ScalarValue::default());
+                }
+            }
+            "double-border" => {
+                if self.double_border.is_none() {
+                    self.double_border = Some(ScalarValue::default());
+                }
+            }
+            "text-transform" => {
+                if self.text_transform.is_none() {
+                    self.text_transform = Some(ScalarValue::default());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply a style key-value pair, validating the value.
+    pub fn apply(&mut self, key: &str, value: &str) -> Result<(), String> {
+        match key {
+            "opacity" => {
+                if let Some(s) = self.opacity.as_mut() {
+                    let f: f64 = value.parse().map_err(|_| {
+                        "expected \"opacity\" to be a number between 0.0 and 1.0".to_string()
+                    })?;
+                    if !(0.0..=1.0).contains(&f) {
+                        return Err(
+                            "expected \"opacity\" to be a number between 0.0 and 1.0".to_string()
+                        );
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "stroke" => {
+                if let Some(s) = self.stroke.as_mut() {
+                    s.value = value.to_string();
+                }
+            }
+            "fill" => {
+                if let Some(s) = self.fill.as_mut() {
+                    s.value = value.to_string();
+                }
+            }
+            "fill-pattern" => {
+                if let Some(s) = self.fill_pattern.as_mut() {
+                    let patterns = ["none", "dots", "lines", "grain", "paper"];
+                    if !patterns.contains(&value.to_lowercase().as_str()) {
+                        return Err(format!(
+                            "expected \"fill-pattern\" to be one of: {}",
+                            patterns.join(", ")
+                        ));
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "stroke-width" => {
+                if let Some(s) = self.stroke_width.as_mut() {
+                    let v: i32 = value.parse().map_err(|_| {
+                        "expected \"stroke-width\" to be a number between 0 and 15".to_string()
+                    })?;
+                    if !(0..=15).contains(&v) {
+                        return Err(
+                            "expected \"stroke-width\" to be a number between 0 and 15".to_string()
+                        );
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "stroke-dash" => {
+                if let Some(s) = self.stroke_dash.as_mut() {
+                    let v: i32 = value.parse().map_err(|_| {
+                        "expected \"stroke-dash\" to be a number between 0 and 10".to_string()
+                    })?;
+                    if !(0..=10).contains(&v) {
+                        return Err(
+                            "expected \"stroke-dash\" to be a number between 0 and 10".to_string()
+                        );
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "border-radius" => {
+                if let Some(s) = self.border_radius.as_mut() {
+                    let v: i32 = value.parse().map_err(|_| {
+                        "expected \"border-radius\" to be a number >= 0".to_string()
+                    })?;
+                    if v < 0 {
+                        return Err("expected \"border-radius\" to be a number >= 0".to_string());
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "shadow" | "3d" | "multiple" | "animated" | "bold" | "italic" | "underline"
+            | "filled" | "double-border" => {
+                let target = match key {
+                    "shadow" => self.shadow.as_mut(),
+                    "3d" => self.three_dee.as_mut(),
+                    "multiple" => self.multiple.as_mut(),
+                    "animated" => self.animated.as_mut(),
+                    "bold" => self.bold.as_mut(),
+                    "italic" => self.italic.as_mut(),
+                    "underline" => self.underline.as_mut(),
+                    "filled" => self.filled.as_mut(),
+                    "double-border" => self.double_border.as_mut(),
+                    _ => None,
+                };
+                if let Some(s) = target {
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| format!("expected \"{}\" to be true or false", key))?;
+                    s.value = value.to_string();
+                }
+            }
+            "font" => {
+                if let Some(s) = self.font.as_mut() {
+                    s.value = value.to_string();
+                }
+            }
+            "font-size" => {
+                if let Some(s) = self.font_size.as_mut() {
+                    let v: i32 = value.parse().map_err(|_| {
+                        "expected \"font-size\" to be a number between 8 and 100".to_string()
+                    })?;
+                    if !(8..=100).contains(&v) {
+                        return Err(
+                            "expected \"font-size\" to be a number between 8 and 100".to_string()
+                        );
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            "font-color" => {
+                if let Some(s) = self.font_color.as_mut() {
+                    s.value = value.to_string();
+                }
+            }
+            "text-transform" => {
+                if let Some(s) = self.text_transform.as_mut() {
+                    let vals = ["none", "uppercase", "lowercase", "capitalize"];
+                    if !vals.contains(&value) {
+                        return Err(format!(
+                            "expected \"text-transform\" to be one of: {}",
+                            vals.join(", ")
+                        ));
+                    }
+                    s.value = value.to_string();
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 /// Icon-specific style overrides.
@@ -278,11 +525,7 @@ impl Object {
         MText {
             text: self.label.value.clone(),
             font_size: 16, // default
-            is_bold: self
-                .style
-                .bold
-                .as_ref()
-                .is_some_and(|v| v.value == "true"),
+            is_bold: self.style.bold.as_ref().is_some_and(|v| v.value == "true"),
             is_italic: self
                 .style
                 .italic
@@ -390,11 +633,7 @@ impl Object {
 
     /// Trace edge endpoints to the shape boundary.
     /// Returns (new_start_index, new_end_index) after clipping.
-    pub fn trace_to_shape_start(
-        &self,
-        points: &[Point],
-        start_index: usize,
-    ) -> usize {
+    pub fn trace_to_shape_start(&self, points: &[Point], start_index: usize) -> usize {
         // Simplified: clip to bounding box
         for i in (start_index + 1)..points.len() {
             let seg = Segment::new(points[i - 1], points[i]);
@@ -406,11 +645,7 @@ impl Object {
         start_index
     }
 
-    pub fn trace_to_shape_end(
-        &self,
-        points: &[Point],
-        end_index: usize,
-    ) -> usize {
+    pub fn trace_to_shape_end(&self, points: &[Point], end_index: usize) -> usize {
         // Simplified: clip to bounding box
         for i in (1..=end_index).rev() {
             let seg = Segment::new(points[i - 1], points[i]);
@@ -542,11 +777,7 @@ impl Edge {
         MText {
             text: self.label.value.clone(),
             font_size,
-            is_bold: self
-                .style
-                .bold
-                .as_ref()
-                .is_some_and(|v| v.value == "true"),
+            is_bold: self.style.bold.as_ref().is_some_and(|v| v.value == "true"),
             is_italic: self
                 .style
                 .italic

@@ -396,9 +396,7 @@ struct Compiler {
 
 impl Compiler {
     fn new() -> Self {
-        Self {
-            errors: Vec::new(),
-        }
+        Self { errors: Vec::new() }
     }
 
     fn errorf(&mut self, range: &ast::Range, msg: String) {
@@ -420,9 +418,7 @@ pub fn compile(ast_map: &ast::Map) -> Result<Map, CompileError> {
     if c.errors.is_empty() {
         Ok(m)
     } else {
-        Err(CompileError {
-            errors: c.errors,
-        })
+        Err(CompileError { errors: c.errors })
     }
 }
 
@@ -493,8 +489,7 @@ impl Compiler {
 
             // Validate reserved keywords
             if ast::RESERVED_KEYWORDS.contains(lower.as_str()) && is_unquoted {
-                if !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str())
-                    && i < path.len() - 1
+                if !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str()) && i < path.len() - 1
                 {
                     self.errorf(
                         sb.get_range(),
@@ -650,12 +645,22 @@ impl Compiler {
             let src_path: Vec<String> = ast_edge
                 .src
                 .as_ref()
-                .map(|kp| kp.path.iter().map(|sb| sb.scalar_string().to_string()).collect())
+                .map(|kp| {
+                    kp.path
+                        .iter()
+                        .map(|sb| sb.scalar_string().to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
             let dst_path: Vec<String> = ast_edge
                 .dst
                 .as_ref()
-                .map(|kp| kp.path.iter().map(|sb| sb.scalar_string().to_string()).collect())
+                .map(|kp| {
+                    kp.path
+                        .iter()
+                        .map(|sb| sb.scalar_string().to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let src_arrow = ast_edge.src_arrow == "<";
@@ -670,7 +675,10 @@ impl Compiler {
 
             if has_index {
                 // Look up existing edge by index
-                let edge_index = key.edge_index.as_ref().and_then(|ei| ei.int.map(|v| v as usize));
+                let edge_index = key
+                    .edge_index
+                    .as_ref()
+                    .and_then(|ei| ei.int.map(|v| v as usize));
                 let eid = EdgeID {
                     src_path: src_path.clone(),
                     dst_path: dst_path.clone(),
@@ -689,10 +697,7 @@ impl Compiler {
 
                 if existing.is_empty() {
                     if !eid.glob {
-                        self.errorf(
-                            &ast_edge.range,
-                            "indexed edge does not exist".to_string(),
-                        );
+                        self.errorf(&ast_edge.range, "indexed edge does not exist".to_string());
                     }
                     continue;
                 }
@@ -742,7 +747,9 @@ impl Compiler {
 
             // Ensure common path fields exist and put edge there
             let scope = self.ensure_field_path(dst, &common.to_vec());
-            self.create_edge_inner(scope, key, edge_idx, inner_src, inner_dst, src_arrow, dst_arrow);
+            self.create_edge_inner(
+                scope, key, edge_idx, inner_src, inner_dst, src_arrow, dst_arrow,
+            );
         } else {
             self.create_edge_inner(dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow);
         }
@@ -775,7 +782,11 @@ impl Compiler {
             index: None,
             glob: true,
         };
-        let count = dst.edges.iter().filter(|e| e.id.matches(&match_eid)).count();
+        let count = dst
+            .edges
+            .iter()
+            .filter(|e| e.id.matches(&match_eid))
+            .count();
 
         let eid = EdgeID {
             src_path: src_path.to_vec(),
@@ -817,7 +828,10 @@ impl Compiler {
         } else {
             // Direct value on edge
             if let Some(ref primary) = key.primary {
-                if !matches!(primary, ast::ScalarBox::Null(_) | ast::ScalarBox::Suspension(_)) {
+                if !matches!(
+                    primary,
+                    ast::ScalarBox::Null(_) | ast::ScalarBox::Suspension(_)
+                ) {
                     e.primary = Some(Scalar {
                         value: primary.clone(),
                     });
@@ -905,9 +919,10 @@ impl Compiler {
     fn compile_substitutions(&mut self, m: &mut Map, vars_stack: &[&Map]) {
         // Collect vars from this scope
         let vars_map: Option<Map> = {
-            let vars_field = m.fields.iter().find(|f| {
-                f.name == "vars" && f.name_is_unquoted
-            });
+            let vars_field = m
+                .fields
+                .iter()
+                .find(|f| f.name == "vars" && f.name_is_unquoted);
             vars_field.and_then(|f| f.map().cloned())
         };
 
