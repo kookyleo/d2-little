@@ -153,6 +153,7 @@ dependencies = [
  "d2-target",
  "d2-textmeasure",
  "d2-themes",
+ "serde_json",
 ]
 
 [[package]]

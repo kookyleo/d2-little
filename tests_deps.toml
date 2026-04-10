@@ -1,0 +1,4 @@
+[dev-dependencies]
+serde_json = "1"
+d2-lib = { path = "crates/d2-lib" }
+
