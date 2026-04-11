@@ -1026,8 +1026,118 @@ fn draw_connection(
         }
     }
 
+    // Source / destination arrowhead labels (e.g. `source-arrowhead: 1`).
+    if let Some(ref l) = connection.src_label {
+        if !l.label.is_empty() {
+            buf.push_str(&render_arrowhead_label(connection, l, false, inline_theme));
+        }
+    }
+    if let Some(ref l) = connection.dst_label {
+        if !l.label.is_empty() {
+            buf.push_str(&render_arrowhead_label(connection, l, true, inline_theme));
+        }
+    }
+
     buf.push_str("</g>");
     Ok(label_mask)
+}
+
+/// Render an arrowhead-attached label (`source-arrowhead` / `target-arrowhead`).
+/// Mirrors Go `d2svg.renderArrowheadLabel`.
+fn render_arrowhead_label(
+    connection: &d2_target::Connection,
+    text: &d2_target::Text,
+    is_dst: bool,
+    inline_theme: Option<&d2_themes::Theme>,
+) -> String {
+    let width = text.label_width as f64;
+    let height = text.label_height as f64;
+
+    let label_tl = arrowhead_label_position(connection, is_dst);
+
+    // svg text is positioned with the center of its baseline
+    let baseline_x = label_tl.x + width / 2.0;
+    let baseline_y = label_tl.y + connection.text.font_size as f64;
+
+    let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+    text_el.x = Some(baseline_x);
+    text_el.y = Some(baseline_y);
+    text_el.fill = if !text.color.is_empty() {
+        text.color.clone()
+    } else {
+        d2_target::FG_COLOR.to_owned()
+    };
+    text_el.class_name = "text-italic".to_owned();
+    text_el.style = format!(
+        "text-anchor:middle;font-size:{}px",
+        connection.text.font_size
+    );
+    text_el.content = render_text(&text.label, baseline_x, height);
+    text_el.render()
+}
+
+/// Compute the top-left of the source or destination arrowhead label on a
+/// connection's route. Port of Go `d2target.Connection.GetArrowheadLabelPosition`.
+fn arrowhead_label_position(connection: &d2_target::Connection, is_dst: bool) -> d2_geo::Point {
+    let (width, height) = if is_dst {
+        let l = connection.dst_label.as_ref().unwrap();
+        (l.label_width as f64, l.label_height as f64)
+    } else {
+        let l = connection.src_label.as_ref().unwrap();
+        (l.label_width as f64, l.label_height as f64)
+    };
+
+    let route = &connection.route;
+    let index = if is_dst { route.len() - 2 } else { 0 };
+    let start = route[index];
+    let end = route[index + 1];
+    // Note: end → start to get normal towards unlocked top position
+    let (normal_x, normal_y) = d2_geo::get_unit_normal_vector(end.x, end.y, start.x, start.y);
+
+    let shift = normal_x.abs() * (height / 2.0 + d2_label::PADDING)
+        + normal_y.abs() * (width / 2.0 + d2_label::PADDING);
+
+    let length = d2_geo::Route(route.clone()).length();
+    let position = if is_dst {
+        if length > 0.0 {
+            1.0 - shift / length
+        } else {
+            1.0
+        }
+    } else if length > 0.0 {
+        shift / length
+    } else {
+        0.0
+    };
+
+    let stroke_width = connection.stroke_width as f64;
+    let route_ref = d2_geo::Route(route.clone());
+    let (mut label_tl, _) = d2_label::Position::UnlockedTop
+        .get_point_on_route(&route_ref, stroke_width, position, width, height)
+        .unwrap_or((d2_geo::Point::new(0.0, 0.0), 0));
+
+    // Shift further back if the arrow is larger than stroke + padding.
+    let arrow_size = if is_dst && connection.dst_arrow != d2_target::Arrowhead::None {
+        let (_, h) = connection.dst_arrow.dimensions(stroke_width);
+        h
+    } else if !is_dst && connection.src_arrow != d2_target::Arrowhead::None {
+        let (_, h) = connection.src_arrow.dimensions(stroke_width);
+        h
+    } else {
+        0.0
+    };
+
+    if arrow_size > 0.0 {
+        let offset = (arrow_size / 2.0 + d2_target::ARROWHEAD_PADDING as f64)
+            - stroke_width / 2.0
+            - d2_label::PADDING;
+        if offset > 0.0 {
+            label_tl.x += normal_x * offset;
+            label_tl.y += normal_y * offset;
+        }
+    }
+
+    label_tl
 }
 
 // ---------------------------------------------------------------------------
