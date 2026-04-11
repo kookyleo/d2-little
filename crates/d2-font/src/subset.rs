@@ -282,18 +282,21 @@ impl Utf8FontFile {
         let start = self.seek_table("loca", 0);
         self.symbol_position = Vec::new();
 
+        // NOTE: unpack_u16_array / unpack_u32_array prepend a zero element so
+        // the returned slice is 1-indexed — matching Go's `arr[n+1]` access.
         if format == 0 {
             let data = self.reader.get_range(start, (num_symbols * 2) + 2);
             let arr = unpack_u16_array(&data);
             for n in 0..=num_symbols {
                 self.symbol_position
-                    .push(arr.get(n).copied().unwrap_or(0) * 2);
+                    .push(arr.get(n + 1).copied().unwrap_or(0) * 2);
             }
         } else if format == 1 {
             let data = self.reader.get_range(start, (num_symbols * 4) + 4);
             let arr = unpack_u32_array(&data);
             for n in 0..=num_symbols {
-                self.symbol_position.push(arr.get(n).copied().unwrap_or(0));
+                self.symbol_position
+                    .push(arr.get(n + 1).copied().unwrap_or(0));
             }
         }
     }

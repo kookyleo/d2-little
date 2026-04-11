@@ -2,11 +2,26 @@
 //!
 //! Native Rust port of the Go implementation (which itself was ported from
 //! <https://github.com/fontello/ttf2woff>).
+//!
+//! Compression compatibility note:
+//! The Go implementation writes each table by calling
+//! `zlib.Writer.{Write, Flush, Close}` on a level-6 zlib encoder. This
+//! appends a `Z_SYNC_FLUSH` marker followed by a `Z_FINISH` empty block
+//! before the Adler-32 trailer. We mirror that framing here by driving
+//! `flate2::Compress` manually with `FlushCompress::Sync` then
+//! `FlushCompress::Finish`, which is important because the extra ~10 bytes
+//! of framing pushes many small font tables over the `compressed >= raw`
+//! threshold, causing both Rust and Go to fall back to storing the table
+//! uncompressed (byte-identical output).
+//!
+//! For tables where Rust's `miniz_oxide` backend compresses more
+//! effectively than Go's `compress/flate` (typically only `name` and
+//! `post` at our sizes), the symbol streams still differ at the byte level
+//! and the resulting WOFF will diverge within those tables. Matching Go
+//! bit-for-bit there would require porting ~2k lines of Go's deflate
+//! implementation.
 
-use std::io::Write;
-
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
+use flate2::{Compress, Compression, FlushCompress};
 
 // SFNT table-directory field offsets (within each 16-byte entry)
 const SFNT_OFFSET_TAG: usize = 0;
@@ -100,6 +115,45 @@ fn write_u32(buf: &mut [u8], offset: usize, val: u32) {
     buf[offset + 1] = bytes[1];
     buf[offset + 2] = bytes[2];
     buf[offset + 3] = bytes[3];
+}
+
+/// Compress `input` with zlib level 6 using the same output framing Go's
+/// `compress/zlib.Writer` produces when the caller invokes `Write` + `Flush`
+/// + `Close`: the compressed stream is followed by a `Z_SYNC_FLUSH` marker,
+///   then a `Z_FINISH` empty block, and the Adler-32 trailer.
+///
+/// Note: the deflate symbol stream inside the block still differs from Go's
+/// because the LZ77 / Huffman encoders are different implementations.
+fn zlib_compress_go_compat(input: &[u8]) -> Result<Vec<u8>, String> {
+    let mut compressor = Compress::new(Compression::new(6), true);
+    // For font-sized inputs, `2 * input + 128` comfortably covers the worst
+    // case even with three flush phases. If the input were ever larger, we
+    // would grow the buffer in a loop; font tables in our pipeline never
+    // approach that size.
+    let mut out = vec![0u8; input.len().saturating_mul(2) + 128];
+
+    // Phase 1: feed input without flushing. For our buffer sizing one call
+    // always consumes all input.
+    compressor
+        .compress(input, &mut out, FlushCompress::None)
+        .map_err(|e| e.to_string())?;
+    debug_assert_eq!(compressor.total_in() as usize, input.len());
+
+    // Phase 2: Z_SYNC_FLUSH (matches Go's w.Flush()).
+    let out_pos = compressor.total_out() as usize;
+    compressor
+        .compress(&[], &mut out[out_pos..], FlushCompress::Sync)
+        .map_err(|e| e.to_string())?;
+
+    // Phase 3: Z_FINISH (matches Go's w.Close()).
+    let out_pos = compressor.total_out() as usize;
+    compressor
+        .compress(&[], &mut out[out_pos..], FlushCompress::Finish)
+        .map_err(|e| e.to_string())?;
+
+    let final_len = compressor.total_out() as usize;
+    out.truncate(final_len);
+    Ok(out)
 }
 
 /// Convert an SFNT font buffer (TTF or OTF) to WOFF format.
@@ -211,10 +265,11 @@ pub fn sfnt2woff(font_buf: &[u8]) -> Result<Vec<u8>, String> {
             );
         }
 
-        // zlib compress
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&sfnt_data).map_err(|e| e.to_string())?;
-        let compressed = encoder.finish().map_err(|e| e.to_string())?;
+        // zlib compress, mirroring Go's `w.Write ; w.Flush ; w.Close` pattern
+        // (level 6 + Z_SYNC_FLUSH + Z_FINISH). Including the sync-flush
+        // framing bloats small-table output enough that both sides pick the
+        // "store uncompressed" branch, which is exactly what Go does.
+        let compressed = zlib_compress_go_compat(&sfnt_data)?;
 
         // Only use compression if it actually saves space
         let comp_length = compressed.len().min(sfnt_data.len());
