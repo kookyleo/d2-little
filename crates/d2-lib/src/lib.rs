@@ -650,7 +650,18 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
     let edge_count = g.edges.len();
     for i in 0..edge_count {
         let label = g.edges[i].label.value.clone();
-        if label.is_empty() {
+        let src_ah_label = g.edges[i]
+            .src_arrowhead
+            .as_ref()
+            .map(|ah| ah.label.value.clone())
+            .unwrap_or_default();
+        let dst_ah_label = g.edges[i]
+            .dst_arrowhead
+            .as_ref()
+            .map(|ah| ah.label.value.clone())
+            .unwrap_or_default();
+
+        if label.is_empty() && src_ah_label.is_empty() && dst_ah_label.is_empty() {
             continue;
         }
 
@@ -689,11 +700,34 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         };
 
         let font = d2_fonts::Font::new(edge_font_family, font_style, font_size);
-        let (tw, th) = ruler.measure(font, &label);
-        g.edges[i].label_dimensions = d2_graph::Dimensions {
-            width: tw,
-            height: th,
-        };
+        if !label.is_empty() {
+            let (tw, th) = ruler.measure(font, &label);
+            g.edges[i].label_dimensions = d2_graph::Dimensions {
+                width: tw,
+                height: th,
+            };
+        }
+        // Arrowhead labels use the same font as the edge label. Mirrors
+        // the block in Go d2graph.SetDimensions that runs before the
+        // edge-label branch.
+        if !src_ah_label.is_empty() {
+            let (tw, th) = ruler.measure(font, &src_ah_label);
+            if let Some(ref mut ah) = g.edges[i].src_arrowhead {
+                ah.label_dimensions = d2_graph::Dimensions {
+                    width: tw,
+                    height: th,
+                };
+            }
+        }
+        if !dst_ah_label.is_empty() {
+            let (tw, th) = ruler.measure(font, &dst_ah_label);
+            if let Some(ref mut ah) = g.edges[i].dst_arrowhead {
+                ah.label_dimensions = d2_graph::Dimensions {
+                    width: tw,
+                    height: th,
+                };
+            }
+        }
     }
 
     Ok(())
