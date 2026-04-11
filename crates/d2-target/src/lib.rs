@@ -1453,6 +1453,154 @@ pub mod go_json {
         out.extend_from_slice(b"null");
     }
 
+    /// Serialize an icon URL the same way Go's `encoding/json` serializes
+    /// a `*url.URL`: as a struct with the parsed components. Go stores
+    /// `Shape.Icon` and `Connection.Icon` as `*url.URL`, so
+    /// `json.Marshal` emits
+    /// `{"Scheme":..,"Opaque":"","User":null,"Host":..,"Path":..,..}`.
+    /// Without this the Rust serialization drifts from Go's and the
+    /// diagram hash — which is embedded in every CSS selector — differs.
+    fn write_icon_url(out: &mut Vec<u8>, url: &str) {
+        let parsed = parse_url(url);
+        out.push(b'{');
+        out.extend_from_slice(b"\"Scheme\":");
+        write_string(out, &parsed.scheme);
+        out.extend_from_slice(b",\"Opaque\":");
+        write_string(out, &parsed.opaque);
+        out.extend_from_slice(b",\"User\":null");
+        out.extend_from_slice(b",\"Host\":");
+        write_string(out, &parsed.host);
+        out.extend_from_slice(b",\"Path\":");
+        write_string(out, &parsed.path);
+        out.extend_from_slice(b",\"RawPath\":");
+        write_string(out, &parsed.raw_path);
+        out.extend_from_slice(b",\"OmitHost\":false");
+        out.extend_from_slice(b",\"ForceQuery\":");
+        if parsed.force_query {
+            out.extend_from_slice(b"true");
+        } else {
+            out.extend_from_slice(b"false");
+        }
+        out.extend_from_slice(b",\"RawQuery\":");
+        write_string(out, &parsed.raw_query);
+        out.extend_from_slice(b",\"Fragment\":");
+        write_string(out, &parsed.fragment);
+        out.extend_from_slice(b",\"RawFragment\":");
+        write_string(out, &parsed.raw_fragment);
+        out.push(b'}');
+    }
+
+    #[derive(Default, Debug)]
+    struct ParsedUrl {
+        scheme: String,
+        opaque: String,
+        host: String,
+        path: String,
+        raw_path: String,
+        force_query: bool,
+        raw_query: String,
+        fragment: String,
+        raw_fragment: String,
+    }
+
+    /// Minimal subset of Go `net/url.Parse` sufficient for the icon URLs
+    /// d2 emits (scheme://host/path?query#fragment, with Go's escaping
+    /// rules). Populates `raw_path` / `raw_fragment` only when the raw
+    /// form differs from the decoded form (same as Go).
+    fn parse_url(input: &str) -> ParsedUrl {
+        let mut out = ParsedUrl::default();
+        let mut rest = input;
+
+        // Fragment (`#…`)
+        if let Some(hash) = rest.find('#') {
+            let frag = &rest[hash + 1..];
+            rest = &rest[..hash];
+            let decoded = url_unescape(frag);
+            out.fragment = decoded.clone();
+            if decoded != frag {
+                out.raw_fragment = frag.to_owned();
+            }
+        }
+
+        // Query (`?…`)
+        if let Some(q) = rest.find('?') {
+            out.raw_query = rest[q + 1..].to_owned();
+            if rest.ends_with('?') {
+                out.force_query = true;
+            }
+            rest = &rest[..q];
+        }
+
+        // Scheme (`scheme:`) — only matches if first non-alpha char is `:`.
+        let bytes = rest.as_bytes();
+        let mut scheme_end = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            if i == 0 {
+                if !b.is_ascii_alphabetic() {
+                    break;
+                }
+            } else if !(b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+                if b == b':' {
+                    scheme_end = i;
+                }
+                break;
+            }
+        }
+        if scheme_end > 0 {
+            out.scheme = rest[..scheme_end].to_ascii_lowercase();
+            rest = &rest[scheme_end + 1..];
+        }
+
+        // Authority (`//host`)
+        if let Some(stripped) = rest.strip_prefix("//") {
+            // host ends at first '/', '?', or '#' (none of which are in rest
+            // after we stripped query/fragment already; only '/' applies).
+            if let Some(slash) = stripped.find('/') {
+                out.host = stripped[..slash].to_owned();
+                rest = &stripped[slash..];
+            } else {
+                out.host = stripped.to_owned();
+                rest = "";
+            }
+        } else if !rest.is_empty() && !rest.starts_with('/') && !out.scheme.is_empty() {
+            // `scheme:opaque` form (no authority).
+            out.opaque = rest.to_owned();
+            rest = "";
+        }
+
+        // Path
+        if !rest.is_empty() {
+            let decoded = url_unescape(rest);
+            out.path = decoded.clone();
+            if decoded != rest {
+                out.raw_path = rest.to_owned();
+            }
+        }
+
+        out
+    }
+
+    /// Percent-decode a URL path/fragment. Only handles `%XX` sequences —
+    /// sufficient for the icon URLs d2 emits.
+    fn url_unescape(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                if let Ok(b) = u8::from_str_radix(hex, 16) {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
+    }
+
     fn write_field_name(out: &mut Vec<u8>, first: &mut bool, name: &str) {
         if !*first {
             out.push(b',');
@@ -1654,7 +1802,7 @@ pub mod go_json {
         }
         out.extend_from_slice(b",\"icon\":");
         if let Some(ref i) = s.icon {
-            write_string(out, i);
+            write_icon_url(out, i);
         } else {
             write_null(out);
         }
@@ -1836,7 +1984,7 @@ pub mod go_json {
         write_string(out, &c.tooltip);
         out.extend_from_slice(b",\"icon\":");
         if let Some(ref i) = c.icon {
-            write_string(out, i);
+            write_icon_url(out, i);
         } else {
             write_null(out);
         }
