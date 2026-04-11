@@ -121,7 +121,20 @@ fn e2e_full_dashboard() {
             Ok(out) => out.stdout,
         };
 
-        let svg_str = String::from_utf8_lossy(&svg_bytes);
+        // Strip the libtest harness preamble/postamble that wraps any
+        // child stdout when running with `--nocapture`. The child writes a
+        // single SVG via `print!` so the bytes between `<?xml` and the last
+        // `</svg>` are the payload.
+        let svg_str_full = String::from_utf8_lossy(&svg_bytes);
+        let svg_str: std::borrow::Cow<'_, str> = if let Some(start) = svg_str_full.find("<?xml") {
+            if let Some(end) = svg_str_full.rfind("</svg>") {
+                std::borrow::Cow::Owned(svg_str_full[start..end + "</svg>".len()].to_string())
+            } else {
+                svg_str_full.clone()
+            }
+        } else {
+            svg_str_full.clone()
+        };
         if !svg_str.contains("<svg") {
             eprintln!("NO SVG");
             compile_err += 1;
@@ -145,14 +158,14 @@ fn e2e_full_dashboard() {
                 .zip(expected.chars())
                 .position(|(a, b)| a != b)
                 .unwrap_or(svg_str.len().min(expected.len()));
-            eprintln!("DIFF@{} ({}b vs {}b)", pos, svg_bytes.len(), expected.len());
+            eprintln!("DIFF@{} ({}b vs {}b)", pos, svg_str.len(), expected.len());
             svg_diff += 1;
             failures.push(format!(
                 "[{}] {}: DIFF@{} ({}b vs {}b)",
                 category,
                 name,
                 pos,
-                svg_bytes.len(),
+                svg_str.len(),
                 expected.len()
             ));
         }

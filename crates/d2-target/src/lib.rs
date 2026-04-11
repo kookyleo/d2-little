@@ -4,8 +4,7 @@
 //! and `d2target/sqltable.go`.
 
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use d2_color;
 use d2_themes;
@@ -916,40 +915,31 @@ impl Diagram {
     }
 
     /// Compute a hash ID for the diagram, prefixed with "d2-".
+    ///
+    /// Matches Go `d2target.Diagram.HashID`: serialize the diagram via the
+    /// Go-compatible JSON stream, hash with FNV-1a 32-bit, and format with
+    /// the "d2-" prefix. An optional salt is mixed into the hash.
     pub fn hash_id(&self, salt: Option<&str>) -> String {
-        let mut hasher = DefaultHasher::new();
-        // Hash shape IDs and types
-        for s in &self.shapes {
-            s.id.hash(&mut hasher);
-            s.type_.hash(&mut hasher);
-            s.text.label.hash(&mut hasher);
-        }
-        // Hash connection IDs
-        for c in &self.connections {
-            c.id.hash(&mut hasher);
-            c.src.hash(&mut hasher);
-            c.dst.hash(&mut hasher);
-        }
-        // Hash root
-        self.root.fill.hash(&mut hasher);
-
+        let bytes = go_json::diagram_bytes(self);
+        let mut h = fnv1a32(&bytes);
         if let Some(s) = salt {
-            s.hash(&mut hasher);
+            h = fnv1a32_mix(h, s.as_bytes());
         }
-
-        // Hash nested
-        for d in &self.layers {
-            d.name.hash(&mut hasher);
-        }
-        for d in &self.scenarios {
-            d.name.hash(&mut hasher);
-        }
-        for d in &self.steps {
-            d.name.hash(&mut hasher);
-        }
-
-        format!("d2-{}", hasher.finish() as u32)
+        format!("d2-{}", h)
     }
+}
+
+/// FNV-1a continuation: start from an existing hash state and mix in more bytes.
+#[inline]
+fn fnv1a32_mix(mut h: u32, data: &[u8]) -> u32 {
+    for &b in data {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+impl Diagram {
 
     /// Compute the axis-aligned bounding box of all shapes and connections.
     ///
@@ -1030,6 +1020,587 @@ impl Diagram {
         }
         (tl, br)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Go-compatible JSON byte serialization
+// ---------------------------------------------------------------------------
+//
+// This module reproduces Go `encoding/json` output for the subset of
+// d2target types that feed into `Diagram.Bytes()` (used for the diagram
+// hash ID). Byte-for-byte compatibility matters because the hash gets
+// embedded in CSS selectors inside the rendered SVG and the e2e fixtures
+// compare byte-identical output against Go's reference implementation.
+//
+// Field order, omitempty semantics, float formatting, and JSON string
+// escaping all follow the Go conventions used by the upstream types in
+// `d2/d2target/`.
+
+pub mod go_json {
+    use super::*;
+
+    fn write_string(out: &mut Vec<u8>, s: &str) {
+        out.push(b'"');
+        for ch in s.chars() {
+            match ch {
+                '"' => out.extend_from_slice(b"\\\""),
+                '\\' => out.extend_from_slice(b"\\\\"),
+                '\n' => out.extend_from_slice(b"\\n"),
+                '\r' => out.extend_from_slice(b"\\r"),
+                '\t' => out.extend_from_slice(b"\\t"),
+                '\u{08}' => out.extend_from_slice(b"\\b"),
+                '\u{0c}' => out.extend_from_slice(b"\\f"),
+                // Go's encoding/json HTML-escapes these by default.
+                '<' => out.extend_from_slice(b"\\u003c"),
+                '>' => out.extend_from_slice(b"\\u003e"),
+                '&' => out.extend_from_slice(b"\\u0026"),
+                c if (c as u32) < 0x20 => {
+                    out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes());
+                }
+                c => {
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                }
+            }
+        }
+        out.push(b'"');
+    }
+
+    fn write_bool(out: &mut Vec<u8>, b: bool) {
+        out.extend_from_slice(if b { b"true" } else { b"false" });
+    }
+
+    fn write_i32(out: &mut Vec<u8>, n: i32) {
+        out.extend_from_slice(n.to_string().as_bytes());
+    }
+
+    fn write_i64(out: &mut Vec<u8>, n: i64) {
+        out.extend_from_slice(n.to_string().as_bytes());
+    }
+
+    /// Format a float using Go's `strconv.FormatFloat(f, 'g', -1, 64)` rules,
+    /// which encoding/json uses for non-integer float64 values. Integer-valued
+    /// floats print as `0`, `1`, ... (no trailing dot).
+    fn write_f64(out: &mut Vec<u8>, f: f64) {
+        if f == 0.0 {
+            out.push(b'0');
+            return;
+        }
+        if f.is_nan() || f.is_infinite() {
+            // Go would error on these; best-effort output.
+            out.extend_from_slice(b"0");
+            return;
+        }
+        if f == f.trunc() && f.abs() < 1e16 {
+            out.extend_from_slice((f as i64).to_string().as_bytes());
+            return;
+        }
+        // Fallback: Rust's default float formatting is close enough for
+        // layout-produced values in our test corpus. TODO: Go 'g' format
+        // fidelity for edge cases.
+        out.extend_from_slice(format!("{}", f).as_bytes());
+    }
+
+    fn write_null(out: &mut Vec<u8>) {
+        out.extend_from_slice(b"null");
+    }
+
+    fn write_field_name(out: &mut Vec<u8>, first: &mut bool, name: &str) {
+        if !*first {
+            out.push(b',');
+        }
+        *first = false;
+        out.push(b'"');
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(b"\":");
+    }
+
+    fn marshal_point(out: &mut Vec<u8>, p: &Point) {
+        out.extend_from_slice(b"{\"x\":");
+        write_i32(out, p.x);
+        out.extend_from_slice(b",\"y\":");
+        write_i32(out, p.y);
+        out.push(b'}');
+    }
+
+    fn marshal_geo_point(out: &mut Vec<u8>, p: &d2_geo::Point) {
+        // Go `*geo.Point` struct: Point{X float64, Y float64}.
+        out.extend_from_slice(b"{\"x\":");
+        write_f64(out, p.x);
+        out.extend_from_slice(b",\"y\":");
+        write_f64(out, p.y);
+        out.push(b'}');
+    }
+
+    fn marshal_class(out: &mut Vec<u8>, class: &Class) {
+        // {"fields":[...],"methods":[...]}
+        out.extend_from_slice(b"\"fields\":");
+        if class.fields.is_empty() {
+            out.extend_from_slice(b"null");
+        } else {
+            out.push(b'[');
+            for (i, f) in class.fields.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                out.push(b'{');
+                out.extend_from_slice(b"\"name\":");
+                write_string(out, &f.name);
+                out.extend_from_slice(b",\"type\":");
+                write_string(out, &f.type_);
+                out.extend_from_slice(b",\"visibility\":");
+                write_string(out, &f.visibility);
+                out.extend_from_slice(b",\"underline\":");
+                write_bool(out, f.underline);
+                out.push(b'}');
+            }
+            out.push(b']');
+        }
+        out.extend_from_slice(b",\"methods\":");
+        if class.methods.is_empty() {
+            out.extend_from_slice(b"null");
+        } else {
+            out.push(b'[');
+            for (i, m) in class.methods.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                out.push(b'{');
+                out.extend_from_slice(b"\"name\":");
+                write_string(out, &m.name);
+                out.extend_from_slice(b",\"return\":");
+                write_string(out, &m.return_);
+                out.extend_from_slice(b",\"visibility\":");
+                write_string(out, &m.visibility);
+                out.extend_from_slice(b",\"underline\":");
+                write_bool(out, m.underline);
+                out.push(b'}');
+            }
+            out.push(b']');
+        }
+    }
+
+    fn marshal_sql_table(out: &mut Vec<u8>, t: &SQLTable) {
+        out.extend_from_slice(b"\"columns\":");
+        if t.columns.is_empty() {
+            out.extend_from_slice(b"null");
+        } else {
+            out.push(b'[');
+            for (i, c) in t.columns.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                out.push(b'{');
+                out.extend_from_slice(b"\"name\":");
+                marshal_text(out, &c.name);
+                out.extend_from_slice(b",\"type\":");
+                marshal_text(out, &c.type_);
+                out.extend_from_slice(b",\"constraint\":");
+                if c.constraint.is_empty() {
+                    out.extend_from_slice(b"null");
+                } else {
+                    out.push(b'[');
+                    for (j, s) in c.constraint.iter().enumerate() {
+                        if j > 0 {
+                            out.push(b',');
+                        }
+                        write_string(out, s);
+                    }
+                    out.push(b']');
+                }
+                out.extend_from_slice(b",\"reference\":");
+                write_string(out, &c.reference);
+                out.push(b'}');
+            }
+            out.push(b']');
+        }
+    }
+
+    fn marshal_text(out: &mut Vec<u8>, t: &Text) {
+        out.extend_from_slice(b"{\"label\":");
+        write_string(out, &t.label);
+        out.extend_from_slice(b",\"fontSize\":");
+        write_i32(out, t.font_size);
+        out.extend_from_slice(b",\"fontFamily\":");
+        write_string(out, &t.font_family);
+        out.extend_from_slice(b",\"language\":");
+        write_string(out, &t.language);
+        out.extend_from_slice(b",\"color\":");
+        write_string(out, &t.color);
+        out.extend_from_slice(b",\"italic\":");
+        write_bool(out, t.italic);
+        out.extend_from_slice(b",\"bold\":");
+        write_bool(out, t.bold);
+        out.extend_from_slice(b",\"underline\":");
+        write_bool(out, t.underline);
+        out.extend_from_slice(b",\"labelWidth\":");
+        write_i32(out, t.label_width);
+        out.extend_from_slice(b",\"labelHeight\":");
+        write_i32(out, t.label_height);
+        if !t.label_fill.is_empty() {
+            out.extend_from_slice(b",\"labelFill\":");
+            write_string(out, &t.label_fill);
+        }
+        out.push(b'}');
+    }
+
+    /// Marshal a Shape following Go field order in `d2target.Shape`.
+    pub fn marshal_shape(out: &mut Vec<u8>, s: &Shape) {
+        out.push(b'{');
+        out.extend_from_slice(b"\"id\":");
+        write_string(out, &s.id);
+        out.extend_from_slice(b",\"type\":");
+        write_string(out, &s.type_);
+        // classes omitempty
+        if !s.classes.is_empty() {
+            out.extend_from_slice(b",\"classes\":[");
+            for (i, c) in s.classes.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_string(out, c);
+            }
+            out.push(b']');
+        }
+        out.extend_from_slice(b",\"pos\":");
+        marshal_point(out, &s.pos);
+        out.extend_from_slice(b",\"width\":");
+        write_i32(out, s.width);
+        out.extend_from_slice(b",\"height\":");
+        write_i32(out, s.height);
+        out.extend_from_slice(b",\"opacity\":");
+        write_f64(out, s.opacity);
+        out.extend_from_slice(b",\"strokeDash\":");
+        write_f64(out, s.stroke_dash);
+        out.extend_from_slice(b",\"strokeWidth\":");
+        write_i32(out, s.stroke_width);
+        out.extend_from_slice(b",\"borderRadius\":");
+        write_i32(out, s.border_radius);
+        out.extend_from_slice(b",\"fill\":");
+        write_string(out, &s.fill);
+        // fillPattern omitempty
+        if !s.fill_pattern.is_empty() {
+            out.extend_from_slice(b",\"fillPattern\":");
+            write_string(out, &s.fill_pattern);
+        }
+        out.extend_from_slice(b",\"stroke\":");
+        write_string(out, &s.stroke);
+        out.extend_from_slice(b",\"animated\":");
+        write_bool(out, s.animated);
+        out.extend_from_slice(b",\"shadow\":");
+        write_bool(out, s.shadow);
+        out.extend_from_slice(b",\"3d\":");
+        write_bool(out, s.three_dee);
+        out.extend_from_slice(b",\"multiple\":");
+        write_bool(out, s.multiple);
+        out.extend_from_slice(b",\"double-border\":");
+        write_bool(out, s.double_border);
+        out.extend_from_slice(b",\"tooltip\":");
+        write_string(out, &s.tooltip);
+        out.extend_from_slice(b",\"link\":");
+        write_string(out, &s.link);
+        // prettyLink omitempty
+        if !s.pretty_link.is_empty() {
+            out.extend_from_slice(b",\"prettyLink\":");
+            write_string(out, &s.pretty_link);
+        }
+        out.extend_from_slice(b",\"icon\":");
+        if let Some(ref i) = s.icon {
+            write_string(out, i);
+        } else {
+            write_null(out);
+        }
+        // iconBorderRadius omitempty
+        if s.icon_border_radius != 0 {
+            out.extend_from_slice(b",\"iconBorderRadius\":");
+            write_i32(out, s.icon_border_radius);
+        }
+        out.extend_from_slice(b",\"iconPosition\":");
+        write_string(out, &s.icon_position);
+        out.extend_from_slice(b",\"blend\":");
+        write_bool(out, s.blend);
+        // Embedded Class
+        out.push(b',');
+        marshal_class(out, &s.class);
+        // Embedded SQLTable
+        out.push(b',');
+        marshal_sql_table(out, &s.sql_table);
+        // contentAspectRatio omitempty (pointer)
+        if let Some(v) = s.content_aspect_ratio {
+            out.extend_from_slice(b",\"contentAspectRatio\":");
+            write_f64(out, v);
+        }
+        // Embedded Text (Go promotes fields; encoding/json flattens them)
+        out.extend_from_slice(b",\"label\":");
+        write_string(out, &s.text.label);
+        out.extend_from_slice(b",\"fontSize\":");
+        write_i32(out, s.text.font_size);
+        out.extend_from_slice(b",\"fontFamily\":");
+        write_string(out, &s.text.font_family);
+        out.extend_from_slice(b",\"language\":");
+        write_string(out, &s.text.language);
+        out.extend_from_slice(b",\"color\":");
+        write_string(out, &s.text.color);
+        out.extend_from_slice(b",\"italic\":");
+        write_bool(out, s.text.italic);
+        out.extend_from_slice(b",\"bold\":");
+        write_bool(out, s.text.bold);
+        out.extend_from_slice(b",\"underline\":");
+        write_bool(out, s.text.underline);
+        out.extend_from_slice(b",\"labelWidth\":");
+        write_i32(out, s.text.label_width);
+        out.extend_from_slice(b",\"labelHeight\":");
+        write_i32(out, s.text.label_height);
+        if !s.text.label_fill.is_empty() {
+            out.extend_from_slice(b",\"labelFill\":");
+            write_string(out, &s.text.label_fill);
+        }
+        // labelPosition omitempty
+        if !s.label_position.is_empty() {
+            out.extend_from_slice(b",\"labelPosition\":");
+            write_string(out, &s.label_position);
+        }
+        // tooltipPosition omitempty
+        if !s.tooltip_position.is_empty() {
+            out.extend_from_slice(b",\"tooltipPosition\":");
+            write_string(out, &s.tooltip_position);
+        }
+        out.extend_from_slice(b",\"zIndex\":");
+        write_i32(out, s.z_index);
+        out.extend_from_slice(b",\"level\":");
+        write_i32(out, s.level);
+        if !s.primary_accent_color.is_empty() {
+            out.extend_from_slice(b",\"primaryAccentColor\":");
+            write_string(out, &s.primary_accent_color);
+        }
+        if !s.secondary_accent_color.is_empty() {
+            out.extend_from_slice(b",\"secondaryAccentColor\":");
+            write_string(out, &s.secondary_accent_color);
+        }
+        if !s.neutral_accent_color.is_empty() {
+            out.extend_from_slice(b",\"neutralAccentColor\":");
+            write_string(out, &s.neutral_accent_color);
+        }
+        out.push(b'}');
+    }
+
+    /// Marshal a Connection following Go field order in `d2target.Connection`.
+    pub fn marshal_connection(out: &mut Vec<u8>, c: &Connection) {
+        out.push(b'{');
+        out.extend_from_slice(b"\"id\":");
+        write_string(out, &c.id);
+        if !c.classes.is_empty() {
+            out.extend_from_slice(b",\"classes\":[");
+            for (i, cl) in c.classes.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_string(out, cl);
+            }
+            out.push(b']');
+        }
+        out.extend_from_slice(b",\"src\":");
+        write_string(out, &c.src);
+        out.extend_from_slice(b",\"srcArrow\":");
+        write_string(out, c.src_arrow.as_str());
+        if let Some(ref l) = c.src_label {
+            out.extend_from_slice(b",\"srcLabel\":");
+            marshal_text(out, l);
+        }
+        out.extend_from_slice(b",\"dst\":");
+        write_string(out, &c.dst);
+        out.extend_from_slice(b",\"dstArrow\":");
+        write_string(out, c.dst_arrow.as_str());
+        if let Some(ref l) = c.dst_label {
+            out.extend_from_slice(b",\"dstLabel\":");
+            marshal_text(out, l);
+        }
+        out.extend_from_slice(b",\"opacity\":");
+        write_f64(out, c.opacity);
+        out.extend_from_slice(b",\"strokeDash\":");
+        write_f64(out, c.stroke_dash);
+        out.extend_from_slice(b",\"strokeWidth\":");
+        write_i32(out, c.stroke_width);
+        out.extend_from_slice(b",\"stroke\":");
+        write_string(out, &c.stroke);
+        if !c.fill.is_empty() {
+            out.extend_from_slice(b",\"fill\":");
+            write_string(out, &c.fill);
+        }
+        if c.border_radius != 0.0 {
+            out.extend_from_slice(b",\"borderRadius\":");
+            write_f64(out, c.border_radius);
+        }
+        // Embedded Text fields
+        out.extend_from_slice(b",\"label\":");
+        write_string(out, &c.text.label);
+        out.extend_from_slice(b",\"fontSize\":");
+        write_i32(out, c.text.font_size);
+        out.extend_from_slice(b",\"fontFamily\":");
+        write_string(out, &c.text.font_family);
+        out.extend_from_slice(b",\"language\":");
+        write_string(out, &c.text.language);
+        out.extend_from_slice(b",\"color\":");
+        write_string(out, &c.text.color);
+        out.extend_from_slice(b",\"italic\":");
+        write_bool(out, c.text.italic);
+        out.extend_from_slice(b",\"bold\":");
+        write_bool(out, c.text.bold);
+        out.extend_from_slice(b",\"underline\":");
+        write_bool(out, c.text.underline);
+        out.extend_from_slice(b",\"labelWidth\":");
+        write_i32(out, c.text.label_width);
+        out.extend_from_slice(b",\"labelHeight\":");
+        write_i32(out, c.text.label_height);
+        if !c.text.label_fill.is_empty() {
+            out.extend_from_slice(b",\"labelFill\":");
+            write_string(out, &c.text.label_fill);
+        }
+        out.extend_from_slice(b",\"labelPosition\":");
+        write_string(out, &c.label_position);
+        out.extend_from_slice(b",\"labelPercentage\":");
+        write_f64(out, c.label_percentage);
+        out.extend_from_slice(b",\"link\":");
+        write_string(out, &c.link);
+        if !c.pretty_link.is_empty() {
+            out.extend_from_slice(b",\"prettyLink\":");
+            write_string(out, &c.pretty_link);
+        }
+        out.extend_from_slice(b",\"route\":");
+        if c.route.is_empty() {
+            out.extend_from_slice(b"null");
+        } else {
+            out.push(b'[');
+            for (i, p) in c.route.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                marshal_geo_point(out, p);
+            }
+            out.push(b']');
+        }
+        if c.is_curve {
+            out.extend_from_slice(b",\"isCurve\":true");
+        }
+        out.extend_from_slice(b",\"animated\":");
+        write_bool(out, c.animated);
+        out.extend_from_slice(b",\"tooltip\":");
+        write_string(out, &c.tooltip);
+        out.extend_from_slice(b",\"icon\":");
+        if let Some(ref i) = c.icon {
+            write_string(out, i);
+        } else {
+            write_null(out);
+        }
+        if !c.icon_position.is_empty() {
+            out.extend_from_slice(b",\"iconPosition\":");
+            write_string(out, &c.icon_position);
+        }
+        if c.icon_border_radius != 0.0 {
+            out.extend_from_slice(b",\"iconBorderRadius\":");
+            write_f64(out, c.icon_border_radius);
+        }
+        out.extend_from_slice(b",\"zIndex\":");
+        write_i32(out, c.z_index);
+        out.push(b'}');
+    }
+
+    /// Marshal the diagram Config (matches Go `d2target.Config` json tags).
+    pub fn marshal_config(out: &mut Vec<u8>, c: &Config) {
+        out.push(b'{');
+        let mut first = true;
+
+        write_field_name(out, &mut first, "sketch");
+        match c.sketch {
+            Some(v) => write_bool(out, v),
+            None => write_null(out),
+        }
+        write_field_name(out, &mut first, "themeID");
+        match c.theme_id {
+            Some(v) => write_i64(out, v),
+            None => write_null(out),
+        }
+        write_field_name(out, &mut first, "darkThemeID");
+        match c.dark_theme_id {
+            Some(v) => write_i64(out, v),
+            None => write_null(out),
+        }
+        write_field_name(out, &mut first, "pad");
+        match c.pad {
+            Some(v) => write_i64(out, v),
+            None => write_null(out),
+        }
+        write_field_name(out, &mut first, "center");
+        match c.center {
+            Some(v) => write_bool(out, v),
+            None => write_null(out),
+        }
+        write_field_name(out, &mut first, "layoutEngine");
+        match c.layout_engine {
+            Some(ref v) => write_string(out, v),
+            None => write_null(out),
+        }
+        // themeOverrides, darkThemeOverrides: omitempty when nil — omitted here.
+        // data: omitempty — omitted.
+        out.push(b'}');
+    }
+
+    /// Reproduce Go `Diagram.Bytes()` byte stream:
+    ///   json(Shapes) + json(Connections) + json(Root) + [json(Config)] + nested boards' bytes
+    pub fn diagram_bytes(diagram: &Diagram) -> Vec<u8> {
+        let mut out = Vec::with_capacity(512);
+
+        // shapes
+        out.push(b'[');
+        for (i, s) in diagram.shapes.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            marshal_shape(&mut out, s);
+        }
+        out.push(b']');
+
+        // connections
+        out.push(b'[');
+        for (i, c) in diagram.connections.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            marshal_connection(&mut out, c);
+        }
+        out.push(b']');
+
+        // root
+        marshal_shape(&mut out, &diagram.root);
+
+        // config (if present)
+        if let Some(ref cfg) = diagram.config {
+            marshal_config(&mut out, cfg);
+        }
+
+        // nested boards (layers, scenarios, steps)
+        for d in &diagram.layers {
+            out.extend_from_slice(&diagram_bytes(d));
+        }
+        for d in &diagram.scenarios {
+            out.extend_from_slice(&diagram_bytes(d));
+        }
+        for d in &diagram.steps {
+            out.extend_from_slice(&diagram_bytes(d));
+        }
+
+        out
+    }
+}
+
+/// FNV-1a 32-bit hash (matches Go's `hash/fnv.New32a`).
+fn fnv1a32(data: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in data {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
 }
 
 // ===========================================================================

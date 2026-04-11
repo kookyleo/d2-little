@@ -24,19 +24,11 @@ pub const APPENDIX_ICON_RADIUS: i32 = 16;
 // Base CSS stylesheet (embedded inline for simplicity)
 // ---------------------------------------------------------------------------
 
-/// Minimal base stylesheet that accompanies every SVG.
-const BASE_STYLESHEET: &str = r#"
-.shape {
-  shape-rendering: geometricPrecision;
-}
-.connection {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.blend {
-  mix-blend-mode: multiply;
-}
-"#;
+/// Base stylesheet embedded by every SVG.
+///
+/// Matches the contents of `d2/d2renderers/d2svg/style.css` byte-for-byte
+/// (no leading newline, trailing newline preserved).
+const BASE_STYLESHEET: &str = ".shape {\n  shape-rendering: geometricPrecision;\n  stroke-linejoin: round;\n}\n.connection {\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.blend {\n  mix-blend-mode: multiply;\n  opacity: 0.5;\n}\n";
 
 // ---------------------------------------------------------------------------
 // RenderOpts
@@ -2156,7 +2148,7 @@ fn single_theme_rulesets(
         for &(name, value) in all_colors {
             write!(
                 out,
-                "\n\t\t\t.{} .{}-{}{{{}:{};}}",
+                "\n\t\t.{} .{}-{}{{{}:{};}}",
                 diagram_hash, property, name, property, value
             )
             .unwrap();
@@ -2177,6 +2169,49 @@ fn single_theme_rulesets(
         colors.b2, colors.b2,
         colors.n2,
     ).unwrap();
+
+    // Sketch-mode overlay rules.
+    // Mirrors the `.sketch-overlay-*` block Go emits in d2svg.singleThemeRulesets
+    // (d2svg.go around line 3222). Each color maps to a streaks pattern URL and
+    // a CSS blend mode chosen by the color's luminance category.
+    let sketch_colors: &[(&str, &str)] = &[
+        ("B1", &colors.b1),
+        ("B2", &colors.b2),
+        ("B3", &colors.b3),
+        ("B4", &colors.b4),
+        ("B5", &colors.b5),
+        ("B6", &colors.b6),
+        ("AA2", &colors.aa2),
+        ("AA4", &colors.aa4),
+        ("AA5", &colors.aa5),
+        ("AB4", &colors.ab4),
+        ("AB5", &colors.ab5),
+        ("N1", &colors.n1),
+        ("N2", &colors.n2),
+        ("N3", &colors.n3),
+        ("N4", &colors.n4),
+        ("N5", &colors.n5),
+        ("N6", &colors.n6),
+        ("N7", &colors.n7),
+    ];
+    for &(name, value) in sketch_colors {
+        let lc = d2_color::luminance_category(value)
+            .map_err(|e| format!("luminance_category({}): {}", value, e))?;
+        let lc_str = lc.as_str();
+        let blend = match lc_str {
+            "bright" => "darken",
+            "normal" => "color-burn",
+            "dark" => "overlay",
+            "darker" => "lighten",
+            _ => "normal",
+        };
+        write!(
+            out,
+            ".sketch-overlay-{}{{fill:url(#streaks-{}-{});mix-blend-mode:{}}}",
+            name, lc_str, diagram_hash, blend
+        )
+        .unwrap();
+    }
 
     // Light/dark code visibility
     if theme.is_dark() {
@@ -2699,6 +2734,181 @@ pub fn render_multiboard(
     }
 
     Ok(boards)
+}
+
+// ---------------------------------------------------------------------------
+// Animation wrapper (mirrors Go d2renderers/d2animate/d2animate.go)
+// ---------------------------------------------------------------------------
+
+/// Collect text corpus from diagram and all nested boards (for font subset).
+/// Mirrors Go's `Diagram.GetNestedCorpus`.
+fn collect_nested_corpus(diagram: &d2_target::Diagram) -> String {
+    let mut corpus = collect_corpus(diagram);
+    for d in &diagram.layers {
+        corpus.push_str(&collect_nested_corpus(d));
+    }
+    for d in &diagram.scenarios {
+        corpus.push_str(&collect_nested_corpus(d));
+    }
+    for d in &diagram.steps {
+        corpus.push_str(&collect_nested_corpus(d));
+    }
+    corpus
+}
+
+/// Build a single `@keyframes` block for one board in the animation.
+/// Mirrors Go d2animate.makeKeyframe (transitionDurationMS = 1).
+fn make_keyframe(delay_ms: i64, duration_ms: i64, total_ms: i64, identifier: usize, diagram_hash: &str) -> String {
+    const TRANSITION_DURATION_MS: i64 = 1;
+    let total = total_ms as f64;
+    let percentage_before = ((delay_ms - TRANSITION_DURATION_MS).max(0) as f64 / total) * 100.0;
+    let percentage_start = (delay_ms as f64 / total) * 100.0;
+    let percentage_end = ((delay_ms + duration_ms - TRANSITION_DURATION_MS) as f64 / total) * 100.0;
+
+    if percentage_end.ceil() as i64 == 100 {
+        return format!(
+            "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n}}",
+            diagram_hash, identifier, percentage_before, percentage_start, percentage_end.ceil(),
+        );
+    }
+
+    let percentage_after = ((delay_ms + duration_ms) as f64 / total) * 100.0;
+    format!(
+        "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n\t\t{:.6}%%, 100%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n}}",
+        diagram_hash, identifier, percentage_before, percentage_start, percentage_end, percentage_after,
+    )
+}
+
+/// Wrap per-board SVGs into a single animated SVG document.
+///
+/// Mirrors Go `d2renderers/d2animate.Wrap`. The generated structure is:
+/// ```text
+/// <?xml version="1.0" ...?>
+/// <svg xmlns=... d2Version=... viewBox="0 0 W H">
+///   <svg class="d2-svg" width="W" height="H" viewBox="left top W H">
+///     <style> font embed </style>
+///     <style> base + theme </style>
+///     <style> @keyframes ...</style>
+///     ... per-board <g> with animation style ...
+///   </svg>
+/// </svg>
+/// ```
+pub fn wrap(
+    root_diagram: &d2_target::Diagram,
+    svgs: &[Vec<u8>],
+    opts: &RenderOpts,
+    interval_ms: i64,
+) -> Result<Vec<u8>, String> {
+    let mut buf = String::with_capacity(8192);
+
+    let pad = opts.pad.map_or(DEFAULT_PADDING, |p| p as i32);
+    let (tl, br) = root_diagram.nested_bounding_box();
+    let left = tl.x - pad;
+    let top = tl.y - pad;
+    let width = br.x - tl.x + pad * 2;
+    let height = br.y - tl.y + pad * 2;
+
+    let dim_attr = if let Some(sc) = opts.scale {
+        format!(
+            r#" width="{}" height="{}""#,
+            (sc * width as f64).ceil() as i32,
+            (sc * height as f64).ceil() as i32
+        )
+    } else {
+        String::new()
+    };
+
+    // Outer wrapper
+    write!(
+        buf,
+        r#"<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" d2Version="v0.7.1-HEAD" preserveAspectRatio="xMinYMin meet" viewBox="0 0 {} {}"{}>"#,
+        width, height, dim_attr
+    ).unwrap();
+
+    // Inner <svg class="d2-svg"> viewport
+    write!(
+        buf,
+        r#"<svg class="d2-svg" width="{}" height="{}" viewBox="{} {} {} {}">"#,
+        width, height, left, top, width, height
+    ).unwrap();
+
+    // Concatenate all SVG bodies (space-separated like Go)
+    let mut svgs_str = String::new();
+    for svg in svgs {
+        svgs_str.push_str(&String::from_utf8_lossy(svg));
+        svgs_str.push(' ');
+    }
+
+    let diagram_hash = root_diagram.hash_id(opts.salt.as_deref());
+
+    // Font embed <style> — uses combined content of all boards as source trigger.
+    let font_family = d2_fonts::FontFamily::SourceSansPro;
+    let mono_font_family = d2_fonts::FontFamily::SourceCodePro;
+    let corpus = collect_nested_corpus(root_diagram);
+    embed_fonts(
+        &mut buf,
+        &diagram_hash,
+        &svgs_str,
+        &font_family,
+        &mono_font_family,
+        &corpus,
+    );
+
+    // Base + theme <style>
+    let theme_stylesheet = theme_css(
+        &diagram_hash,
+        opts.theme_id,
+        opts.dark_theme_id,
+        opts.theme_overrides.as_ref(),
+        opts.dark_theme_overrides.as_ref(),
+    )?;
+    write!(
+        buf,
+        r#"<style type="text/css"><![CDATA[{}{}]]></style>"#,
+        BASE_STYLESHEET, theme_stylesheet
+    ).unwrap();
+
+    // TODO: Markdown CSS block. Go's d2animate writes a `<style type="text/css">`
+    // containing the GitHub markdown stylesheet whenever any nested board has a
+    // text shape with a non-empty label. We don't emit it yet — none of the
+    // currently passing fixtures need it, and the embedded asset is large
+    // enough to belong in its own pass.
+
+    // Keyframes <style>: one @keyframes per board.
+    // For 0 boards (e.g. empty diagram), the block is an empty CDATA, matching Go.
+    buf.push_str(r#"<style type="text/css"><![CDATA["#);
+    let total_ms = (svgs.len() as i64) * interval_ms;
+    for i in 0..svgs.len() {
+        buf.push_str(&make_keyframe(
+            (i as i64) * interval_ms,
+            interval_ms,
+            total_ms,
+            i,
+            &diagram_hash,
+        ));
+    }
+    buf.push_str(r#"]]></style>"#);
+
+    // Inject each board with an animation style attribute on the first <g ... .
+    for (i, svg) in svgs.iter().enumerate() {
+        let s = String::from_utf8_lossy(svg);
+        let anim = format!(
+            r#"<g style="animation: d2Transition-{}-{} {}ms infinite""#,
+            diagram_hash, i, total_ms,
+        );
+        // Replace only the first "<g" occurrence, matching Go's strings.Replace(..., 1).
+        if let Some(pos) = s.find("<g") {
+            buf.push_str(&s[..pos]);
+            buf.push_str(&anim);
+            buf.push_str(&s[pos + 2..]);
+        } else {
+            buf.push_str(&s);
+        }
+    }
+
+    buf.push_str("</svg></svg>");
+
+    Ok(buf.into_bytes())
 }
 
 // ===========================================================================

@@ -103,10 +103,34 @@ pub fn compile(
     d2_dagre_layout::layout(&mut g, None)?;
 
     // Step 5: export
-    let diagram = d2_exporter::export(&g, None, None)?;
+    let mut diagram = d2_exporter::export(&g, None, None)?;
+
+    // Match Go d2lib.Compile: copy selected render options back into
+    // diagram.Config so the diagram hash (used for CSS scoping) accounts for
+    // appearance-affecting fields like themeID and sketch.
+    diagram.config = Some(d2_target::Config {
+        sketch: Some(opts.sketch),
+        theme_id: Some(theme_id),
+        dark_theme_id: opts.dark_theme_id,
+        // Pad / center / layoutEngine are intentionally left unset, matching Go
+        // applyConfigs which only copies ThemeID/DarkThemeID/Sketch back.
+        pad: None,
+        center: None,
+        layout_engine: None,
+        theme_overrides: None,
+        dark_theme_overrides: None,
+        data: Default::default(),
+    });
 
     // Step 6: render
-    let render_opts = RenderOpts {
+    //
+    // Mirrors the Go e2e pipeline (`d2/e2etests/e2e_test.go`):
+    //   1. RenderMultiboard -> boards ([][]byte)
+    //   2. If len(boards) == 1, return boards[0]
+    //   3. Else call d2animate.Wrap(diagram, boards, opts, 1000)
+    // When the diagram has nested boards, set MasterID on opts so inner SVGs
+    // use <g> form rather than standalone <svg>.
+    let mut render_opts = RenderOpts {
         theme_id: Some(theme_id),
         dark_theme_id: opts.dark_theme_id,
         pad: opts.pad,
@@ -114,14 +138,33 @@ pub fn compile(
         center: if opts.center { Some(true) } else { None },
         ..Default::default()
     };
-    let svg = d2_svg_render::render(&diagram, &render_opts)?;
+
+    if !diagram.layers.is_empty() || !diagram.scenarios.is_empty() || !diagram.steps.is_empty() {
+        // Multi-board: use the root hash for CSS targeting across all boards.
+        render_opts.master_id = diagram.hash_id(None);
+    }
+
+    let boards = d2_svg_render::render_multiboard(&diagram, &render_opts)?;
+
+    let svg = if boards.len() == 1 {
+        boards.into_iter().next().unwrap()
+    } else {
+        d2_svg_render::wrap(&diagram, &boards, &render_opts, 1000)?
+    };
 
     Ok((diagram, svg))
 }
 
 /// Convenience function: D2 source text -> SVG bytes with default options.
+///
+/// Uses pad=0 and the multi-board + animate wrapper pipeline to match the
+/// Go e2e test output byte-for-byte (see `d2/e2etests/e2e_test.go` which
+/// calls `d2animate.Wrap` when `len(boards) != 1`).
 pub fn d2_to_svg(input: &str) -> Result<Vec<u8>, String> {
-    let opts = CompileOptions::default();
+    let opts = CompileOptions {
+        pad: Some(0),
+        ..CompileOptions::default()
+    };
     let (_, svg) = compile(input, &opts)?;
     Ok(svg)
 }

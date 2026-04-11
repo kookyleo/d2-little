@@ -27,6 +27,14 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
     c.compile_board(&mut g, &ir_map);
     c.set_default_shapes(&mut g);
 
+    // Match Go d2compiler: if there are no user objects (only the implicit root),
+    // mark the graph as folder-only so it will not be rendered as its own board.
+    // See Go d2compiler/compile.go:  `if len(g.Objects) == 0 { g.IsFolderOnly = true }`
+    // (Go excludes the root from Objects; our objects[0] is the root.)
+    if g.objects.len() <= 1 && g.edges.is_empty() {
+        g.is_folder_only = true;
+    }
+
     if c.errors.is_empty() {
         Ok(g)
     } else {
