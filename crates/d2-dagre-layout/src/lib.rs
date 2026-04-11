@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use d2_geo::{Point, Segment};
+use d2_geo::{Ellipse, Point, Segment, Vector};
 use d2_graph::{Graph, ObjId};
 
 // ---------------------------------------------------------------------------
@@ -952,6 +952,15 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         // intersection is what Go's `TraceToShapeBorder` returns.
         if src_id != dst_id && points.len() >= 2 {
             let last = points.len() - 1;
+            // `shape.TraceToShapeBorder` in Go rounds the final point to
+            // the nearest integer for any non-rectangular shape (after
+            // tracing the true perimeter). We don't yet implement the
+            // full perimeter trace, but rounding is enough to recover
+            // the expected `(box_bottom, box_top) = (50, 171)` style
+            // endpoints instead of the float box-intersect artefacts
+            // (`49.5`, `171.5`).
+            let src_is_rect = g.objects[src_id].is_rectangular_shape();
+            let dst_is_rect = g.objects[dst_id].is_rectangular_shape();
 
             // Source side.
             let starting_segment = Segment::new(points[1], points[0]);
@@ -988,6 +997,14 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     points[0] = *p;
                 }
             }
+            if !src_is_rect {
+                let traced = trace_to_shape_border(
+                    &g.objects[src_id],
+                    points[0],
+                    points[1],
+                );
+                points[0] = traced;
+            }
 
             // Destination side.
             let ending_segment = Segment::new(points[last - 1], points[last]);
@@ -1018,6 +1035,14 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 if let Some(p) = ints.first() {
                     points[last] = *p;
                 }
+            }
+            if !dst_is_rect {
+                let traced = trace_to_shape_border(
+                    &g.objects[dst_id],
+                    points[last],
+                    points[last - 1],
+                );
+                points[last] = traced;
             }
         }
 
@@ -1334,6 +1359,73 @@ fn adjust_delta_for_edges(
 /// considered on the same axis if they are within a pixel of each other.
 fn precision_eq(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1.0
+}
+
+/// Port of Go `shape.TraceToShapeBorder` for circle and oval shapes.
+/// Given the (possibly fractional) box-intersect point and the previous
+/// route point, compute the exact perimeter intersection for the shape
+/// and round to the nearest integer — matching Go's two-step flow.
+///
+/// For shapes we don't yet model exactly, we fall back to rounding the
+/// provided box-intersect point (which is what Go's rectangular fast
+/// path would do plus a round that the caller wants).
+fn trace_to_shape_border(
+    obj: &d2_graph::Object,
+    rect_border_point: Point,
+    prev_point: Point,
+) -> Point {
+    let shape_val = obj.shape.value.as_str();
+    let is_ellipse = matches!(shape_val, d2_target::SHAPE_CIRCLE | d2_target::SHAPE_OVAL);
+    if !is_ellipse {
+        // Not yet modelled — fall back to rounding the box intersect.
+        return Point::new(rect_border_point.x.round(), rect_border_point.y.round());
+    }
+
+    // Circle / oval: inscribed ellipse inside the shape box.
+    let cx = obj.top_left.x + obj.width / 2.0;
+    let cy = obj.top_left.y + obj.height / 2.0;
+    let rx = obj.width / 2.0;
+    let ry = obj.height / 2.0;
+    let ellipse = Ellipse::new(Point::new(cx, cy), rx, ry);
+
+    // Extend the segment past the shape so we're sure to hit both
+    // perimeter intersections. Go adds `scaleSize` (shape width or
+    // height depending on axis) to the segment length.
+    let scale = if prev_point.x == rect_border_point.x {
+        obj.height
+    } else {
+        obj.width
+    };
+    let mut v = Vector::new(&[
+        rect_border_point.x - prev_point.x,
+        rect_border_point.y - prev_point.y,
+    ]);
+    let cur_len = v.length();
+    if cur_len > 0.0 {
+        let scale_factor = (cur_len + scale) / cur_len;
+        v = v.multiply(scale_factor);
+    }
+    let extended_end = Point::new(prev_point.x + v.0[0], prev_point.y + v.0[1]);
+    let extended = Segment::new(prev_point, extended_end);
+
+    let ints = ellipse.intersections(&extended);
+    let mut closest = rect_border_point;
+    let mut closest_d = f64::INFINITY;
+    for p in &ints {
+        let dx = rect_border_point.x - p.x;
+        let dy = rect_border_point.y - p.y;
+        let d = (dx * dx + dy * dy).sqrt();
+        if d < closest_d {
+            closest_d = d;
+            closest = *p;
+        }
+    }
+
+    // Truncate to float32 precision + round to integer (mirrors Go's
+    // `TruncateFloat32` + `math.Round`).
+    let tx = (closest.x as f32) as f64;
+    let ty = (closest.y as f32) as f64;
+    Point::new(tx.round(), ty.round())
 }
 
 /// Compute the outside-label `Box2D` and its position for an object — the

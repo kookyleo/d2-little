@@ -632,6 +632,25 @@ impl Object {
         )
     }
 
+    /// Port of Go `shape.Shape.IsRectangular`. Returns true for shapes
+    /// whose border is an axis-aligned rectangle — these don't need a
+    /// perimeter-trace adjustment after the dagre box intersect.
+    /// Also treats empty shape value as rectangular to match Go's
+    /// `TraceToShapeBorder` fast path (`shape.Is("")`).
+    pub fn is_rectangular_shape(&self) -> bool {
+        matches!(
+            self.shape.value.as_str(),
+            ""
+                | d2_target::SHAPE_RECTANGLE
+                | d2_target::SHAPE_SQUARE
+                | d2_target::SHAPE_IMAGE
+                | d2_target::SHAPE_CLASS
+                | d2_target::SHAPE_SQL_TABLE
+                | d2_target::SHAPE_CODE
+                | d2_target::SHAPE_TEXT
+        )
+    }
+
     /// Update the bounding box from top_left + width + height.
     pub fn update_box(&mut self) {
         self.box_ = Box2D::new(self.top_left, self.width, self.height);
