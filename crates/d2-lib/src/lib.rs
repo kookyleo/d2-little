@@ -268,24 +268,24 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         // Compute shape dimensions from label + padding (matches Go d2graph SetDimensions):
         //   defaultDims = labelDims + INNER_LABEL_PADDING(5) (when withLabelPadding)
-        //   obj.Width   = defaultDims.Width + paddingX (40 for rectangle)
-        //   obj.Height  = defaultDims.Height + paddingY (40 for rectangle)
+        //   obj.Width   = defaultDims.Width + paddingX (per-shape from d2-shape)
+        //   obj.Height  = defaultDims.Height + paddingY (per-shape)
         let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text";
         let label_pad = if with_label_padding {
             INNER_LABEL_PADDING
         } else {
             0.0
         };
-        let pad_x = if desired_width != 0 {
-            0.0
-        } else {
-            DEFAULT_SHAPE_PADDING
-        };
-        let pad_y = if desired_height != 0 {
-            0.0
-        } else {
-            DEFAULT_SHAPE_PADDING
-        };
+        // Get per-shape padding from d2-shape (matches Go lib/shape per-shape).
+        let dummy_box = d2_geo::Box2D::new(d2_geo::Point::new(0.0, 0.0), 100.0, 100.0);
+        let s = d2_shape::Shape::new(&shape, dummy_box);
+        let (mut pad_x, mut pad_y) = d2_shape::ShapeOps::get_default_padding(&s);
+        if desired_width != 0 {
+            pad_x = 0.0;
+        }
+        if desired_height != 0 {
+            pad_y = 0.0;
+        }
         let mut w = (tw as f64 + label_pad + pad_x).max(MIN_SHAPE_SIZE);
         let mut h = (th as f64 + label_pad + pad_y).max(MIN_SHAPE_SIZE);
 

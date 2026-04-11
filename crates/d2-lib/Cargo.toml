@@ -18,6 +18,8 @@ d2-target = { path = "../d2-target" }
 d2-themes = { path = "../d2-themes" }
 d2-textmeasure = { path = "../d2-textmeasure" }
 d2-fonts = { path = "../d2-fonts" }
+d2-shape = { path = "../d2-shape" }
+d2-geo = { path = "../d2-geo" }
 
 [dev-dependencies]
 serde_json = "1"
