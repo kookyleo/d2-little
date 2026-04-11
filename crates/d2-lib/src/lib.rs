@@ -342,8 +342,10 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             continue;
         }
 
-        // SQL table shapes have similar per-row sizing needs. Mirrors
-        // Go `GetDefaultSize` sql_table branch.
+        // SQL table shapes. Mirrors Go `GetDefaultSize` sql_table branch
+        // plus the `withLabelPadding` adjustment at the top of the
+        // function that grows labelDims by INNER_LABEL_PADDING when no
+        // explicit width/height was requested.
         if shape == "sql_table" {
             let table_font_size = if let Some(v) = g.objects[i].style.font_size.as_ref() {
                 v.value.parse().unwrap_or(d2_fonts::FONT_SIZE_L)
@@ -355,15 +357,29 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             let header_font_size = table_font_size + d2_target::HEADER_FONT_ADD;
             let header_font =
                 d2_fonts::Font::new(font_family, FontStyle::Bold, header_font_size);
-            let (header_w, header_h) = if !label.is_empty() {
-                ruler.measure(header_font, &label)
+            // Empty-label fallback uses placeholder text "Table" (mirrors
+            // Go `GetLabelSize` special case).
+            let header_text: &str = if label.is_empty() { "Table" } else { &label };
+            let (raw_header_w, raw_header_h) = ruler.measure(header_font, header_text);
+            // obj.LabelDimensions stores the *unpadded* dims (matches
+            // Go), but only when there's an actual label.
+            if !label.is_empty() {
+                g.objects[i].label_dimensions = d2_graph::Dimensions {
+                    width: raw_header_w,
+                    height: raw_header_h,
+                };
+            }
+
+            // Apply INNER_LABEL_PADDING when no explicit dims were set
+            // (equivalent to Go's `withLabelPadding == true`).
+            let with_label_padding = desired_width == 0 && desired_height == 0;
+            let pad = if with_label_padding {
+                INNER_LABEL_PADDING as i32
             } else {
-                (0, 0)
+                0
             };
-            g.objects[i].label_dimensions = d2_graph::Dimensions {
-                width: header_w,
-                height: header_h,
-            };
+            let header_w = raw_header_w + pad;
+            let header_h = raw_header_h + pad;
 
             // Columns: for each column, measure name / type / constraint
             // with the regular (non-mono) font at `table_font_size`.
@@ -371,7 +387,6 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             let mut longest_name_w = 0i32;
             let mut longest_type_w = 0i32;
             let mut longest_constraint_w = 0i32;
-            let mut row_h = 0i32;
 
             let mut table = g.objects[i].sql_table.clone().unwrap_or_default();
             for col in &mut table.columns {
@@ -379,39 +394,43 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 col.name.label_width = nw;
                 col.name.label_height = nh;
                 longest_name_w = longest_name_w.max(nw);
-                row_h = row_h.max(nh);
                 let (tw, th) = ruler.measure(col_font, &col.type_.label);
                 col.type_.label_width = tw;
                 col.type_.label_height = th;
                 longest_type_w = longest_type_w.max(tw);
-                row_h = row_h.max(th);
-                let cstr = col.constraint_abbr();
-                let (cw, _) = ruler.measure(col_font, &cstr);
-                longest_constraint_w = longest_constraint_w.max(cw);
+                let _ = th;
+                if !col.constraint.is_empty() {
+                    let cstr = col.constraint_abbr();
+                    let (cw, _) = ruler.measure(col_font, &cstr);
+                    longest_constraint_w = longest_constraint_w.max(cw);
+                }
             }
             g.objects[i].sql_table = Some(table);
 
-            let content_w = longest_name_w + d2_target::TYPE_PADDING + longest_type_w;
-            let content_w = content_w
-                + if longest_constraint_w > 0 {
-                    d2_target::CONSTRAINT_PADDING + longest_constraint_w
-                } else {
-                    0
-                };
-            let w = 2 * d2_target::NAME_PADDING + content_w;
-            let w = w.max(
-                2 * d2_target::HEADER_PADDING + header_w,
-            );
+            // Width = max(12, max(hdrW, rowsW)) where:
+            //   hdrW  = HeaderPadding + paddedHeaderW + HeaderPadding
+            //   rowsW = NamePadding + maxName + TypePadding + maxType
+            //         + TypePadding + maxConstraint + (ConstraintPadding if maxConstraint > 0)
+            let header_width = 2 * d2_target::HEADER_PADDING + header_w;
+            let mut rows_width = d2_target::NAME_PADDING
+                + longest_name_w
+                + d2_target::TYPE_PADDING
+                + longest_type_w
+                + d2_target::TYPE_PADDING
+                + longest_constraint_w;
+            if longest_constraint_w != 0 {
+                rows_width += d2_target::CONSTRAINT_PADDING;
+            }
+            let w = 12.max(header_width.max(rows_width));
 
+            // Height = max(12, paddedHeaderH * (nCols + 1))
             let row_count = g
                 .objects[i]
                 .sql_table
                 .as_ref()
                 .map(|t| t.columns.len())
                 .unwrap_or(0) as i32;
-            let row_height = row_h + d2_target::VERTICAL_PADDING;
-            let header_row_height = (header_h + 2 * d2_target::HEADER_PADDING).max(row_height);
-            let h = row_height * row_count + header_row_height;
+            let h = 12.max(header_h * (row_count + 1));
 
             g.objects[i].width = if desired_width > 0 {
                 desired_width as f64

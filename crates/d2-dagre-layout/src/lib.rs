@@ -712,10 +712,19 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         ..Default::default()
     });
 
-    // Register all objects with the mapper
+    // Register all objects with the mapper.
+    // Skip class/sql_table children that have been absorbed into their
+    // parent shape (marked with a sentinel in `compile_class_shape` /
+    // `compile_sql_table_shape`). Those objects must not participate in
+    // layout or they'll be laid out as independent nodes and throw the
+    // bounding box off.
     let mut mapper = ObjectMapper::new();
     let obj_ids: Vec<ObjId> = (0..g.objects.len())
-        .filter(|&i| i != g.root && !excluded_objects.contains(&i))
+        .filter(|&i| {
+            i != g.root
+                && !excluded_objects.contains(&i)
+                && g.objects[i].shape.value != "__d2_class_field_removed__"
+        })
         .collect();
     for &obj_id in &obj_ids {
         mapper.register(obj_id);

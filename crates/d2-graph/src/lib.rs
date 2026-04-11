@@ -994,6 +994,14 @@ pub struct Edge {
     /// `d2graph.Graph.SortEdgesByAST` uses to order edges in source-file
     /// order before rendering. `None` if no reference is set.
     pub first_ast_range: Option<ast::Range>,
+
+    /// Index of the source column inside its sql_table. Mirrors Go
+    /// `d2graph.Edge.SrcTableColumnIndex`. Set by `Graph::connect` when
+    /// the source path ends inside a sql_table.
+    pub src_table_column_index: Option<usize>,
+    /// Index of the destination column inside its sql_table. Mirrors
+    /// Go `d2graph.Edge.DstTableColumnIndex`.
+    pub dst_table_column_index: Option<usize>,
 }
 
 impl Default for Edge {
@@ -1022,6 +1030,8 @@ impl Default for Edge {
             z_index: 0,
             classes: Vec::new(),
             first_ast_range: None,
+            src_table_column_index: None,
+            dst_table_column_index: None,
         }
     }
 }
@@ -1328,6 +1338,23 @@ impl Graph {
         self.ensure_child_of(self.root, ida)
     }
 
+    /// Like `ensure_child_of` but stops descending as soon as the walk
+    /// enters a `class` or `sql_table` shape, returning that shape.
+    /// Mirrors Go `ensureChildEdge` — used exclusively for edge endpoint
+    /// resolution so that `a.column -> b` yields `src = a` and not a
+    /// synthetic child object for the column.
+    pub fn ensure_child_edge_of(&mut self, parent: ObjId, ida: &[String]) -> ObjId {
+        let mut cur = parent;
+        for name in ida {
+            let shape_val = self.objects[cur].shape.value.clone();
+            if shape_val == "class" || shape_val == "sql_table" {
+                return cur;
+            }
+            cur = self.ensure_child_of(cur, std::slice::from_ref(name));
+        }
+        cur
+    }
+
     /// Connect two objects by creating an edge. Returns the edge index.
     pub fn connect(
         &mut self,
@@ -1338,8 +1365,8 @@ impl Graph {
         dst_arrow: bool,
         label: &str,
     ) -> Result<usize, String> {
-        let src = self.ensure_child_of(parent, src_path);
-        let dst = self.ensure_child_of(parent, dst_path);
+        let src = self.ensure_child_edge_of(parent, src_path);
+        let dst = self.ensure_child_edge_of(parent, dst_path);
 
         let arrow_str = if src_arrow && dst_arrow {
             "<->"
@@ -1400,6 +1427,48 @@ impl Graph {
             common_key, src_tail, arrow_str, dst_tail, index
         );
 
+        // Port of Go `addSQLTableColumnIndices`: when an edge endpoint
+        // path walks *into* a sql_table (e.g. `a.user_id -> b.id`), we
+        // want to track which column index is referenced so the
+        // renderer can pin the edge at the column row.
+        let parent_abs_len = if parent == self.root {
+            0
+        } else {
+            self.objects[parent].abs_id.split('.').count()
+        };
+        let mut src_column_idx: Option<usize> = None;
+        let mut dst_column_idx: Option<usize> = None;
+        if self.objects[src].shape.value == "sql_table" && src != dst {
+            let src_abs_len = self.objects[src].abs_id.split('.').count();
+            if parent_abs_len + src_path.len() > src_abs_len {
+                if let Some(last) = src_path.last() {
+                    if let Some(table) = self.objects[src].sql_table.as_ref() {
+                        for (i, col) in table.columns.iter().enumerate() {
+                            if col.name.label == *last {
+                                src_column_idx = Some(i);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if self.objects[dst].shape.value == "sql_table" {
+            let dst_abs_len = self.objects[dst].abs_id.split('.').count();
+            if parent_abs_len + dst_path.len() > dst_abs_len {
+                if let Some(last) = dst_path.last() {
+                    if let Some(table) = self.objects[dst].sql_table.as_ref() {
+                        for (i, col) in table.columns.iter().enumerate() {
+                            if col.name.label == *last {
+                                dst_column_idx = Some(i);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let edge = Edge {
             abs_id,
             src,
@@ -1410,6 +1479,8 @@ impl Graph {
                 value: label.to_string(),
                 ..Default::default()
             },
+            src_table_column_index: src_column_idx,
+            dst_table_column_index: dst_column_idx,
             ..Default::default()
         };
         let edge_idx = self.edges.len();
