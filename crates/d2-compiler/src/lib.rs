@@ -83,11 +83,95 @@ impl std::error::Error for CompileError {}
 
 struct Compiler {
     errors: Vec<ast::Error>,
+    /// Class definitions (`classes.<name>`) collected from the root IR map
+    /// before compilation. When an object declares `class: <name>` or
+    /// `class: [a; b]`, we look up the class here and apply its fields to
+    /// the object (recursively via `compile_map`), matching Go
+    /// `d2compiler.compileMap`'s class-expansion step.
+    class_defs: std::collections::HashMap<String, ir::Map>,
 }
 
 impl Compiler {
     fn new() -> Self {
-        Self { errors: Vec::new() }
+        Self {
+            errors: Vec::new(),
+            class_defs: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Populate `class_defs` from the root `classes` field.
+    fn collect_class_defs(&mut self, root: &ir::Map) {
+        let Some(classes_field) = root.get_field("classes") else {
+            return;
+        };
+        let Some(classes_map) = classes_field.map() else {
+            return;
+        };
+        for class_field in &classes_map.fields {
+            if let Some(map) = class_field.map() {
+                // Use the case-preserved field name so lookups honour the
+                // user's original key (Go's GetClassMap does a
+                // case-insensitive lookup; we lowercase the key here and
+                // also lowercase the lookup side).
+                self.class_defs
+                    .insert(class_field.name.to_lowercase(), map.clone());
+            }
+        }
+    }
+
+    fn normalize_label_position(pos: &str) -> Option<String> {
+        let normalized = match pos {
+            "top-left" => "INSIDE_TOP_LEFT",
+            "top-center" => "INSIDE_TOP_CENTER",
+            "top-right" => "INSIDE_TOP_RIGHT",
+            "center-left" => "INSIDE_MIDDLE_LEFT",
+            "center-center" => "INSIDE_MIDDLE_CENTER",
+            "center-right" => "INSIDE_MIDDLE_RIGHT",
+            "bottom-left" => "INSIDE_BOTTOM_LEFT",
+            "bottom-center" => "INSIDE_BOTTOM_CENTER",
+            "bottom-right" => "INSIDE_BOTTOM_RIGHT",
+            "outside-top-left" => "OUTSIDE_TOP_LEFT",
+            "outside-top-center" => "OUTSIDE_TOP_CENTER",
+            "outside-top-right" => "OUTSIDE_TOP_RIGHT",
+            "outside-left-top" => "OUTSIDE_LEFT_TOP",
+            "outside-left-center" => "OUTSIDE_LEFT_MIDDLE",
+            "outside-left-bottom" => "OUTSIDE_LEFT_BOTTOM",
+            "outside-right-top" => "OUTSIDE_RIGHT_TOP",
+            "outside-right-center" => "OUTSIDE_RIGHT_MIDDLE",
+            "outside-right-bottom" => "OUTSIDE_RIGHT_BOTTOM",
+            "outside-bottom-left" => "OUTSIDE_BOTTOM_LEFT",
+            "outside-bottom-center" => "OUTSIDE_BOTTOM_CENTER",
+            "outside-bottom-right" => "OUTSIDE_BOTTOM_RIGHT",
+            "border-top-left" => "BORDER_TOP_LEFT",
+            "border-top-center" => "BORDER_TOP_CENTER",
+            "border-top-right" => "BORDER_TOP_RIGHT",
+            "border-left-top" => "BORDER_LEFT_TOP",
+            "border-left-center" => "BORDER_LEFT_MIDDLE",
+            "border-left-bottom" => "BORDER_LEFT_BOTTOM",
+            "border-right-top" => "BORDER_RIGHT_TOP",
+            "border-right-center" => "BORDER_RIGHT_MIDDLE",
+            "border-right-bottom" => "BORDER_RIGHT_BOTTOM",
+            "border-bottom-left" => "BORDER_BOTTOM_LEFT",
+            "border-bottom-center" => "BORDER_BOTTOM_CENTER",
+            "border-bottom-right" => "BORDER_BOTTOM_RIGHT",
+            _ => return None,
+        };
+        Some(normalized.to_owned())
+    }
+
+    fn normalize_tooltip_position(pos: &str) -> Option<String> {
+        let normalized = match pos {
+            "top-left" => "INSIDE_TOP_LEFT",
+            "top-center" => "INSIDE_TOP_CENTER",
+            "top-right" => "INSIDE_TOP_RIGHT",
+            "center-left" => "INSIDE_MIDDLE_LEFT",
+            "center-right" => "INSIDE_MIDDLE_RIGHT",
+            "bottom-left" => "INSIDE_BOTTOM_LEFT",
+            "bottom-center" => "INSIDE_BOTTOM_CENTER",
+            "bottom-right" => "INSIDE_BOTTOM_RIGHT",
+            _ => return None,
+        };
+        Some(normalized.to_owned())
     }
 
     fn errorf(&mut self, range: &ast::Range, msg: String) {
@@ -97,13 +181,79 @@ impl Compiler {
         });
     }
 
+    fn compile_position(&mut self, g: &mut Graph, obj: ObjId, field_name: &str, f: &ir::Field) {
+        let Some(fmap) = f.map() else {
+            return;
+        };
+
+        for sub in &fmap.fields {
+            if !(sub.name == "near" && sub.name_is_unquoted) {
+                continue;
+            }
+            let Some(val) = sub.primary_string() else {
+                continue;
+            };
+
+            match field_name {
+                "label" | "icon" => {
+                    let Some(normalized) = Self::normalize_label_position(&val) else {
+                        self.errorf(&ast::Range::default(), "invalid \"near\" field".to_owned());
+                        continue;
+                    };
+                    if field_name == "label" {
+                        g.objects[obj].label_position = Some(normalized);
+                    } else {
+                        g.objects[obj].icon_position = Some(normalized);
+                    }
+                }
+                "tooltip" => {
+                    let Some(normalized) = Self::normalize_tooltip_position(&val) else {
+                        self.errorf(&ast::Range::default(), "invalid \"near\" field".to_owned());
+                        continue;
+                    };
+                    g.objects[obj].tooltip_position = Some(normalized);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn compile_board(&mut self, g: &mut Graph, ir: &ir::Map) {
+        // Collect class definitions before compilation so compile_map can
+        // apply them whenever an object declares `class: <name>`.
+        self.collect_class_defs(ir);
         let root = g.root;
         self.compile_map(g, root, ir);
         self.set_default_shapes(g);
     }
 
     fn compile_map(&mut self, g: &mut Graph, obj: ObjId, m: &ir::Map) {
+        // Apply referenced classes *first* so the object's own fields
+        // override any class defaults. Mirrors Go d2compiler.compileMap's
+        // top-of-function class-expansion step.
+        if !self.class_defs.is_empty() {
+            if let Some(class_field) = m.get_field("class") {
+                let mut class_names: Vec<String> = Vec::new();
+                if let Some(ref primary) = class_field.primary {
+                    class_names.push(primary.scalar_string());
+                } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
+                    for v in &arr.values {
+                        if let ir::Value::Scalar(s) = v {
+                            class_names.push(s.scalar_string());
+                        }
+                    }
+                }
+                for name in class_names {
+                    // Clone the class map so we release the borrow on
+                    // `self.class_defs` before the recursive compile_map
+                    // call, which takes `&mut self`.
+                    if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
+                        self.compile_map(g, obj, &class_map);
+                    }
+                }
+            }
+        }
+
         // Process shape first (affects how children are handled)
         if let Some(shape_field) = m.get_field("shape") {
             if shape_field.composite.is_some() {
@@ -200,6 +350,7 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.objects[obj].label.value = val;
                 }
+                self.compile_position(g, obj, "label", f);
             }
             "shape" => {
                 if let Some(val) = primary_str {
@@ -215,11 +366,22 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.objects[obj].icon = Some(val);
                 }
+                self.compile_position(g, obj, "icon", f);
+                if let Some(fmap) = f.map() {
+                    for sub in &fmap.fields {
+                        if sub.name == "style" && sub.name_is_unquoted {
+                            if let Some(style_map) = sub.map() {
+                                self.compile_style(g, obj, style_map, false);
+                            }
+                        }
+                    }
+                }
             }
             "tooltip" => {
                 if let Some(val) = primary_str {
                     g.objects[obj].tooltip = Some(ScalarValue { value: val });
                 }
+                self.compile_position(g, obj, "tooltip", f);
             }
             "link" => {
                 if let Some(val) = primary_str {
@@ -786,5 +948,15 @@ mod tests {
         let g = compile_ok("a -> b: {\n  label: connection\n}");
         assert_eq!(g.edges.len(), 1);
         assert_eq!(g.edges[0].label.value, "connection");
+    }
+
+    #[test]
+    fn test_multiple_edge_styles_stay_on_their_own_edges() {
+        let g = compile_ok(
+            "x -> y: {\n  style.stroke: green\n}\ny -> z: {\n  style.stroke: red\n}",
+        );
+        assert_eq!(g.edges.len(), 2);
+        assert_eq!(g.edges[0].style.stroke.as_ref().unwrap().value, "green");
+        assert_eq!(g.edges[1].style.stroke.as_ref().unwrap().value, "red");
     }
 }

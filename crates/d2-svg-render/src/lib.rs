@@ -151,7 +151,9 @@ fn shape_css_style(s: &d2_target::Shape) -> String {
     if s.stroke_dash != 0.0 {
         let (dash, gap) =
             d2_svg_path::get_stroke_dash_attributes(s.stroke_width as f64, s.stroke_dash);
-        write!(out, "stroke-dasharray:{},{};", dash, gap).unwrap();
+        // Match Go `Shape.CSSStyle`: `fmt.Sprintf("stroke-dasharray:%f,%f;")`.
+        // Go `%f` defaults to six decimal places.
+        write!(out, "stroke-dasharray:{:.6},{:.6};", dash, gap).unwrap();
     }
     out
 }
@@ -165,7 +167,7 @@ fn connection_css_style(c: &d2_target::Connection) -> String {
     if stroke_dash != 0.0 {
         let (dash, gap) =
             d2_svg_path::get_stroke_dash_attributes(c.stroke_width as f64, stroke_dash);
-        write!(out, "stroke-dasharray:{},{};", dash, gap).unwrap();
+        write!(out, "stroke-dasharray:{:.6},{:.6};", dash, gap).unwrap();
         if c.animated {
             let mut dash_offset: f64 = -10.0;
             if c.src_arrow != d2_target::Arrowhead::None
@@ -1148,7 +1150,10 @@ fn draw_shape(
             el.width = Some(width);
             el.height = Some(height);
             if let Some(ref icon) = target_shape.icon {
-                el.href = icon.clone();
+                // Match Go `d2svg.go`: `el.Href = html.EscapeString(icon)`.
+                // The raw URL may contain `&`, quotes, etc. that need to be
+                // escaped to survive the SVG attribute.
+                el.href = d2_svg_path::escape_text(icon);
             }
             el.fill = fill.clone();
             el.stroke = stroke.clone();
@@ -1365,10 +1370,17 @@ fn draw_shape(
             String::new()
         };
         if let Some(ref icon) = target_shape.icon {
+            // Escape XML special chars in the href (notably `&` → `&amp;`)
+            // so icon URLs like `.../u/27873294?s=200&v=4` round-trip.
             write!(
                 buf,
                 r#"<image href="{}" x="{}" y="{}" width="{}" height="{}"{} />"#,
-                icon, icon_tl.x, icon_tl.y, icon_size, icon_size, clip_attr
+                d2_svg_path::escape_text(icon),
+                icon_tl.x,
+                icon_tl.y,
+                icon_size,
+                icon_size,
+                clip_attr
             )
             .unwrap();
         }
