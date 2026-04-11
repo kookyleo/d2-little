@@ -957,7 +957,24 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
             if let Some(p) = src_label_hit {
                 points[0] = p;
             } else {
-                let ints = src_box.intersections(&starting_segment);
+                // Mirror Go `Edge.TraceToShape`'s 3D/multiple handling:
+                // when the segment start sits inside the visual offset
+                // zone (upper-right for 3d/multiple), temporarily shift
+                // the shape's top-left by (dx, -dy) so the intersection
+                // lands on the offset shape border.
+                let (dx, dy) = g.objects[src_id].get_modifier_element_adjustments();
+                let trace_box = if (dx != 0.0 || dy != 0.0)
+                    && points[0].x > src_box.top_left.x + dx
+                    && points[0].y < src_box.top_left.y + src_box.height - dy
+                {
+                    let mut b = src_box;
+                    b.top_left.x += dx;
+                    b.top_left.y -= dy;
+                    b
+                } else {
+                    src_box
+                };
+                let ints = trace_box.intersections(&starting_segment);
                 if let Some(p) = ints.first() {
                     points[0] = *p;
                 }
@@ -976,7 +993,19 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
             if let Some(p) = dst_label_hit {
                 points[last] = p;
             } else {
-                let ints = dst_box.intersections(&ending_segment);
+                let (dx, dy) = g.objects[dst_id].get_modifier_element_adjustments();
+                let trace_box = if (dx != 0.0 || dy != 0.0)
+                    && points[last].x > dst_box.top_left.x + dx
+                    && points[last].y < dst_box.top_left.y + dst_box.height - dy
+                {
+                    let mut b = dst_box;
+                    b.top_left.x += dx;
+                    b.top_left.y -= dy;
+                    b
+                } else {
+                    dst_box
+                };
+                let ints = trace_box.intersections(&ending_segment);
                 if let Some(p) = ints.first() {
                     points[last] = *p;
                 }
