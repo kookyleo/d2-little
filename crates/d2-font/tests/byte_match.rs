@@ -3,18 +3,11 @@
 //! Status:
 //! - The TTF subset produced by `utf8_cut_font` is byte-identical to Go's
 //!   `UTF8CutFont` output (verified with SourceSansPro-Bold, corpus "ab").
-//! - The WOFF header, table directory and every non-`name`/non-`post` table
-//!   body are byte-identical to Go's `Sfnt2Woff` output thanks to the
-//!   `Z_SYNC_FLUSH` + `Z_FINISH` framing we mirror from Go's
-//!   `zlib.Writer.{Write,Flush,Close}` pattern. The framing overhead bloats
-//!   small compressed tables enough that both sides pick the "store
-//!   uncompressed" branch and therefore emit identical bytes there.
-//! - The `name` and `post` tables still diverge: Rust's `miniz_oxide`
-//!   deflate backend produces a different symbol stream than Go's
-//!   `compress/flate`, so those two tables (and the downstream offsets /
-//!   total size fields that reference them) differ. Matching Go's deflate
-//!   output bit-for-bit would require porting ~2k lines of Go to Rust,
-//!   which is out of scope for this change.
+//! - The full WOFF produced by `sfnt2woff` is byte-identical to Go's
+//!   `Sfnt2Woff` output for the same subset, including the previously
+//!   divergent `name` and `post` tables. We achieve this by routing
+//!   compression through the d2-flate crate (a pure-Rust port of Go's
+//!   `compress/flate`), so the deflate symbol stream matches Go's exactly.
 
 use d2_font::{sfnt2woff, utf8_cut_font};
 
@@ -28,6 +21,10 @@ fn hex_to_bytes(s: &str) -> Vec<u8> {
 /// Embedded full-subset reference: bytes of Go's `UTF8CutFont(ttf, "ab")`
 /// for SourceSansPro-Bold. Captured from Go 1.22 with d2 v0.7.1.
 const GO_TTF_SUBSET_AB_FULL_HEX: &str = include_str!("fixtures/go_ttf_ab_bold.hex");
+
+/// Embedded full-WOFF reference: bytes of Go's
+/// `Sfnt2Woff(UTF8CutFont(ttf, "ab"))` for SourceSansPro-Bold.
+const GO_WOFF_AB_FULL_HEX: &str = include_str!("fixtures/go_woff_ab_bold.hex");
 
 #[test]
 fn ttf_subset_full_matches_go_for_ab_bold() {
@@ -52,6 +49,45 @@ fn ttf_subset_full_matches_go_for_ab_bold() {
             first,
             &subset_ttf[..64.min(subset_ttf.len())],
             &go_subset[..64.min(go_subset.len())],
+        );
+    }
+}
+
+/// Strictest test: the full WOFF byte stream from `sfnt2woff` must match
+/// Go's `Sfnt2Woff` output exactly. This depends on the d2-flate crate
+/// producing byte-identical deflate output, so any divergence here is a
+/// regression in either the WOFF builder or the deflate engine.
+#[test]
+fn woff_full_matches_go_for_ab_bold() {
+    let ttf = include_bytes!("../../d2-fonts/ttf/SourceSansPro-Bold.ttf");
+    let subset_ttf = utf8_cut_font(ttf, "ab").expect("utf8_cut_font returned None");
+    let woff = sfnt2woff(&subset_ttf).expect("sfnt2woff failed");
+    let go_woff = hex_to_bytes(GO_WOFF_AB_FULL_HEX.trim());
+
+    assert_eq!(
+        woff.len(),
+        go_woff.len(),
+        "WOFF length mismatch (rust={}, go={})",
+        woff.len(),
+        go_woff.len()
+    );
+    if woff != go_woff {
+        let first = woff
+            .iter()
+            .zip(go_woff.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(woff.len().min(go_woff.len()));
+        let lo = first.saturating_sub(16);
+        let hi = (first + 32).min(woff.len()).min(go_woff.len());
+        panic!(
+            "WOFF bytes differ at offset {}\nrust[{}..{}]={:02x?}\n  go[{}..{}]={:02x?}",
+            first,
+            lo,
+            hi,
+            &woff[lo..hi],
+            lo,
+            hi,
+            &go_woff[lo..hi],
         );
     }
 }

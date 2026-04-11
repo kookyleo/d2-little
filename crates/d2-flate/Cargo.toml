@@ -1,9 +1,11 @@
 [package]
-name = "d2-font"
+name = "d2-flate"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-d2-flate = { path = "../d2-flate" }
+
+[dev-dependencies]
+flate2 = "1"

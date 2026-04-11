@@ -82,10 +82,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2-font"
+name = "d2-flate"
 version = "0.7.1"
 dependencies = [
  "flate2",
+]
+
+[[package]]
+name = "d2-font"
+version = "0.7.1"
+dependencies = [
+ "d2-flate",
 ]
 
 [[package]]

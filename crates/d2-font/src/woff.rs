@@ -5,23 +5,9 @@
 //!
 //! Compression compatibility note:
 //! The Go implementation writes each table by calling
-//! `zlib.Writer.{Write, Flush, Close}` on a level-6 zlib encoder. This
-//! appends a `Z_SYNC_FLUSH` marker followed by a `Z_FINISH` empty block
-//! before the Adler-32 trailer. We mirror that framing here by driving
-//! `flate2::Compress` manually with `FlushCompress::Sync` then
-//! `FlushCompress::Finish`, which is important because the extra ~10 bytes
-//! of framing pushes many small font tables over the `compressed >= raw`
-//! threshold, causing both Rust and Go to fall back to storing the table
-//! uncompressed (byte-identical output).
-//!
-//! For tables where Rust's `miniz_oxide` backend compresses more
-//! effectively than Go's `compress/flate` (typically only `name` and
-//! `post` at our sizes), the symbol streams still differ at the byte level
-//! and the resulting WOFF will diverge within those tables. Matching Go
-//! bit-for-bit there would require porting ~2k lines of Go's deflate
-//! implementation.
-
-use flate2::{Compress, Compression, FlushCompress};
+//! `zlib.Writer.{Write, Flush, Close}` on a level-6 zlib encoder. We use
+//! the d2-flate crate (a pure-Rust port of Go's compress/flate) to produce
+//! byte-identical zlib output.
 
 // SFNT table-directory field offsets (within each 16-byte entry)
 const SFNT_OFFSET_TAG: usize = 0;
@@ -118,42 +104,12 @@ fn write_u32(buf: &mut [u8], offset: usize, val: u32) {
 }
 
 /// Compress `input` with zlib level 6 using the same output framing Go's
-/// `compress/zlib.Writer` produces when the caller invokes `Write` + `Flush`
-/// + `Close`: the compressed stream is followed by a `Z_SYNC_FLUSH` marker,
-///   then a `Z_FINISH` empty block, and the Adler-32 trailer.
-///
-/// Note: the deflate symbol stream inside the block still differs from Go's
-/// because the LZ77 / Huffman encoders are different implementations.
+/// `compress/zlib.Writer` produces when the caller invokes
+/// `Write` + `Flush` + `Close`. Implemented in d2-flate (a pure-Rust port
+/// of Go's compress/flate) so the deflate symbol stream is byte-identical
+/// to Go's, not just spec-compliant.
 fn zlib_compress_go_compat(input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut compressor = Compress::new(Compression::new(6), true);
-    // For font-sized inputs, `2 * input + 128` comfortably covers the worst
-    // case even with three flush phases. If the input were ever larger, we
-    // would grow the buffer in a loop; font tables in our pipeline never
-    // approach that size.
-    let mut out = vec![0u8; input.len().saturating_mul(2) + 128];
-
-    // Phase 1: feed input without flushing. For our buffer sizing one call
-    // always consumes all input.
-    compressor
-        .compress(input, &mut out, FlushCompress::None)
-        .map_err(|e| e.to_string())?;
-    debug_assert_eq!(compressor.total_in() as usize, input.len());
-
-    // Phase 2: Z_SYNC_FLUSH (matches Go's w.Flush()).
-    let out_pos = compressor.total_out() as usize;
-    compressor
-        .compress(&[], &mut out[out_pos..], FlushCompress::Sync)
-        .map_err(|e| e.to_string())?;
-
-    // Phase 3: Z_FINISH (matches Go's w.Close()).
-    let out_pos = compressor.total_out() as usize;
-    compressor
-        .compress(&[], &mut out[out_pos..], FlushCompress::Finish)
-        .map_err(|e| e.to_string())?;
-
-    let final_len = compressor.total_out() as usize;
-    out.truncate(final_len);
-    Ok(out)
+    Ok(d2_flate::zlib_compress_level6_go_compat(input))
 }
 
 /// Convert an SFNT font buffer (TTF or OTF) to WOFF format.
