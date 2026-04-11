@@ -342,6 +342,91 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             continue;
         }
 
+        // SQL table shapes have similar per-row sizing needs. Mirrors
+        // Go `GetDefaultSize` sql_table branch.
+        if shape == "sql_table" {
+            let table_font_size = if let Some(v) = g.objects[i].style.font_size.as_ref() {
+                v.value.parse().unwrap_or(d2_fonts::FONT_SIZE_L)
+            } else {
+                d2_fonts::FONT_SIZE_L
+            };
+            // Header label is measured in the regular (non-mono) font
+            // for sql_table — Go uses `GetTextDimensions` in that branch.
+            let header_font_size = table_font_size + d2_target::HEADER_FONT_ADD;
+            let header_font =
+                d2_fonts::Font::new(font_family, FontStyle::Bold, header_font_size);
+            let (header_w, header_h) = if !label.is_empty() {
+                ruler.measure(header_font, &label)
+            } else {
+                (0, 0)
+            };
+            g.objects[i].label_dimensions = d2_graph::Dimensions {
+                width: header_w,
+                height: header_h,
+            };
+
+            // Columns: for each column, measure name / type / constraint
+            // with the regular (non-mono) font at `table_font_size`.
+            let col_font = d2_fonts::Font::new(font_family, FontStyle::Regular, table_font_size);
+            let mut longest_name_w = 0i32;
+            let mut longest_type_w = 0i32;
+            let mut longest_constraint_w = 0i32;
+            let mut row_h = 0i32;
+
+            let mut table = g.objects[i].sql_table.clone().unwrap_or_default();
+            for col in &mut table.columns {
+                let (nw, nh) = ruler.measure(col_font, &col.name.label);
+                col.name.label_width = nw;
+                col.name.label_height = nh;
+                longest_name_w = longest_name_w.max(nw);
+                row_h = row_h.max(nh);
+                let (tw, th) = ruler.measure(col_font, &col.type_.label);
+                col.type_.label_width = tw;
+                col.type_.label_height = th;
+                longest_type_w = longest_type_w.max(tw);
+                row_h = row_h.max(th);
+                let cstr = col.constraint_abbr();
+                let (cw, _) = ruler.measure(col_font, &cstr);
+                longest_constraint_w = longest_constraint_w.max(cw);
+            }
+            g.objects[i].sql_table = Some(table);
+
+            let content_w = longest_name_w + d2_target::TYPE_PADDING + longest_type_w;
+            let content_w = content_w
+                + if longest_constraint_w > 0 {
+                    d2_target::CONSTRAINT_PADDING + longest_constraint_w
+                } else {
+                    0
+                };
+            let w = 2 * d2_target::NAME_PADDING + content_w;
+            let w = w.max(
+                2 * d2_target::HEADER_PADDING + header_w,
+            );
+
+            let row_count = g
+                .objects[i]
+                .sql_table
+                .as_ref()
+                .map(|t| t.columns.len())
+                .unwrap_or(0) as i32;
+            let row_height = row_h + d2_target::VERTICAL_PADDING;
+            let header_row_height = (header_h + 2 * d2_target::HEADER_PADDING).max(row_height);
+            let h = row_height * row_count + header_row_height;
+
+            g.objects[i].width = if desired_width > 0 {
+                desired_width as f64
+            } else {
+                w as f64
+            };
+            g.objects[i].height = if desired_height > 0 {
+                desired_height as f64
+            } else {
+                h as f64
+            };
+            g.objects[i].update_box();
+            continue;
+        }
+
         // Image shapes have a fixed default size in Go d2 (128×128 from
         // GetDefaultSize) regardless of label. Apply that *before* the
         // empty-label fast path so a labeled image still gets 128×128.

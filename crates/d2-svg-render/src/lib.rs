@@ -2152,10 +2152,11 @@ fn class_row(
 
 fn draw_table(
     buf: &mut String,
-    _diagram_hash: &str,
+    diagram_hash: &str,
     shape: &d2_target::Shape,
     inline_theme: Option<&d2_themes::Theme>,
 ) {
+    // Mirror Go `d2renderers/d2svg/table.go drawTable`.
     let (fill, stroke) = shape_theme(shape);
     let style = shape_css_style(shape);
 
@@ -2167,91 +2168,174 @@ fn draw_table(
     el.height = Some(shape.height as f64);
     el.fill = fill.clone();
     el.stroke = stroke.clone();
-    el.style = style.clone();
+    el.style = style;
     el.class_name = "shape".to_owned();
+    if shape.border_radius != 0 {
+        el.rx = Some(shape.border_radius as f64);
+        el.ry = Some(shape.border_radius as f64);
+    }
     buf.push_str(&el.render());
 
+    let box_x = shape.pos.x as f64;
+    let box_y = shape.pos.y as f64;
+    let box_w = shape.width as f64;
+    let box_h = shape.height as f64;
+    let col_count = shape.sql_table.columns.len();
+    let row_height = box_h / (1 + col_count) as f64;
+
     // Header
-    let header_font_size = shape.text.font_size + d2_target::HEADER_FONT_ADD;
-    let header_height = header_font_size + d2_target::HEADER_PADDING * 2;
+    buf.push_str(&table_header(
+        diagram_hash,
+        shape,
+        box_x,
+        box_y,
+        box_w,
+        row_height,
+        shape.text.label_width as f64,
+        shape.text.label_height as f64,
+        shape.text.font_size as f64,
+        inline_theme,
+    ));
 
-    let mut header = d2_themes::ThemableElement::new("rect", inline_theme);
-    header.x = Some(shape.pos.x as f64);
-    header.y = Some(shape.pos.y as f64);
-    header.width = Some(shape.width as f64);
-    header.height = Some(header_height as f64);
-    header.fill = stroke.clone();
-    header.stroke = stroke.clone();
-    header.style = style.clone();
-    buf.push_str(&header.render());
+    let longest_name_w = shape
+        .sql_table
+        .columns
+        .iter()
+        .map(|c| c.name.label_width)
+        .max()
+        .unwrap_or(0);
 
-    // Header text
-    let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-    text_el.x = Some(shape.pos.x as f64 + shape.width as f64 / 2.0);
-    text_el.y = Some(shape.pos.y as f64 + (header_height as f64 + header_font_size as f64) / 2.0);
-    text_el.fill = fill.clone();
-    text_el.class_name = "text-bold".to_owned();
-    text_el.style = format!("text-anchor:middle;font-size:{}px", header_font_size);
-    text_el.content = d2_svg_path::escape_text(&shape.text.label);
-    buf.push_str(&text_el.render());
+    let mut row_y = box_y + row_height;
+    for (idx, col) in shape.sql_table.columns.iter().enumerate() {
+        buf.push_str(&table_row(
+            shape,
+            box_x,
+            row_y,
+            box_w,
+            row_height,
+            &col.name.label,
+            &col.type_.label,
+            &col.constraint_abbr(),
+            shape.text.font_size as f64,
+            longest_name_w as f64,
+            inline_theme,
+        ));
+        row_y += row_height;
 
-    // Rows
-    let row_height = shape.text.font_size + d2_target::VERTICAL_PADDING;
-    let mut current_y = shape.pos.y + header_height;
-
-    for (i, col) in shape.sql_table.columns.iter().enumerate() {
-        // Alternating row backgrounds
-        if i % 2 == 0 {
-            let mut row_bg = d2_themes::ThemableElement::new("rect", inline_theme);
-            row_bg.x = Some(shape.pos.x as f64);
-            row_bg.y = Some(current_y as f64);
-            row_bg.width = Some(shape.width as f64);
-            row_bg.height = Some(row_height as f64);
-            row_bg.fill = fill.clone();
-            buf.push_str(&row_bg.render());
+        // Row separator line
+        let mut line_el = d2_themes::ThemableElement::new("line", inline_theme);
+        let last = idx == col_count - 1;
+        if last && shape.border_radius != 0 {
+            line_el.x1 = Some(box_x + shape.border_radius as f64);
+            line_el.y1 = Some(row_y);
+            line_el.x2 = Some(box_x + box_w - shape.border_radius as f64);
+            line_el.y2 = Some(row_y);
+        } else {
+            line_el.x1 = Some(box_x);
+            line_el.y1 = Some(row_y);
+            line_el.x2 = Some(box_x + box_w);
+            line_el.y2 = Some(row_y);
         }
-
-        // Column name
-        let mut name_el = d2_themes::ThemableElement::new("text", inline_theme);
-        name_el.x = Some(shape.pos.x as f64 + d2_target::NAME_PADDING as f64);
-        name_el.y =
-            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
-        name_el.fill = shape.get_font_color().to_owned();
-        name_el.class_name = "text".to_owned();
-        name_el.style = format!("font-size:{}px", shape.text.font_size);
-        name_el.content = d2_svg_path::escape_text(&col.name.label);
-        buf.push_str(&name_el.render());
-
-        // Column type
-        let mut type_el = d2_themes::ThemableElement::new("text", inline_theme);
-        type_el.x = Some(shape.pos.x as f64 + shape.width as f64 / 2.0);
-        type_el.y =
-            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
-        type_el.fill = shape.get_font_color().to_owned();
-        type_el.class_name = "text".to_owned();
-        type_el.style = format!("font-size:{}px", shape.text.font_size);
-        type_el.content = d2_svg_path::escape_text(&col.type_.label);
-        buf.push_str(&type_el.render());
-
-        // Constraint
-        let constraint = col.constraint_abbr();
-        if !constraint.is_empty() {
-            let mut constr_el = d2_themes::ThemableElement::new("text", inline_theme);
-            constr_el.x = Some(
-                shape.pos.x as f64 + shape.width as f64 - d2_target::CONSTRAINT_PADDING as f64,
-            );
-            constr_el.y = Some(
-                current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0,
-            );
-            constr_el.fill = shape.get_font_color().to_owned();
-            constr_el.class_name = "text".to_owned();
-            constr_el.style = format!("text-anchor:end;font-size:{}px", shape.text.font_size);
-            constr_el.content = d2_svg_path::escape_text(&constraint);
-            buf.push_str(&constr_el.render());
-        }
-
-        current_y += row_height;
+        line_el.stroke = shape.fill.clone();
+        line_el.style = "stroke-width:2".to_owned();
+        buf.push_str(&line_el.render());
     }
+}
+
+/// Render the table header rect + title text (port of Go `tableHeader`).
+#[allow(clippy::too_many_arguments)]
+fn table_header(
+    diagram_hash: &str,
+    shape: &d2_target::Shape,
+    box_x: f64,
+    box_y: f64,
+    box_w: f64,
+    box_h: f64,
+    text_width: f64,
+    text_height: f64,
+    font_size: f64,
+    inline_theme: Option<&d2_themes::Theme>,
+) -> String {
+    let mut out = String::new();
+
+    let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
+    rect_el.x = Some(box_x);
+    rect_el.y = Some(box_y);
+    rect_el.width = Some(box_w);
+    rect_el.height = Some(box_h);
+    rect_el.fill = shape.fill.clone();
+    rect_el.fill_pattern = shape.fill_pattern.clone();
+    rect_el.class_name = "class_header".to_owned();
+    if shape.border_radius != 0 {
+        rect_el.clip_path = format!("{}-{}", diagram_hash, shape.id);
+    }
+    out.push_str(&rect_el.render());
+
+    if !shape.text.label.is_empty() {
+        // InsideMiddleLeft: `tl = (box.x + HEADER_PADDING, box.y + (box.h - text_h)/2)`.
+        let tl_x = box_x + d2_target::HEADER_PADDING as f64;
+        let tl_y = box_y + (box_h - text_height) / 2.0;
+
+        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+        text_el.x = Some(tl_x);
+        text_el.y = Some(tl_y + text_height * 3.0 / 4.0);
+        text_el.fill = shape.get_font_color().to_owned();
+        text_el.class_name = "text".to_owned();
+        text_el.style = format!(
+            "text-anchor:start;font-size:{}px",
+            (font_size as i32) + 4
+        );
+        text_el.content = d2_svg_path::escape_text(&shape.text.label);
+        out.push_str(&text_el.render());
+    }
+
+    let _ = text_width;
+    out
+}
+
+/// Render one row of a table shape (name + type + constraint).
+#[allow(clippy::too_many_arguments)]
+fn table_row(
+    shape: &d2_target::Shape,
+    box_x: f64,
+    box_y: f64,
+    box_w: f64,
+    box_h: f64,
+    name: &str,
+    type_text: &str,
+    constraint: &str,
+    font_size: f64,
+    longest_name_w: f64,
+    inline_theme: Option<&d2_themes::Theme>,
+) -> String {
+    let mut out = String::new();
+    // InsideMiddleLeft for name, at `NamePadding` from the left.
+    let name_tl_x = box_x + d2_target::NAME_PADDING as f64;
+    let name_tl_y = box_y + (box_h - font_size) / 2.0;
+
+    let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+    text_el.x = Some(name_tl_x);
+    text_el.y = Some(name_tl_y + font_size * 3.0 / 4.0);
+    text_el.fill = shape.primary_accent_color.clone();
+    text_el.class_name = "text".to_owned();
+    text_el.style = format!("text-anchor:start;font-size:{}px", font_size);
+    text_el.content = d2_svg_path::escape_text(name);
+    out.push_str(&text_el.render());
+
+    // Type: start at `name_x + longest_name_w + TypePadding`.
+    text_el.x = Some(name_tl_x + longest_name_w + d2_target::TYPE_PADDING as f64);
+    text_el.fill = shape.neutral_accent_color.clone();
+    text_el.content = d2_svg_path::escape_text(type_text);
+    out.push_str(&text_el.render());
+
+    // Constraint: right-aligned at `box.right - NamePadding`.
+    text_el.x = Some(box_x + box_w - d2_target::NAME_PADDING as f64);
+    text_el.fill = shape.secondary_accent_color.clone();
+    text_el.style = format!("text-anchor:end;font-size:{}px", font_size);
+    text_el.content = constraint.to_owned();
+    out.push_str(&text_el.render());
+
+    out
 }
 
 // ---------------------------------------------------------------------------

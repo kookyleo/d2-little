@@ -282,12 +282,50 @@ impl Compiler {
         // Mirrors Go `compileClass` / `compileSQLTable`.
         if g.objects[obj].shape.value == d2_target::SHAPE_CLASS {
             self.compile_class_shape(g, obj);
+        } else if g.objects[obj].shape.value == d2_target::SHAPE_SQL_TABLE {
+            self.compile_sql_table_shape(g, obj);
         }
 
         // Process edges
         for e in &m.edges {
             self.compile_edge(g, obj, e);
         }
+    }
+
+    /// Convert a `shape: sql_table` object's child declarations into
+    /// `SQLTable { columns }` and remove them from the graph (Go
+    /// `compileSQLTable`).
+    fn compile_sql_table_shape(&mut self, g: &mut Graph, obj: ObjId) {
+        let children: Vec<ObjId> = g.objects[obj].children_array.clone();
+        let mut table = d2_target::SQLTable::default();
+        for &child in &children {
+            let id_val = g.objects[child].id.clone();
+            let label_val = g.objects[child].label.value.clone();
+            // If label matches id, type is empty (the user didn't specify
+            // a type).
+            let type_ = if label_val == id_val { String::new() } else { label_val };
+            let constraint = g.objects[child].constraint.clone();
+            table.columns.push(d2_target::SQLColumn {
+                name: d2_target::Text {
+                    label: id_val,
+                    ..Default::default()
+                },
+                type_: d2_target::Text {
+                    label: type_,
+                    ..Default::default()
+                },
+                constraint,
+                reference: String::new(),
+            });
+        }
+        g.objects[obj].sql_table = Some(table);
+
+        for &child in &children {
+            g.objects[child].parent = None;
+            g.objects[child].shape.value = String::from("__d2_class_field_removed__");
+        }
+        g.objects[obj].children_array.clear();
+        g.objects[obj].children.clear();
     }
 
     /// Convert a `shape: class` object's child declarations into
