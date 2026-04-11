@@ -64,6 +64,7 @@ version = "0.7.1"
 dependencies = [
  "d2-geo",
  "d2-graph",
+ "d2-label",
  "d2-target",
  "dagre",
 ]

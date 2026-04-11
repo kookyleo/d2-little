@@ -35,11 +35,14 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
         g.is_folder_only = true;
     }
 
-    // Mirror Go d2compiler.Compile: after compileIR, reorder objects (and
-    // edges, when we port that too) by their first AST reference position.
-    // Without this, fields and edges that introduce the same object in a
-    // different order than the IR field tree drift apart from Go's output.
+    // Mirror Go d2compiler.Compile: after compileIR, stable-sort objects
+    // AND edges by their first AST reference so fields/edges that appear
+    // earlier in the source always render first. Without this, an edge
+    // declared inside a container (`finally: { a -> tree }`) gets added
+    // to `g.edges` before a top-level edge whose source line is higher
+    // up, which drifts from Go's output order.
     g.sort_objects_by_ast();
+    g.sort_edges_by_ast();
 
     if c.errors.is_empty() {
         Ok(g)
@@ -577,6 +580,17 @@ impl Compiler {
                 return;
             }
         };
+
+        // Record the earliest AST reference for this edge so the graph
+        // can later be stable-sorted by source position (matches Go
+        // `d2graph.Graph.SortEdgesByAST`).
+        if let Some(first_ref) = e.references.first() {
+            if let Some(ref edge_ast) = first_ref.context.edge_ast {
+                g.edges[edge_idx].first_ast_range = Some(edge_ast.range.clone());
+            } else {
+                g.edges[edge_idx].first_ast_range = Some(first_ref.context.key.range.clone());
+            }
+        }
 
         // Set label from primary
         if let Some(ref primary) = e.primary {

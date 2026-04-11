@@ -965,6 +965,12 @@ pub struct Edge {
 
     pub z_index: i32,
     pub classes: Vec<String>,
+
+    /// Earliest AST reference for this edge. Mirrors Go
+    /// `d2graph.Edge.References[0].Edge.Range`, which
+    /// `d2graph.Graph.SortEdgesByAST` uses to order edges in source-file
+    /// order before rendering. `None` if no reference is set.
+    pub first_ast_range: Option<ast::Range>,
 }
 
 impl Default for Edge {
@@ -992,6 +998,7 @@ impl Default for Edge {
             language: String::new(),
             z_index: 0,
             classes: Vec::new(),
+            first_ast_range: None,
         }
     }
 }
@@ -1189,6 +1196,31 @@ impl Graph {
         }
     }
 
+    /// Stable-sort edges by their first AST reference. Mirrors Go
+    /// `d2graph.Graph.SortEdgesByAST` — edges without a range keep their
+    /// relative order.
+    pub fn sort_edges_by_ast(&mut self) {
+        let n = self.edges.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &b| {
+            match (
+                self.edges[a].first_ast_range.as_ref(),
+                self.edges[b].first_ast_range.as_ref(),
+            ) {
+                (Some(ra), Some(rb)) => range_cmp(ra, rb),
+                _ => a.cmp(&b),
+            }
+        });
+        if order.iter().enumerate().all(|(i, &j)| i == j) {
+            return;
+        }
+        let mut new_edges: Vec<Edge> = Vec::with_capacity(n);
+        for &old in &order {
+            new_edges.push(std::mem::take(&mut self.edges[old]));
+        }
+        self.edges = new_edges;
+    }
+
     /// Get the root object.
     pub fn root_obj(&self) -> &Object {
         &self.objects[self.root]
@@ -1286,8 +1318,6 @@ impl Graph {
         let src = self.ensure_child_of(parent, src_path);
         let dst = self.ensure_child_of(parent, dst_path);
 
-        let src_id = &self.objects[src].abs_id;
-        let dst_id = &self.objects[dst].abs_id;
         let arrow_str = if src_arrow && dst_arrow {
             "<->"
         } else if src_arrow {
@@ -1308,7 +1338,44 @@ impl Graph {
                 e.src == src && e.dst == dst && e.src_arrow == src_arrow && e.dst_arrow == dst_arrow
             })
             .count();
-        let abs_id = format!("({} {} {})[{}]", src_id, arrow_str, dst_id, index);
+
+        // Match Go `Edge.AbsID`: strip any common ancestor path shared by
+        // src and dst (leaving at least the last segment on each side) and
+        // emit it as a `common.` prefix outside the `(src -> dst)` block.
+        // So `finally.a -> finally.tree` becomes `finally.(a -> tree)[0]`
+        // instead of `(finally.a -> finally.tree)[0]`.
+        let src_ida: Vec<String> = self.objects[src]
+            .abs_id
+            .split('.')
+            .map(str::to_owned)
+            .collect();
+        let dst_ida: Vec<String> = self.objects[dst]
+            .abs_id
+            .split('.')
+            .map(str::to_owned)
+            .collect();
+        let mut common: Vec<String> = Vec::new();
+        let mut s_idx = 0usize;
+        let mut d_idx = 0usize;
+        while src_ida.len() - s_idx > 1 && dst_ida.len() - d_idx > 1 {
+            if !src_ida[s_idx].eq_ignore_ascii_case(&dst_ida[d_idx]) {
+                break;
+            }
+            common.push(src_ida[s_idx].clone());
+            s_idx += 1;
+            d_idx += 1;
+        }
+        let common_key = if common.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", common.join("."))
+        };
+        let src_tail = src_ida[s_idx..].join(".");
+        let dst_tail = dst_ida[d_idx..].join(".");
+        let abs_id = format!(
+            "{}({} {} {})[{}]",
+            common_key, src_tail, arrow_str, dst_tail, index
+        );
 
         let edge = Edge {
             abs_id,

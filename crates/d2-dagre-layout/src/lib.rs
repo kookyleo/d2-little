@@ -935,21 +935,41 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         let dst_box = g.objects[dst_id].box_;
         let mut points = edge_route;
 
-        // Second-pass TraceToShape — reverse segments so IntersectionPoint
-        // rounds the same way Go's geo package does. This keeps simple
-        // rectangular shapes byte-identical; outside-label/icon and
-        // non-rectangular shape handling is still TODO.
+        // Second-pass TraceToShape. Mirror Go `d2graph.Edge.TraceToShape`
+        // closely enough that outside-label shapes (notably `shape: image`
+        // with a label) push the edge endpoint past the label box instead
+        // of snapping to the shape's own rectangle. Non-rectangular shape
+        // border tracing is still TODO — for rectangles the box
+        // intersection is what Go's `TraceToShapeBorder` returns.
         if src_id != dst_id && points.len() >= 2 {
             let last = points.len() - 1;
+
+            // Source side.
             let starting_segment = Segment::new(points[1], points[0]);
-            let ints = src_box.intersections(&starting_segment);
-            if let Some(p) = ints.first() {
-                points[0] = *p;
+            let src_label_hit = outside_label_box(&g.objects[src_id]).and_then(|b| {
+                b.intersections(&starting_segment).first().copied()
+            });
+            if let Some(p) = src_label_hit {
+                points[0] = p;
+            } else {
+                let ints = src_box.intersections(&starting_segment);
+                if let Some(p) = ints.first() {
+                    points[0] = *p;
+                }
             }
+
+            // Destination side.
             let ending_segment = Segment::new(points[last - 1], points[last]);
-            let ints = dst_box.intersections(&ending_segment);
-            if let Some(p) = ints.first() {
-                points[last] = *p;
+            let dst_label_hit = outside_label_box(&g.objects[dst_id]).and_then(|b| {
+                b.intersections(&ending_segment).first().copied()
+            });
+            if let Some(p) = dst_label_hit {
+                points[last] = p;
+            } else {
+                let ints = dst_box.intersections(&ending_segment);
+                if let Some(p) = ints.first() {
+                    points[last] = *p;
+                }
             }
         }
 
@@ -1072,22 +1092,227 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
     let left_delta = inner_left - current_left;
     let right_delta = current_right - inner_right;
 
-    // Only shrink (positive delta = excess space we can trim).
+    // Only shrink (positive delta = excess space we can trim). For each
+    // side, first reduce `delta` by any edge that would otherwise get
+    // squeezed past `DEFAULT_PADDING` from the collapsing edge, then move
+    // any edge points that sit exactly on the old boundary so they stay
+    // glued to the shrunk container. Mirrors Go `fitPadding` / `adjustEdges`
+    // / `adjustDeltaForEdges`.
     if top_delta > 0.0 {
-        g.objects[obj_id].top_left.y += top_delta;
-        g.objects[obj_id].height -= top_delta;
+        let new_delta = adjust_delta_for_edges(g, obj_id, current_top, top_delta, false);
+        if new_delta > 0.0 {
+            adjust_edges(g, obj_id, current_top, new_delta, false);
+            g.objects[obj_id].top_left.y += new_delta;
+            g.objects[obj_id].height -= new_delta;
+        }
     }
     if bottom_delta > 0.0 {
-        g.objects[obj_id].height -= bottom_delta;
+        let new_delta = adjust_delta_for_edges(g, obj_id, current_bottom, -bottom_delta, false);
+        if new_delta > 0.0 {
+            adjust_edges(g, obj_id, current_bottom, -new_delta, false);
+            g.objects[obj_id].height -= new_delta;
+        }
     }
     if left_delta > 0.0 {
-        g.objects[obj_id].top_left.x += left_delta;
-        g.objects[obj_id].width -= left_delta;
+        let new_delta = adjust_delta_for_edges(g, obj_id, current_left, left_delta, true);
+        if new_delta > 0.0 {
+            adjust_edges(g, obj_id, current_left, new_delta, true);
+            g.objects[obj_id].top_left.x += new_delta;
+            g.objects[obj_id].width -= new_delta;
+        }
     }
     if right_delta > 0.0 {
-        g.objects[obj_id].width -= right_delta;
+        let new_delta = adjust_delta_for_edges(g, obj_id, current_right, -right_delta, true);
+        if new_delta > 0.0 {
+            adjust_edges(g, obj_id, current_right, -new_delta, true);
+            g.objects[obj_id].width -= new_delta;
+        }
     }
     g.objects[obj_id].update_box();
+}
+
+/// Match Go `adjustEdges`: move route endpoints that currently sit on the
+/// collapsing side of `obj` (`obj_position` on the given axis) by `delta`.
+/// Also moves points that lie strictly between `obj_position` and the new
+/// edge if they happen to be on the perpendicular sides of the box.
+fn adjust_edges(
+    g: &mut Graph,
+    obj_id: ObjId,
+    obj_position: f64,
+    delta: f64,
+    is_horizontal: bool,
+) {
+    // Capture the object's rectangle before mutating so the side check
+    // uses a consistent snapshot.
+    let tl_x = g.objects[obj_id].top_left.x;
+    let tl_y = g.objects[obj_id].top_left.y;
+    let w = g.objects[obj_id].width;
+    let h = g.objects[obj_id].height;
+    for ei in 0..g.edges.len() {
+        if g.edges[ei].src == obj_id {
+            if let Some(p) = g.edges[ei].route.first_mut() {
+                adjust_one_point(p, obj_position, delta, is_horizontal, tl_x, tl_y, w, h);
+            }
+        }
+        if g.edges[ei].dst == obj_id {
+            let last = g.edges[ei].route.len().saturating_sub(1);
+            if !g.edges[ei].route.is_empty() {
+                let pt = &mut g.edges[ei].route[last];
+                adjust_one_point(pt, obj_position, delta, is_horizontal, tl_x, tl_y, w, h);
+            }
+        }
+    }
+}
+
+fn adjust_one_point(
+    p: &mut Point,
+    obj_position: f64,
+    delta: f64,
+    is_horizontal: bool,
+    tl_x: f64,
+    tl_y: f64,
+    w: f64,
+    h: f64,
+) {
+    let position = if is_horizontal { p.x } else { p.y };
+    if precision_eq(position, obj_position) {
+        if is_horizontal {
+            p.x += delta;
+        } else {
+            p.y += delta;
+        }
+    } else {
+        let is_on_side = if is_horizontal {
+            precision_eq(p.y, tl_y) || precision_eq(p.y, tl_y + h)
+        } else {
+            precision_eq(p.x, tl_x) || precision_eq(p.x, tl_x + w)
+        };
+        if is_on_side {
+            let in_range = if delta > 0.0 {
+                obj_position < position && position < obj_position + delta
+            } else {
+                obj_position + delta < position && position < obj_position
+            };
+            if in_range {
+                if is_horizontal {
+                    p.x = obj_position + delta;
+                } else {
+                    p.y = obj_position + delta;
+                }
+            }
+        }
+    }
+}
+
+/// Match Go `adjustDeltaForEdges`: reduce `delta` so that shrinking `obj`
+/// never collapses past an edge endpoint that is currently sitting within
+/// `DEFAULT_PADDING` of the collapsing side.
+fn adjust_delta_for_edges(
+    g: &Graph,
+    obj_id: ObjId,
+    obj_position: f64,
+    delta: f64,
+    is_horizontal: bool,
+) -> f64 {
+    let tl_x = g.objects[obj_id].top_left.x;
+    let tl_y = g.objects[obj_id].top_left.y;
+    let w = g.objects[obj_id].width;
+    let h = g.objects[obj_id].height;
+
+    let is_on_collapsing_side = |p: &Point| -> bool {
+        let position = if is_horizontal { p.x } else { p.y };
+        if precision_eq(position, obj_position) {
+            return false;
+        }
+        let is_on_side = if is_horizontal {
+            precision_eq(p.y, tl_y) || precision_eq(p.y, tl_y + h)
+        } else {
+            precision_eq(p.x, tl_x) || precision_eq(p.x, tl_x + w)
+        };
+        if !is_on_side {
+            return false;
+        }
+        let buffer = MIN_SPACING;
+        if delta > 0.0 {
+            obj_position <= position && position <= obj_position + delta + buffer
+        } else {
+            obj_position + delta - buffer <= position && position <= obj_position
+        }
+    };
+
+    let mut has_edge_on_collapsing_side = false;
+    let mut outermost = obj_position + delta;
+    for edge in &g.edges {
+        if edge.src == obj_id {
+            if let Some(p) = edge.route.first() {
+                if is_on_collapsing_side(p) {
+                    has_edge_on_collapsing_side = true;
+                    let position = if is_horizontal { p.x } else { p.y };
+                    if delta < 0.0 {
+                        outermost = outermost.max(position);
+                    } else {
+                        outermost = outermost.min(position);
+                    }
+                }
+            }
+        }
+        if edge.dst == obj_id {
+            if let Some(p) = edge.route.last() {
+                if is_on_collapsing_side(p) {
+                    has_edge_on_collapsing_side = true;
+                    let position = if is_horizontal { p.x } else { p.y };
+                    if delta < 0.0 {
+                        outermost = outermost.max(position);
+                    } else {
+                        outermost = outermost.min(position);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut new_magnitude = delta.abs();
+    if has_edge_on_collapsing_side {
+        new_magnitude = if delta < 0.0 {
+            (obj_position - (outermost + DEFAULT_PADDING)).max(0.0)
+        } else {
+            ((outermost - DEFAULT_PADDING) - obj_position).max(0.0)
+        };
+    }
+    new_magnitude
+}
+
+/// Match Go `geo.PrecisionCompare(a, b, 1) == 0` — i.e. two points are
+/// considered on the same axis if they are within a pixel of each other.
+fn precision_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1.0
+}
+
+/// Compute the outside-label `Box2D` for an object — i.e. the rectangle
+/// occupied by the shape's label when it sits outside the shape border.
+/// Returns `None` when the object has no outside label (no label, no
+/// position, or the position is not `OUTSIDE_*`). Mirrors the label box
+/// construction at the top of Go `Edge.TraceToShape`.
+fn outside_label_box(obj: &d2_graph::Object) -> Option<d2_geo::Box2D> {
+    if !obj.has_label() {
+        return None;
+    }
+    let pos_str = obj.label_position.as_deref()?;
+    let pos = d2_label::Position::from_string(pos_str);
+    if !pos.is_outside() {
+        return None;
+    }
+    let label_width = obj.label_dimensions.width as f64;
+    let label_height = obj.label_dimensions.height as f64;
+    let shape_box = d2_geo::Box2D::new(obj.top_left, obj.width, obj.height);
+    let label_tl = pos.get_point_on_box(&shape_box, d2_label::PADDING, label_width, label_height);
+    // Go adds horizontal padding so the label box extends `PADDING` past
+    // the label text on each side, preventing connections from clipping
+    // the label's left/right edge.
+    let mut box_ = d2_geo::Box2D::new(label_tl, label_width, label_height);
+    box_.top_left.x -= d2_label::PADDING;
+    box_.width += 2.0 * d2_label::PADDING;
+    Some(box_)
 }
 
 /// Outside-label margin for a child object — mirrors the margin half of
