@@ -604,6 +604,28 @@ impl Compiler {
     }
 
     fn compile_edge_map(&mut self, g: &mut Graph, edge_idx: usize, m: &ir::Map) {
+        // Apply any referenced classes first — mirrors the class
+        // expansion at the top of `compile_map`.
+        if !self.class_defs.is_empty() {
+            if let Some(class_field) = m.get_field("class") {
+                let mut names: Vec<String> = Vec::new();
+                if let Some(ref primary) = class_field.primary {
+                    names.push(primary.scalar_string());
+                } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
+                    for v in &arr.values {
+                        if let ir::Value::Scalar(s) = v {
+                            names.push(s.scalar_string());
+                        }
+                    }
+                }
+                for name in names {
+                    if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
+                        self.compile_edge_map(g, edge_idx, &class_map);
+                    }
+                }
+            }
+        }
+
         for f in &m.fields {
             let keyword = f.name.to_lowercase();
             if !(ast::RESERVED_KEYWORDS.contains(keyword.as_str()) && f.name_is_unquoted) {
@@ -653,6 +675,19 @@ impl Compiler {
             "link" => {
                 if let Some(val) = primary_str {
                     g.edges[edge_idx].link = Some(ScalarValue { value: val });
+                }
+            }
+            "class" => {
+                // Capture class names on the edge so the renderer can
+                // emit them as SVG CSS classes (Go `d2target.Connection.Classes`).
+                if let Some(val) = primary_str {
+                    g.edges[edge_idx].classes.push(val);
+                } else if let Some(ir::Composite::Array(ref arr)) = f.composite {
+                    for v in &arr.values {
+                        if let ir::Value::Scalar(s) = v {
+                            g.edges[edge_idx].classes.push(s.scalar_string());
+                        }
+                    }
                 }
             }
             _ => {}
