@@ -630,6 +630,19 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         g.objects[i].width = w;
         g.objects[i].height = h;
+
+        // Cloud shapes store the content aspect ratio so the renderer
+        // can size the inner content box (Go `SizeToContent` tail).
+        if shape == "cloud" {
+            if let Some(inner) =
+                d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h)
+            {
+                if inner.height > 0.0 {
+                    g.objects[i].content_aspect_ratio = Some(inner.width / inner.height);
+                }
+            }
+        }
+
         g.objects[i].update_box();
     }
 
