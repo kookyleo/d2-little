@@ -561,9 +561,18 @@ impl Object {
         if let Some(v) = self.style.bold.as_ref() {
             is_bold = v.value == "true";
         }
+        // class shapes are never bold regardless of the default.
+        if self.shape.value == d2_target::SHAPE_CLASS {
+            is_bold = false;
+        }
         // Default font size: leaves get FONT_SIZE_M (16); containers (and
         // grid diagrams, not yet modeled) scale by container level.
-        let font_size: i32 = if let Some(v) = self.style.font_size.as_ref() {
+        // class / sql_table shapes start at FONT_SIZE_L (20) AND add
+        // HEADER_FONT_ADD (4), so `obj.text().font_size` ends up at 24;
+        // the exporter then subtracts HEADER_FONT_ADD so the stored
+        // `text.font_size` lands at 20, and the class/table renderer
+        // adds HEADER_FONT_ADD back for the header text.
+        let mut font_size: i32 = if let Some(v) = self.style.font_size.as_ref() {
             v.value.parse().unwrap_or(16)
         } else if is_container && self.shape.value != "text" {
             match self.level(graph) {
@@ -572,9 +581,18 @@ impl Object {
                 3 => 20, // FONT_SIZE_L
                 _ => 16, // FONT_SIZE_M
             }
+        } else if self.shape.value == d2_target::SHAPE_CLASS
+            || self.shape.value == d2_target::SHAPE_SQL_TABLE
+        {
+            20 // FONT_SIZE_L
         } else {
             16
         };
+        if self.shape.value == d2_target::SHAPE_CLASS
+            || self.shape.value == d2_target::SHAPE_SQL_TABLE
+        {
+            font_size += d2_target::HEADER_FONT_ADD;
+        }
         MText {
             text: self.label.value.clone(),
             font_size,

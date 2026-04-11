@@ -47,13 +47,15 @@ pub fn export(
             .to_string(),
     );
 
-    // Convert objects to shapes (skip root)
+    // Convert objects to shapes (skip root and class field/method
+    // placeholders that have been absorbed into their parent class).
     let exportable_objects: Vec<&d2_graph::Object> = g
         .objects
         .iter()
         .enumerate()
         .filter(|(i, _)| *i != g.root)
         .map(|(_, obj)| obj)
+        .filter(|obj| obj.shape.value != "__d2_class_field_removed__")
         .collect();
 
     diagram.shapes = exportable_objects

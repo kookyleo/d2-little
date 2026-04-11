@@ -1940,10 +1940,11 @@ fn render_3d_hexagon(
 
 fn draw_class(
     buf: &mut String,
-    _diagram_hash: &str,
+    diagram_hash: &str,
     shape: &d2_target::Shape,
     inline_theme: Option<&d2_themes::Theme>,
 ) {
+    // Mirror Go `d2renderers/d2svg/class.go drawClass` byte-for-byte.
     let (fill, stroke) = shape_theme(shape);
     let style = shape_css_style(shape);
 
@@ -1953,95 +1954,196 @@ fn draw_class(
     el.y = Some(shape.pos.y as f64);
     el.width = Some(shape.width as f64);
     el.height = Some(shape.height as f64);
-    el.fill = fill.clone();
-    el.stroke = stroke.clone();
-    el.style = style.clone();
-    el.class_name = "shape".to_owned();
+    el.fill = fill;
+    el.stroke = stroke;
+    el.style = style;
+    if shape.border_radius != 0 {
+        el.rx = Some(shape.border_radius as f64);
+        el.ry = Some(shape.border_radius as f64);
+    }
     buf.push_str(&el.render());
 
-    // Header rect
-    let header_height = if !shape.text.label.is_empty() {
-        shape.text.font_size + d2_target::HEADER_PADDING * 2
-    } else {
-        0
-    };
+    // Box = shape rect
+    let box_x = shape.pos.x as f64;
+    let box_y = shape.pos.y as f64;
+    let box_w = shape.width as f64;
+    let box_h = shape.height as f64;
 
-    if header_height > 0 {
-        let mut header = d2_themes::ThemableElement::new("rect", inline_theme);
-        header.x = Some(shape.pos.x as f64);
-        header.y = Some(shape.pos.y as f64);
-        header.width = Some(shape.width as f64);
-        header.height = Some(header_height as f64);
-        header.fill = stroke.clone(); // Header uses stroke color as fill
-        header.stroke = stroke.clone();
-        header.style = style.clone();
-        buf.push_str(&header.render());
+    let n_rows = 2 + shape.class.fields.len() + shape.class.methods.len();
+    let row_height = box_h / n_rows as f64;
+    let pad = d2_label::PADDING;
+    let header_height = (2.0 * row_height).max(shape.text.label_height as f64 + 2.0 * pad);
 
-        // Header text
-        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-        text_el.x = Some(shape.pos.x as f64 + shape.width as f64 / 2.0);
-        text_el.y =
-            Some(shape.pos.y as f64 + (header_height as f64 + shape.text.font_size as f64) / 2.0);
-        text_el.fill = fill.clone();
-        text_el.class_name = "text-bold".to_owned();
-        text_el.style = format!("text-anchor:middle;font-size:{}px", shape.text.font_size);
-        text_el.content = d2_svg_path::escape_text(&shape.text.label);
-        buf.push_str(&text_el.render());
-    }
-
-    // Separator line and fields/methods rendering
-    let mut current_y = shape.pos.y + header_height;
-    let row_height = shape.text.font_size + d2_target::VERTICAL_PADDING;
+    // Header
+    buf.push_str(&class_header(
+        diagram_hash,
+        shape,
+        box_x,
+        box_y,
+        box_w,
+        header_height,
+        shape.text.label_width as f64,
+        shape.text.label_height as f64,
+        shape.text.font_size as f64,
+        inline_theme,
+    ));
 
     // Fields
-    for field in &shape.class.fields {
-        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-        text_el.x = Some(shape.pos.x as f64 + d2_target::PREFIX_PADDING as f64);
-        text_el.y =
-            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
-        text_el.fill = shape.get_font_color().to_owned();
-        text_el.class_name = "text".to_owned();
-        text_el.style = format!("font-size:{}px", shape.text.font_size);
-        text_el.content = format!(
-            "{} {}{}",
-            field.visibility_token(),
-            d2_svg_path::escape_text(&field.name),
-            d2_svg_path::escape_text(&field.type_)
-        );
-        buf.push_str(&text_el.render());
-        current_y += row_height;
+    let mut row_y = box_y + header_height;
+    for f in &shape.class.fields {
+        buf.push_str(&class_row(
+            shape,
+            box_x,
+            row_y,
+            box_w,
+            row_height,
+            f.visibility_token(),
+            &f.name,
+            &f.type_,
+            shape.text.font_size as f64,
+            f.underline,
+            inline_theme,
+        ));
+        row_y += row_height;
     }
 
-    // Separator between fields and methods
-    if !shape.class.fields.is_empty() && !shape.class.methods.is_empty() {
-        let mut sep = d2_themes::ThemableElement::new("line", inline_theme);
-        sep.x1 = Some(shape.pos.x as f64);
-        sep.y1 = Some(current_y as f64);
-        sep.x2 = Some((shape.pos.x + shape.width) as f64);
-        sep.y2 = Some(current_y as f64);
-        sep.stroke = stroke.clone();
-        sep.style = style.clone();
-        buf.push_str(&sep.render());
+    // Separator line between fields and methods
+    let mut line_el = d2_themes::ThemableElement::new("line", inline_theme);
+    if shape.border_radius != 0 && shape.class.methods.is_empty() {
+        line_el.x1 = Some(box_x + shape.border_radius as f64);
+        line_el.y1 = Some(row_y);
+        line_el.x2 = Some(box_x + box_w - shape.border_radius as f64);
+        line_el.y2 = Some(row_y);
+    } else {
+        line_el.x1 = Some(box_x);
+        line_el.y1 = Some(row_y);
+        line_el.x2 = Some(box_x + box_w);
+        line_el.y2 = Some(row_y);
     }
+    line_el.stroke = shape.fill.clone();
+    line_el.style = "stroke-width:1".to_owned();
+    buf.push_str(&line_el.render());
 
     // Methods
-    for method in &shape.class.methods {
-        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-        text_el.x = Some(shape.pos.x as f64 + d2_target::PREFIX_PADDING as f64);
-        text_el.y =
-            Some(current_y as f64 + row_height as f64 / 2.0 + shape.text.font_size as f64 / 3.0);
-        text_el.fill = shape.get_font_color().to_owned();
-        text_el.class_name = "text".to_owned();
-        text_el.style = format!("font-size:{}px", shape.text.font_size);
-        text_el.content = format!(
-            "{} {}{}",
-            method.visibility_token(),
-            d2_svg_path::escape_text(&method.name),
-            d2_svg_path::escape_text(&method.return_)
-        );
-        buf.push_str(&text_el.render());
-        current_y += row_height;
+    for m in &shape.class.methods {
+        buf.push_str(&class_row(
+            shape,
+            box_x,
+            row_y,
+            box_w,
+            row_height,
+            m.visibility_token(),
+            &m.name,
+            &m.return_,
+            shape.text.font_size as f64,
+            m.underline,
+            inline_theme,
+        ));
+        row_y += row_height;
     }
+}
+
+/// Render the dark header rect + title text for a class shape.
+#[allow(clippy::too_many_arguments)]
+fn class_header(
+    diagram_hash: &str,
+    shape: &d2_target::Shape,
+    box_x: f64,
+    box_y: f64,
+    box_w: f64,
+    box_h: f64,
+    text_width: f64,
+    text_height: f64,
+    font_size: f64,
+    inline_theme: Option<&d2_themes::Theme>,
+) -> String {
+    let mut out = String::new();
+    let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
+    rect_el.x = Some(box_x);
+    rect_el.y = Some(box_y);
+    rect_el.width = Some(box_w);
+    rect_el.height = Some(box_h);
+    rect_el.fill = shape.fill.clone();
+    rect_el.fill_pattern = shape.fill_pattern.clone();
+    rect_el.class_name = "class_header".to_owned();
+    if shape.border_radius != 0 {
+        rect_el.clip_path = format!("{}-{}", diagram_hash, shape.id);
+    }
+    out.push_str(&rect_el.render());
+
+    if !shape.text.label.is_empty() {
+        // InsideMiddleCenter: centered on the header box.
+        let tl_x = box_x + (box_w - text_width) / 2.0;
+        let tl_y = box_y + (box_h - text_height) / 2.0;
+
+        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+        text_el.x = Some(tl_x + text_width / 2.0);
+        text_el.y = Some(tl_y + font_size);
+        text_el.fill = shape.get_font_color().to_owned();
+        text_el.class_name = "text-mono".to_owned();
+        // Go formats with `%vpx` — `%v` on an int means no decimals; on a
+        // float it's shortest-roundtrip. FontSize is an int here plus 4.
+        text_el.style = format!("text-anchor:middle;font-size:{}px;", (font_size as i32) + 4);
+        text_el.content = render_text(&shape.text.label, text_el.x.unwrap(), text_height);
+        out.push_str(&text_el.render());
+    }
+    out
+}
+
+/// Render one row of a class shape (prefix + name + type).
+#[allow(clippy::too_many_arguments)]
+fn class_row(
+    shape: &d2_target::Shape,
+    box_x: f64,
+    box_y: f64,
+    box_w: f64,
+    _box_h: f64,
+    prefix: &str,
+    name: &str,
+    type_text: &str,
+    font_size: f64,
+    underline: bool,
+    inline_theme: Option<&d2_themes::Theme>,
+) -> String {
+    let mut out = String::new();
+
+    // InsideMiddleLeft: prefix sits left-aligned with PREFIX_PADDING from
+    // the left edge; y is center of the row.
+    let prefix_tl_x = box_x + d2_target::PREFIX_PADDING as f64;
+    let prefix_tl_y = box_y + (_box_h - font_size) / 2.0;
+
+    let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+    text_el.x = Some(prefix_tl_x);
+    text_el.y = Some(prefix_tl_y + font_size * 3.0 / 4.0);
+    text_el.fill = shape.primary_accent_color.clone();
+    text_el.class_name = "text-mono".to_owned();
+    text_el.style = format!("text-anchor:start;font-size:{}px", font_size);
+    text_el.content = prefix.to_owned();
+    out.push_str(&text_el.render());
+
+    // Name text at prefix_tl_x + PREFIX_WIDTH.
+    text_el.x = Some(prefix_tl_x + d2_target::PREFIX_WIDTH as f64);
+    text_el.fill = shape.fill.clone();
+    text_el.class_name = if underline {
+        "text-mono text-underline".to_owned()
+    } else {
+        "text-mono".to_owned()
+    };
+    text_el.content = d2_svg_path::escape_text(name);
+    out.push_str(&text_el.render());
+
+    // Type text right-aligned (InsideMiddleRight) with TYPE_PADDING from
+    // the right edge.
+    let type_tr_x = box_x + box_w - d2_target::TYPE_PADDING as f64;
+    text_el.x = Some(type_tr_x);
+    text_el.y = Some(prefix_tl_y + font_size * 3.0 / 4.0);
+    text_el.fill = shape.secondary_accent_color.clone();
+    text_el.class_name = "text-mono".to_owned();
+    text_el.style = format!("text-anchor:end;font-size:{}px", font_size);
+    text_el.content = d2_svg_path::escape_text(type_text);
+    out.push_str(&text_el.render());
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -2959,28 +3061,58 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
 
 /// Collect all text content from a diagram for font subsetting.
 fn collect_corpus(diagram: &d2_target::Diagram) -> String {
+    // Mirror Go `d2target.Diagram.GetCorpus` exactly so the font subset
+    // Rust produces hashes identically to Go. Key quirks:
+    // - labels are concatenated back-to-back with no separators;
+    // - tooltip/link are followed by an incrementing appendixCount digit;
+    // - class fields/methods include visibility token after the combined
+    //   `name + type` text;
+    // - sql columns also push constraint abbreviations.
     let mut corpus = String::new();
+    let mut appendix_count = 0;
     for s in &diagram.shapes {
         corpus.push_str(&s.text.label);
-        corpus.push('\n');
-        for f in &s.class.fields {
-            corpus.push_str(&f.name);
-            corpus.push_str(&f.type_);
+        if !s.tooltip.is_empty() {
+            corpus.push_str(&s.tooltip);
+            appendix_count += 1;
+            corpus.push_str(&appendix_count.to_string());
         }
-        for m in &s.class.methods {
-            corpus.push_str(&m.name);
-            corpus.push_str(&m.return_);
+        if !s.link.is_empty() {
+            corpus.push_str(&s.link);
+            appendix_count += 1;
+            corpus.push_str(&appendix_count.to_string());
         }
-        for col in &s.sql_table.columns {
-            corpus.push_str(&col.name.label);
-            corpus.push_str(&col.type_.label);
-            corpus.push_str(&col.constraint_abbr());
+        corpus.push_str(&s.pretty_link);
+        if s.type_ == d2_target::SHAPE_CLASS {
+            for f in &s.class.fields {
+                corpus.push_str(&f.name);
+                corpus.push_str(&f.type_);
+                corpus.push_str(f.visibility_token());
+            }
+            for m in &s.class.methods {
+                corpus.push_str(&m.name);
+                corpus.push_str(&m.return_);
+                corpus.push_str(m.visibility_token());
+            }
+        }
+        if s.type_ == d2_target::SHAPE_SQL_TABLE {
+            for col in &s.sql_table.columns {
+                corpus.push_str(&col.name.label);
+                corpus.push_str(&col.type_.label);
+                corpus.push_str(&col.constraint_abbr());
+            }
         }
     }
     for c in &diagram.connections {
         corpus.push_str(&c.text.label);
-        corpus.push('\n');
+        if let Some(ref l) = c.src_label {
+            corpus.push_str(&l.label);
+        }
+        if let Some(ref l) = c.dst_label {
+            corpus.push_str(&l.label);
+        }
     }
+    // Legend corpus still TODO.
     corpus
 }
 

@@ -257,6 +257,91 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         let font = d2_fonts::Font::new(font_family, font_style, font_size);
 
+        // Class shapes need per-row sizing so the header + fields +
+        // methods all fit. Mirrors Go `d2graph.GetDefaultSize` class
+        // branch.
+        if shape == "class" {
+            // Go uses FONT_SIZE_L (20) by default for class measurements,
+            // not the general FONT_SIZE_M (16).
+            let class_font_size = if let Some(v) = g.objects[i].style.font_size.as_ref() {
+                v.value.parse().unwrap_or(d2_fonts::FONT_SIZE_L)
+            } else {
+                d2_fonts::FONT_SIZE_L
+            };
+            let header_font_size = class_font_size + d2_target::HEADER_FONT_ADD;
+            // Go `GetLabelSize` uses `GetTextDimensionsWithMono` with the
+            // mono font for class shapes — the label is measured in mono
+            // even though Text() reports `isBold=false` / fontFamily=default.
+            let header_font = d2_fonts::Font::new(
+                d2_fonts::FontFamily::SourceCodePro,
+                FontStyle::Regular,
+                header_font_size,
+            );
+            let (header_w, header_h) = if !label.is_empty() {
+                ruler.measure(header_font, &label)
+            } else {
+                (0, 0)
+            };
+            g.objects[i].label_dimensions = d2_graph::Dimensions {
+                width: header_w,
+                height: header_h,
+            };
+
+            // Row measurements use mono font at `class_font_size`, and Go
+            // measures the full row text `Name + Type` concatenated (not
+            // the pieces individually).
+            let row_font = d2_fonts::Font::new(
+                d2_fonts::FontFamily::SourceCodePro,
+                FontStyle::Regular,
+                class_font_size,
+            );
+            let mut max_width = 12i32.max(header_w);
+            let mut row_h = 0i32;
+
+            let class_ref_opt = g.objects[i].class.clone();
+            if let Some(ref cls) = class_ref_opt {
+                for f in &cls.fields {
+                    let combined = format!("{}{}", f.name, f.type_);
+                    let (fw, fh) = ruler.measure(row_font, &combined);
+                    max_width = max_width.max(fw);
+                    row_h = row_h.max(fh);
+                }
+                for m in &cls.methods {
+                    let combined = format!("{}{}", m.name, m.return_);
+                    let (mw, mh) = ruler.measure(row_font, &combined);
+                    max_width = max_width.max(mw);
+                    row_h = row_h.max(mh);
+                }
+            }
+
+            let w = d2_target::PREFIX_PADDING
+                + d2_target::PREFIX_WIDTH
+                + max_width
+                + d2_target::CENTER_PADDING
+                + d2_target::TYPE_PADDING;
+            let row_count = class_ref_opt
+                .as_ref()
+                .map(|c| c.fields.len() + c.methods.len())
+                .unwrap_or(0) as i32;
+            let row_height = row_h + d2_target::VERTICAL_PADDING;
+            // label::PADDING = 5 (d2-label crate).
+            let header_reserve = (2 * row_height).max(header_h + 2 * 5);
+            let h = row_height * row_count + header_reserve;
+
+            g.objects[i].width = if desired_width > 0 {
+                desired_width as f64
+            } else {
+                w as f64
+            };
+            g.objects[i].height = if desired_height > 0 {
+                desired_height as f64
+            } else {
+                h as f64
+            };
+            g.objects[i].update_box();
+            continue;
+        }
+
         // Image shapes have a fixed default size in Go d2 (128×128 from
         // GetDefaultSize) regardless of label. Apply that *before* the
         // empty-label fast path so a labeled image still gets 128×128.
@@ -355,6 +440,37 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         }
         if desired_height != 0 {
             pad_y = 0.0;
+        }
+
+        // Match Go d2graph.SetDimensions: non-image shapes with icons get
+        // extra room so the label can sit above/beside the icon cleanly.
+        if g.objects[i].icon.is_some() {
+            match shape.as_str() {
+                "sql_table" | "class" | "code" | "text" => {}
+                _ => {
+                    let label_height =
+                        g.objects[i].label_dimensions.height as f64 + INNER_LABEL_PADDING;
+                    if desired_width == 0 {
+                        pad_x += label_height;
+                    }
+                    if desired_height == 0 {
+                        pad_y += label_height;
+                    }
+                }
+            }
+        }
+
+        // Go reserves extra horizontal room for the link/tooltip affordances.
+        if desired_width == 0
+            && g.objects[i].link.is_some()
+            && g.objects[i].tooltip.is_some()
+        {
+            match shape.as_str() {
+                "sql_table" | "class" | "code" => {}
+                _ => {
+                    pad_x += 64.0;
+                }
+            }
         }
 
         // Person shapes don't use the per-shape AR/wedge math in
