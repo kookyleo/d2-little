@@ -21,9 +21,18 @@ fn find_overflow_case() {
         // Skip cases known to cause infinite recursion
         // Skip cases that trigger infinite recursion bugs
         let skip_keywords = [
-            "sql_table", "shape: class", "shape: sequence", "grid-rows",
-            "grid-columns", "layers:", "scenarios:", "steps:", "near:",
-            "@", "d2-config", "shape: grid",
+            "sql_table",
+            "shape: class",
+            "shape: sequence",
+            "grid-rows",
+            "grid-columns",
+            "layers:",
+            "scenarios:",
+            "steps:",
+            "near:",
+            "@",
+            "d2-config",
+            "shape: grid",
         ];
         // Also skip cases with more than 10 edges (dagre bridge overflow)
         let edge_count = script.matches("->").count() + script.matches("<-").count();

@@ -89,7 +89,11 @@ fn ceil_26_6(x: i32) -> i32 {
 #[inline]
 fn font_scale_div(x: i64, fupe: i32) -> i32 {
     let fupe64 = fupe as i64;
-    let y = if x >= 0 { x + fupe64 / 2 } else { x - fupe64 / 2 };
+    let y = if x >= 0 {
+        x + fupe64 / 2
+    } else {
+        x - fupe64 / 2
+    };
     // Go 的整数除法对负数是向零截断，与 Rust 的 `/` 一致。
     (y / fupe64) as i32
 }
@@ -199,10 +203,8 @@ impl Atlas {
         //   Ascent  = Int26_6(Ceil(scale * ascent / fupe)) (Int26_6 raw value！)
         //   Descent = Int26_6(Ceil(scale * -descent / fupe))
         let scale_f = scale_26_6 as f64;
-        let ascent_raw =
-            (scale_f * face.ascender() as f64 / fupe as f64).ceil() as i32;
-        let descent_raw =
-            (scale_f * (-face.descender() as f64) / fupe as f64).ceil() as i32;
+        let ascent_raw = (scale_f * face.ascender() as f64 / fupe as f64).ceil() as i32;
+        let descent_raw = (scale_f * (-face.descender() as f64) / fupe as f64).ceil() as i32;
         let ascent = i2f(ascent_raw);
         let descent = i2f(descent_raw);
         let line_height = i2f(scale_26_6);
@@ -245,13 +247,8 @@ impl Atlas {
         let mut hi = hi_init;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let (_mapping, bounds) = make_mapping(
-                &valid_runes,
-                &metrics,
-                padding_26_6,
-                mid,
-                row_step_26_6,
-            );
+            let (_mapping, bounds) =
+                make_mapping(&valid_runes, &metrics, padding_26_6, mid, row_step_26_6);
             let bw = bounds.max_x - bounds.min_x;
             let bh = bounds.max_y - bounds.min_y;
             if bw >= bh {
@@ -335,7 +332,11 @@ impl Atlas {
         dot_x: f64,
         dot_y: f64,
     ) -> (Rect, Rect, Rect, f64, f64) {
-        let r = if self.contains(r) { r } else { REPLACEMENT_CHAR };
+        let r = if self.contains(r) {
+            r
+        } else {
+            REPLACEMENT_CHAR
+        };
         if !self.contains(REPLACEMENT_CHAR) {
             return (Rect::zero(), Rect::zero(), Rect::zero(), dot_x, dot_y);
         }
@@ -507,9 +508,7 @@ fn compute_glyph_metrics(
     scale_26_6: i32,
     fupe: i32,
 ) -> Option<GlyphMetrics> {
-    let gid = face
-        .glyph_index(ch)
-        .unwrap_or(ttf_parser::GlyphId(0));
+    let gid = face.glyph_index(ch).unwrap_or(ttf_parser::GlyphId(0));
     let advance_funit = face.glyph_hor_advance(gid)? as i32;
     let advance = scale_funit_to_26_6(advance_funit, scale_26_6, fupe);
 
@@ -521,16 +520,15 @@ fn compute_glyph_metrics(
     //   因为 `glyphBuf.Load` 把 `g.Bounds` 初始化为零矩形而 `GlyphBounds` 里
     //   `xmin > xmax || ymin > ymax` 的检查对 0 == 0 是 false。所以为了和 Go 对齐，
     //   这里把 bbox=None 当作 (0,0,0,0)，advance 照常。
-    let (x_min_funit, y_min_funit, x_max_funit, y_max_funit) =
-        match face.glyph_bounding_box(gid) {
-            Some(b) => (
-                b.x_min as i32,
-                b.y_min as i32,
-                b.x_max as i32,
-                b.y_max as i32,
-            ),
-            None => (0, 0, 0, 0),
-        };
+    let (x_min_funit, y_min_funit, x_max_funit, y_max_funit) = match face.glyph_bounding_box(gid) {
+        Some(b) => (
+            b.x_min as i32,
+            b.y_min as i32,
+            b.x_max as i32,
+            b.y_max as i32,
+        ),
+        None => (0, 0, 0, 0),
+    };
 
     // Go freetype 对每个控制点做 `font.scale(g.scale * p)` 后计算 bounds。
     // 这里等价地先算出缩放后的四个极值；注意 y 轴翻转。

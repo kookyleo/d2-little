@@ -255,7 +255,7 @@ fn arrowhead_marker(
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             if is_target {
                 el.points = format!(
-                    "{},{} {},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     0.0,
                     0.0,
                     width,
@@ -267,7 +267,7 @@ fn arrowhead_marker(
                 );
             } else {
                 el.points = format!(
-                    "{},{} {},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     0.0,
                     height / 2.0,
                     width,
@@ -287,7 +287,7 @@ fn arrowhead_marker(
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             if is_target {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     0.0,
                     0.0,
                     width,
@@ -297,7 +297,7 @@ fn arrowhead_marker(
                 );
             } else {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     width,
                     0.0,
                     0.0,
@@ -317,7 +317,7 @@ fn arrowhead_marker(
             let inset = stroke_width / 2.0;
             if is_target {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     inset,
                     inset,
                     width - inset,
@@ -327,7 +327,7 @@ fn arrowhead_marker(
                 );
             } else {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     width - inset,
                     inset,
                     inset,
@@ -346,7 +346,7 @@ fn arrowhead_marker(
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             if is_target {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     stroke_width / 2.0,
                     stroke_width / 2.0,
                     width - stroke_width / 2.0,
@@ -356,7 +356,7 @@ fn arrowhead_marker(
                 );
             } else {
                 el.points = format!(
-                    "{},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     width - stroke_width / 2.0,
                     stroke_width / 2.0,
                     stroke_width / 2.0,
@@ -373,7 +373,7 @@ fn arrowhead_marker(
             el.fill = connection.stroke.clone();
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             el.points = format!(
-                "{},{} {},{} {},{} {},{}",
+                "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                 0.0,
                 height / 2.0,
                 width / 2.0,
@@ -393,7 +393,7 @@ fn arrowhead_marker(
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             if is_target {
                 el.points = format!(
-                    "{},{} {},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     0.0,
                     height / 2.0,
                     width / 2.0,
@@ -405,7 +405,7 @@ fn arrowhead_marker(
                 );
             } else {
                 el.points = format!(
-                    "{},{} {},{} {},{} {},{}",
+                    "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                     width / 8.0,
                     height / 2.0,
                     width * 0.6,
@@ -454,7 +454,7 @@ fn arrowhead_marker(
             el.fill = connection.stroke.clone();
             el.attributes = format!(r#"stroke-width="{}""#, connection.stroke_width);
             el.points = format!(
-                "{},{} {},{} {},{} {},{}",
+                "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                 0.0, 0.0, 0.0, height, width, height, width, 0.0
             );
             el.render()
@@ -469,7 +469,7 @@ fn arrowhead_marker(
             s.push_str("stroke-linejoin:miter;");
             let inset = stroke_width / 2.0;
             el.points = format!(
-                "{},{} {},{} {},{} {},{}",
+                "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                 inset,
                 inset,
                 inset,
@@ -491,7 +491,7 @@ fn arrowhead_marker(
 
             let mut cross_el = d2_themes::ThemableElement::new("polygon", inline_theme);
             cross_el.points = format!(
-                "{},{} {},{} {},{} {},{}, {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{}",
+                "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}, {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
                 0.0,
                 height / 2.0 + inset,
                 width / 2.0 - inset,
@@ -526,15 +526,20 @@ fn arrowhead_marker(
             let mut child_path = d2_themes::ThemableElement::new("path", inline_theme);
             if is_target {
                 child_path.d = format!(
-                    "M{},{} {},{}",
+                    "M{:.6},{:.6} {:.6},{:.6}",
                     width / 2.0,
                     height / 2.0,
                     width,
                     height / 2.0
                 );
             } else {
-                child_path.d =
-                    format!("M{},{} {},{}", width / 2.0, height / 2.0, 0.0, height / 2.0);
+                child_path.d = format!(
+                    "M{:.6},{:.6} {:.6},{:.6}",
+                    width / 2.0,
+                    height / 2.0,
+                    0.0,
+                    height / 2.0
+                );
             }
 
             let mut g_el = d2_themes::ThemableElement::new("g", inline_theme);
@@ -554,7 +559,7 @@ fn arrowhead_marker(
             let modifier_el = match arrowhead {
                 d2_target::Arrowhead::CfOneRequired | d2_target::Arrowhead::CfManyRequired => {
                     let mut el = d2_themes::ThemableElement::new("path", inline_theme);
-                    el.d = format!("M{},{} {},{}", offset, 0.0, offset, height);
+                    el.d = format!("M{:.6},{:.6} {:.6},{:.6}", offset, 0.0, offset, height);
                     el.fill = d2_target::BG_COLOR.to_owned();
                     el.stroke = connection.stroke.clone();
                     el.class_name = "connection".to_owned();
@@ -578,7 +583,7 @@ fn arrowhead_marker(
             match arrowhead {
                 d2_target::Arrowhead::CfMany | d2_target::Arrowhead::CfManyRequired => {
                     child_path.d = format!(
-                        "M{},{} {},{} M{},{} {},{} M{},{} {},{}",
+                        "M{:.6},{:.6} {:.6},{:.6} M{:.6},{:.6} {:.6},{:.6} M{:.6},{:.6} {:.6},{:.6}",
                         width - 3.0,
                         height / 2.0,
                         width + offset,
@@ -595,7 +600,7 @@ fn arrowhead_marker(
                 }
                 _ => {
                     child_path.d = format!(
-                        "M{},{} {},{} M{},{} {},{}",
+                        "M{:.6},{:.6} {:.6},{:.6} M{:.6},{:.6} {:.6},{:.6}",
                         width - 3.0,
                         height / 2.0,
                         width + offset,
@@ -645,8 +650,9 @@ fn arrowhead_marker(
         }
     }
 
+    // Float values are formatted with %f (6 decimal places) to match Go.
     format!(
-        r#"<marker id="{}" markerWidth="{}" markerHeight="{}" refX="{}" refY="{}" viewBox="{} {} {} {}" orient="auto" markerUnits="userSpaceOnUse"> {} </marker>"#,
+        r#"<marker id="{}" markerWidth="{:.6}" markerHeight="{:.6}" refX="{:.6}" refY="{:.6}" viewBox="{:.6} {:.6} {:.6} {:.6}" orient="auto" markerUnits="userSpaceOnUse"> {} </marker>"#,
         id, final_width, height, ref_x, ref_y, 0.0, 0.0, final_width, height, path
     )
 }
@@ -715,8 +721,10 @@ fn path_data(
     let route = &connection.route;
     let mut path = Vec::new();
 
+    // Float formatting matches Go's `%f` (six decimal places) so the
+    // generated path string is byte-identical to Go d2's `pathData`.
     path.push(format!(
-        "M {} {}",
+        "M {:.6} {:.6}",
         route[0].x + src_adj.x,
         route[0].y + src_adj.y
     ));
@@ -725,7 +733,7 @@ fn path_data(
         let mut i = 1;
         while i < route.len() - 3 {
             path.push(format!(
-                "C {} {} {} {} {} {}",
+                "C {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}",
                 route[i].x,
                 route[i].y,
                 route[i + 1].x,
@@ -737,7 +745,7 @@ fn path_data(
         }
         // Final curve with target adjustment
         path.push(format!(
-            "C {} {} {} {} {} {}",
+            "C {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}",
             route[i].x,
             route[i].y,
             route[i + 1].x,
@@ -787,7 +795,11 @@ fn path_data(
             let ctx = cux * units;
             let cty = cuy * units;
 
-            path.push(format!("L {} {}", prev_target.x - ptx, prev_target.y - pty));
+            path.push(format!(
+                "L {:.6} {:.6}",
+                prev_target.x - ptx,
+                prev_target.y - pty
+            ));
 
             if units < border_radius && i < route.len() - 2 {
                 let next_target = &route[i + 2];
@@ -803,7 +815,7 @@ fn path_data(
                 let nty = nuy * units;
 
                 path.push(format!(
-                    "C {} {} {} {} {} {}",
+                    "C {:.6} {:.6} {:.6} {:.6} {:.6} {:.6}",
                     prev_target.x + ptx,
                     prev_target.y + pty,
                     curr_target.x - ntx,
@@ -813,7 +825,7 @@ fn path_data(
                 ));
             } else {
                 path.push(format!(
-                    "S {} {} {} {}",
+                    "S {:.6} {:.6} {:.6} {:.6}",
                     prev_target.x,
                     prev_target.y,
                     prev_target.x + ctx,
@@ -823,7 +835,11 @@ fn path_data(
         }
 
         let last = &route[route.len() - 1];
-        path.push(format!("L {} {}", last.x + dst_adj.x, last.y + dst_adj.y));
+        path.push(format!(
+            "L {:.6} {:.6}",
+            last.x + dst_adj.x,
+            last.y + dst_adj.y
+        ));
     }
 
     path.join(" ")
@@ -1594,7 +1610,7 @@ fn render_3d_rect(
 
     // Border path segments
     let border_d = format!(
-        "M{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} M{},{} L{},{}",
+        "M{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} M{:.6},{:.6} L{:.6},{:.6}",
         px,
         py,
         px + off,
@@ -1636,7 +1652,7 @@ fn render_3d_rect(
 
     // Compact border segments for mask path
     let mask_border_d = format!(
-        "M{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}M{},{}L{},{}",
+        "M{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}M{:.6},{:.6}L{:.6},{:.6}",
         px,
         py,
         px + off,
@@ -1682,7 +1698,7 @@ fn render_3d_rect(
 
     // Side polygons
     let side_points = format!(
-        "{},{} {},{} {},{} {},{} {},{} {},{}",
+        "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
         px,
         py,
         px + off,
@@ -2528,10 +2544,12 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     // Compute dimensions
     let (mut left, mut top, mut w, mut h) = dimensions(diagram, pad);
 
-    // Label mask
+    // Label mask. Match Go d2svg.go: each piece is on its own line, joined
+    // by `\n`, so the resulting fragment looks like
+    //   <mask ...>\n<rect ...></rect>\n{label_masks}\n</mask>
     write!(
         buf,
-        r#"<mask id="{}" maskUnits="userSpaceOnUse" x="{}" y="{}" width="{}" height="{}"><rect x="{}" y="{}" width="{}" height="{}" fill="white"></rect>{}</mask>"#,
+        "<mask id=\"{}\" maskUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\">\n<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"white\"></rect>\n{}\n</mask>",
         isolated_hash,
         left, top, w, h,
         left, top, w, h,
@@ -2758,7 +2776,13 @@ fn collect_nested_corpus(diagram: &d2_target::Diagram) -> String {
 
 /// Build a single `@keyframes` block for one board in the animation.
 /// Mirrors Go d2animate.makeKeyframe (transitionDurationMS = 1).
-fn make_keyframe(delay_ms: i64, duration_ms: i64, total_ms: i64, identifier: usize, diagram_hash: &str) -> String {
+fn make_keyframe(
+    delay_ms: i64,
+    duration_ms: i64,
+    total_ms: i64,
+    identifier: usize,
+    diagram_hash: &str,
+) -> String {
     const TRANSITION_DURATION_MS: i64 = 1;
     let total = total_ms as f64;
     let percentage_before = ((delay_ms - TRANSITION_DURATION_MS).max(0) as f64 / total) * 100.0;
@@ -2768,14 +2792,23 @@ fn make_keyframe(delay_ms: i64, duration_ms: i64, total_ms: i64, identifier: usi
     if percentage_end.ceil() as i64 == 100 {
         return format!(
             "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n}}",
-            diagram_hash, identifier, percentage_before, percentage_start, percentage_end.ceil(),
+            diagram_hash,
+            identifier,
+            percentage_before,
+            percentage_start,
+            percentage_end.ceil(),
         );
     }
 
     let percentage_after = ((delay_ms + duration_ms) as f64 / total) * 100.0;
     format!(
         "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n\t\t{:.6}%%, 100%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n}}",
-        diagram_hash, identifier, percentage_before, percentage_start, percentage_end, percentage_after,
+        diagram_hash,
+        identifier,
+        percentage_before,
+        percentage_start,
+        percentage_end,
+        percentage_after,
     )
 }
 
@@ -2830,7 +2863,8 @@ pub fn wrap(
         buf,
         r#"<svg class="d2-svg" width="{}" height="{}" viewBox="{} {} {} {}">"#,
         width, height, left, top, width, height
-    ).unwrap();
+    )
+    .unwrap();
 
     // Concatenate all SVG bodies (space-separated like Go)
     let mut svgs_str = String::new();
@@ -2866,7 +2900,8 @@ pub fn wrap(
         buf,
         r#"<style type="text/css"><![CDATA[{}{}]]></style>"#,
         BASE_STYLESHEET, theme_stylesheet
-    ).unwrap();
+    )
+    .unwrap();
 
     // TODO: Markdown CSS block. Go's d2animate writes a `<style type="text/css">`
     // containing the GitHub markdown stylesheet whenever any nested board has a

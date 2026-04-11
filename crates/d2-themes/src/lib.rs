@@ -440,12 +440,19 @@ impl ThemableElement {
         if let Some(v) = self.r {
             out += &format!(r#" r="{v:.6}""#);
         }
-        if let Some(rx) = self.rx {
+        // Match Go d2themes element.go: skip rx when it equals MaxFloat64,
+        // which the d2svg renderer uses as a sentinel meaning "no border
+        // radius set" (so that SHAPE_RECTANGLE renders without rx).
+        if let Some(rx) = self.rx
+            && rx != f64::MAX
+        {
             let w = self.width.unwrap_or(f64::MAX);
             let h = self.height.unwrap_or(f64::MAX);
             out += &format!(r#" rx="{:.6}""#, calculate_axis_radius(rx, w, h));
         }
-        if let Some(ry) = self.ry {
+        if let Some(ry) = self.ry
+            && ry != f64::MAX
+        {
             let w = self.width.unwrap_or(f64::MAX);
             let h = self.height.unwrap_or(f64::MAX);
             out += &format!(r#" ry="{:.6}""#, calculate_axis_radius(ry, w, h));

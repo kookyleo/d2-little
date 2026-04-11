@@ -940,7 +940,6 @@ fn fnv1a32_mix(mut h: u32, data: &[u8]) -> u32 {
 }
 
 impl Diagram {
-
     /// Compute the axis-aligned bounding box of all shapes and connections.
     ///
     /// Returns `(top_left, bottom_right)`.

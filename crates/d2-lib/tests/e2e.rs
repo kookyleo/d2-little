@@ -57,11 +57,19 @@ fn run_e2e(category: &str, name: &str, script: &str) -> (bool, String) {
         let got_ctx = &svg_str[context_start..context_end.min(svg_str.len())];
         let exp_ctx = &expected[context_start..context_end.min(expected.len())];
 
-        (false, format!(
-            "DIFF at byte {}: got[{}..]=`{}`  exp[{}..]=`{}`  (got {} bytes vs exp {} bytes)",
-            diff_pos, context_start, got_ctx, context_start, exp_ctx,
-            svg_str.len(), expected.len()
-        ))
+        (
+            false,
+            format!(
+                "DIFF at byte {}: got[{}..]=`{}`  exp[{}..]=`{}`  (got {} bytes vs exp {} bytes)",
+                diff_pos,
+                context_start,
+                got_ctx,
+                context_start,
+                exp_ctx,
+                svg_str.len(),
+                expected.len()
+            ),
+        )
     }
 }
 
@@ -149,7 +157,12 @@ fn e2e_dashboard() {
             pass += 1;
         } else {
             fail += 1;
-            failures.push(format!("[{}] {}: {}", category, name, &msg[..msg.len().min(200)]));
+            failures.push(format!(
+                "[{}] {}: {}",
+                category,
+                name,
+                &msg[..msg.len().min(200)]
+            ));
         }
     }
 

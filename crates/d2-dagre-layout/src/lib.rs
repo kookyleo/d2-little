@@ -116,7 +116,12 @@ fn in_container(obj_id: ObjId, container_id: ObjId, g: &Graph) -> Option<ObjId> 
     in_container_depth(obj_id, container_id, g, 0)
 }
 
-fn in_container_depth(obj_id: ObjId, container_id: ObjId, g: &Graph, depth: usize) -> Option<ObjId> {
+fn in_container_depth(
+    obj_id: ObjId,
+    container_id: ObjId,
+    g: &Graph,
+    depth: usize,
+) -> Option<ObjId> {
     if depth > 100 {
         return None; // prevent infinite recursion from cyclic parent pointers
     }
