@@ -245,6 +245,34 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         let font = d2_fonts::Font::new(font_family, font_style, font_size);
 
+        // Image shapes have a fixed default size in Go d2 (128×128 from
+        // GetDefaultSize) regardless of label. Apply that *before* the
+        // empty-label fast path so a labeled image still gets 128×128.
+        if shape == "image" {
+            let w_def = if desired_width > 0 {
+                desired_width as f64
+            } else {
+                128.0
+            };
+            let h_def = if desired_height > 0 {
+                desired_height as f64
+            } else {
+                128.0
+            };
+            // Still measure the label so SVG can render it next to the icon.
+            if !label.is_empty() {
+                let (tw, th) = ruler.measure(font, &label);
+                g.objects[i].label_dimensions = d2_graph::Dimensions {
+                    width: tw,
+                    height: th,
+                };
+            }
+            g.objects[i].width = w_def;
+            g.objects[i].height = h_def;
+            g.objects[i].update_box();
+            continue;
+        }
+
         if label.is_empty() {
             // No label: use default or desired dimensions
             if shape == "circle" || shape == "square" {
