@@ -590,12 +590,18 @@ impl Object {
 
     /// Whether the object has a non-empty label.
     pub fn has_label(&self) -> bool {
-        !self.label.value.is_empty()
+        !matches!(
+            self.shape.value.as_str(),
+            d2_target::SHAPE_TEXT
+                | d2_target::SHAPE_CLASS
+                | d2_target::SHAPE_SQL_TABLE
+                | d2_target::SHAPE_CODE
+        ) && !self.label.value.is_empty()
     }
 
     /// Whether the object has an icon.
     pub fn has_icon(&self) -> bool {
-        self.icon.is_some()
+        self.icon.is_some() && self.shape.value != d2_target::SHAPE_IMAGE
     }
 
     /// Whether the object has an outside bottom label (e.g., image shapes).
@@ -697,12 +703,27 @@ impl Object {
     }
 
     /// Get the stroke color based on style and stroke-dash.
-    pub fn get_stroke(&self, _stroke_dash: f64) -> &str {
+    pub fn get_stroke(&self, stroke_dash: f64) -> &str {
         if let Some(ref s) = self.style.stroke {
-            &s.value
-        } else {
-            d2_color::B1
+            return &s.value;
         }
+
+        if self.shape.value.eq_ignore_ascii_case(d2_target::SHAPE_CODE)
+            || self.shape.value.eq_ignore_ascii_case(d2_target::SHAPE_TEXT)
+        {
+            return d2_color::N1;
+        }
+        if self.shape.value.eq_ignore_ascii_case(d2_target::SHAPE_CLASS)
+            || self.shape
+                .value
+                .eq_ignore_ascii_case(d2_target::SHAPE_SQL_TABLE)
+        {
+            return d2_color::N7;
+        }
+        if stroke_dash != 0.0 {
+            return d2_color::B2;
+        }
+        d2_color::B1
     }
 
     /// Get the 3D/multiple modifier adjustments (dx, dy).
@@ -730,25 +751,120 @@ impl Object {
         (dx, dy)
     }
 
-    /// Spacing returns (margin, padding) for this object (simplified).
+    /// Returns `(margin, padding)` mirroring Go `Object.Spacing()` /
+    /// `SpacingOpt`. Outside labels/icons contribute to margin, inside labels
+    /// contribute to padding, and 3D/multiple modifier adjustments add to
+    /// `margin.Right` / `margin.Top`.
     pub fn spacing(&self) -> (Spacing, Spacing) {
-        let zero = Spacing {
+        self.spacing_opt(2.0 * d2_label::PADDING, 2.0 * d2_label::PADDING, true)
+    }
+
+    /// Underlying variant allowing callers to tune label/icon padding.
+    /// Ported from Go d2graph.Object.SpacingOpt.
+    pub fn spacing_opt(
+        &self,
+        label_padding: f64,
+        icon_padding: f64,
+        max_icon_size: bool,
+    ) -> (Spacing, Spacing) {
+        let mut margin = Spacing {
             top: 0.0,
             bottom: 0.0,
             left: 0.0,
             right: 0.0,
         };
-        let padding = Spacing {
-            top: DEFAULT_PADDING,
-            bottom: DEFAULT_PADDING,
-            left: DEFAULT_PADDING,
-            right: DEFAULT_PADDING,
+        let mut padding = Spacing {
+            top: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+            right: 0.0,
         };
-        if self.is_container() {
-            (zero, padding)
-        } else {
-            (zero, zero)
+
+        if self.has_label() {
+            let position = self.label_position.as_deref().unwrap_or("");
+            let lw = if self.label_dimensions.width > 0 {
+                self.label_dimensions.width as f64 + label_padding
+            } else {
+                0.0
+            };
+            let lh = if self.label_dimensions.height > 0 {
+                self.label_dimensions.height as f64 + label_padding
+            } else {
+                0.0
+            };
+
+            match position {
+                "OUTSIDE_TOP_LEFT" | "OUTSIDE_TOP_CENTER" | "OUTSIDE_TOP_RIGHT" => {
+                    margin.top = lh;
+                }
+                "OUTSIDE_BOTTOM_LEFT" | "OUTSIDE_BOTTOM_CENTER" | "OUTSIDE_BOTTOM_RIGHT" => {
+                    margin.bottom = lh;
+                }
+                "OUTSIDE_LEFT_TOP" | "OUTSIDE_LEFT_MIDDLE" | "OUTSIDE_LEFT_BOTTOM" => {
+                    margin.left = lw;
+                }
+                "OUTSIDE_RIGHT_TOP" | "OUTSIDE_RIGHT_MIDDLE" | "OUTSIDE_RIGHT_BOTTOM" => {
+                    margin.right = lw;
+                }
+                "INSIDE_TOP_LEFT" | "INSIDE_TOP_CENTER" | "INSIDE_TOP_RIGHT" => {
+                    padding.top = lh;
+                }
+                "INSIDE_BOTTOM_LEFT" | "INSIDE_BOTTOM_CENTER" | "INSIDE_BOTTOM_RIGHT" => {
+                    padding.bottom = lh;
+                }
+                "INSIDE_MIDDLE_LEFT" => {
+                    padding.left = lw;
+                }
+                "INSIDE_MIDDLE_RIGHT" => {
+                    padding.right = lw;
+                }
+                _ => {}
+            }
         }
+
+        if self.has_icon() {
+            let position = self.icon_position.as_deref().unwrap_or("");
+            let icon_size = if max_icon_size {
+                d2_target::MAX_ICON_SIZE as f64 + icon_padding
+            } else {
+                // Fallback to MAX_ICON_SIZE when we don't have a per-shape
+                // sizer available — matches the conservative upper bound.
+                d2_target::MAX_ICON_SIZE as f64 + icon_padding
+            };
+            match position {
+                "OUTSIDE_TOP_LEFT" | "OUTSIDE_TOP_CENTER" | "OUTSIDE_TOP_RIGHT" => {
+                    margin.top = margin.top.max(icon_size);
+                }
+                "OUTSIDE_BOTTOM_LEFT" | "OUTSIDE_BOTTOM_CENTER" | "OUTSIDE_BOTTOM_RIGHT" => {
+                    margin.bottom = margin.bottom.max(icon_size);
+                }
+                "OUTSIDE_LEFT_TOP" | "OUTSIDE_LEFT_MIDDLE" | "OUTSIDE_LEFT_BOTTOM" => {
+                    margin.left = margin.left.max(icon_size);
+                }
+                "OUTSIDE_RIGHT_TOP" | "OUTSIDE_RIGHT_MIDDLE" | "OUTSIDE_RIGHT_BOTTOM" => {
+                    margin.right = margin.right.max(icon_size);
+                }
+                "INSIDE_TOP_LEFT" | "INSIDE_TOP_CENTER" | "INSIDE_TOP_RIGHT" => {
+                    padding.top = padding.top.max(icon_size);
+                }
+                "INSIDE_BOTTOM_LEFT" | "INSIDE_BOTTOM_CENTER" | "INSIDE_BOTTOM_RIGHT" => {
+                    padding.bottom = padding.bottom.max(icon_size);
+                }
+                "INSIDE_MIDDLE_LEFT" => {
+                    padding.left = padding.left.max(icon_size);
+                }
+                "INSIDE_MIDDLE_RIGHT" => {
+                    padding.right = padding.right.max(icon_size);
+                }
+                _ => {}
+            }
+        }
+
+        let (dx, dy) = self.get_modifier_element_adjustments();
+        margin.right += dx;
+        margin.top += dy;
+
+        (margin, padding)
     }
 
     /// Trace edge endpoints to the shape boundary.
@@ -911,12 +1027,14 @@ impl Edge {
     }
 
     /// Get edge stroke color based on style and stroke-dash.
-    pub fn get_stroke(&self, _stroke_dash: f64) -> &str {
+    pub fn get_stroke(&self, stroke_dash: f64) -> &str {
         if let Some(ref s) = self.style.stroke {
-            &s.value
-        } else {
-            d2_color::B1
+            return &s.value;
         }
+        if stroke_dash != 0.0 {
+            return d2_color::B2;
+        }
+        d2_color::B1
     }
 
     /// Trace edge endpoints to the shape boundaries.
@@ -1204,8 +1322,9 @@ impl Graph {
             },
             ..Default::default()
         };
+        let edge_idx = self.edges.len();
         self.edges.push(edge);
-        Ok(index)
+        Ok(edge_idx)
     }
 
     /// Check if there's an object at the given id_val path from root.
@@ -1280,5 +1399,80 @@ mod tests {
             ..Default::default()
         });
         assert!(g.objects[parent].is_container());
+    }
+
+    #[test]
+    fn object_get_stroke_matches_go_defaults() {
+        let text = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_TEXT.into(),
+            },
+            ..Default::default()
+        };
+        assert_eq!(text.get_stroke(0.0), d2_color::N1);
+
+        let code = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_CODE.into(),
+            },
+            ..Default::default()
+        };
+        assert_eq!(code.get_stroke(0.0), d2_color::N1);
+
+        let class = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_CLASS.into(),
+            },
+            ..Default::default()
+        };
+        assert_eq!(class.get_stroke(0.0), d2_color::N7);
+
+        let dashed = Object::default();
+        assert_eq!(dashed.get_stroke(5.0), d2_color::B2);
+    }
+
+    #[test]
+    fn edge_get_stroke_matches_go_defaults() {
+        let edge = Edge::default();
+        assert_eq!(edge.get_stroke(0.0), d2_color::B1);
+        assert_eq!(edge.get_stroke(5.0), d2_color::B2);
+    }
+
+    #[test]
+    fn has_label_and_icon_match_go_special_cases() {
+        let text = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_TEXT.into(),
+            },
+            label: Label {
+                value: "hello".into(),
+                ..Default::default()
+            },
+            icon: Some("https://example.com/icon.svg".into()),
+            ..Default::default()
+        };
+        assert!(!text.has_label());
+        assert!(text.has_icon());
+
+        let code = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_CODE.into(),
+            },
+            label: Label {
+                value: "hello".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!code.has_label());
+
+        let image = Object {
+            shape: ScalarValue {
+                value: d2_target::SHAPE_IMAGE.into(),
+            },
+            icon: Some("https://example.com/icon.svg".into()),
+            ..Default::default()
+        };
+        assert!(!image.has_icon());
     }
 }

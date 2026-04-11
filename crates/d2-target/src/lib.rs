@@ -1044,6 +1044,12 @@ fn label_top_left(
     (x, y)
 }
 
+fn icon_size(sw: f64, sh: f64) -> i32 {
+    let min_side = sw.min(sh);
+    let size = (min_side * 0.8) as i32;
+    size.min(MAX_ICON_SIZE).max(DEFAULT_ICON_SIZE)
+}
+
 impl Diagram {
     /// Compute the axis-aligned bounding box of all shapes and connections.
     ///
@@ -1109,6 +1115,28 @@ impl Diagram {
                 x2 = x2.max(label_tl.0 as i32 + s.text.label_width);
                 y2 = y2.max(label_tl.1 as i32 + s.text.label_height);
             }
+
+            if s.icon.is_some()
+                && s.type_ != SHAPE_IMAGE
+                && !s.icon_position.is_empty()
+                && s.icon_position.contains("OUTSIDE")
+            {
+                let icon_side = icon_size(s.width as f64, s.height as f64) as f64;
+                let icon_tl = label_top_left(
+                    &s.icon_position,
+                    s.pos.x as f64,
+                    s.pos.y as f64,
+                    s.width as f64,
+                    s.height as f64,
+                    5.0,
+                    icon_side,
+                    icon_side,
+                );
+                x1 = x1.min(icon_tl.0 as i32);
+                y1 = y1.min(icon_tl.1 as i32);
+                x2 = x2.max(icon_tl.0 as i32 + icon_side as i32);
+                y2 = y2.max(icon_tl.1 as i32 + icon_side as i32);
+            }
         }
 
         for c in &self.connections {
@@ -1118,6 +1146,27 @@ impl Diagram {
                 y1 = y1.min(point.y.floor() as i32 - half_stroke);
                 x2 = x2.max(point.x.ceil() as i32 + half_stroke);
                 y2 = y2.max(point.y.ceil() as i32 + half_stroke);
+            }
+
+            // Include the connection's label in the bounding box. Go does
+            // this in `d2target.Diagram.BoundingBox`, and without it an edge
+            // label like `z -> z: hello` can extend past the auto-fit
+            // viewBox (see e.g. the `self-referencing` e2e case).
+            if !c.text.label.is_empty() && !c.label_position.is_empty() && !c.route.is_empty() {
+                let pos = d2_label::Position::from_string(&c.label_position);
+                let route = d2_geo::Route(c.route.clone());
+                if let Some((label_tl, _)) = pos.get_point_on_route(
+                    &route,
+                    c.stroke_width as f64,
+                    c.label_percentage,
+                    c.text.label_width as f64,
+                    c.text.label_height as f64,
+                ) {
+                    x1 = x1.min(label_tl.x as i32);
+                    y1 = y1.min(label_tl.y as i32);
+                    x2 = x2.max(label_tl.x as i32 + c.text.label_width);
+                    y2 = y2.max(label_tl.y as i32 + c.text.label_height);
+                }
             }
         }
 

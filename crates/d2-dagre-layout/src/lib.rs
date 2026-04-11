@@ -2,7 +2,7 @@
 //!
 //! Ported from Go `d2layouts/d2dagrelayout/layout.go`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use d2_geo::{Point, Segment};
 use d2_graph::{Graph, ObjId};
@@ -15,6 +15,7 @@ use d2_graph::{Graph, ObjId};
 #[allow(dead_code)]
 const MIN_RANK_SEP: i32 = 60;
 const EDGE_LABEL_GAP: i32 = 20;
+const CONSTANT_NEAR_PAD: f64 = 20.0;
 /// Default padding around container contents.
 #[allow(dead_code)]
 const DEFAULT_PADDING: f64 = 30.0;
@@ -326,6 +327,322 @@ fn position_labels_icons(obj: &mut d2_graph::Object) {
     }
 }
 
+#[derive(Clone)]
+struct ConstantNearSubgraph {
+    root_orig: ObjId,
+    edge_indices: Vec<usize>,
+    orig_to_temp: HashMap<ObjId, ObjId>,
+    temp: Graph,
+}
+
+fn is_constant_near_key(near_key: Option<&str>) -> bool {
+    matches!(
+        near_key,
+        Some(
+            "top-left"
+                | "top-center"
+                | "top-right"
+                | "center-left"
+                | "center-right"
+                | "bottom-left"
+                | "bottom-center"
+                | "bottom-right"
+        )
+    )
+}
+
+fn collect_subtree_ids(g: &Graph, root: ObjId, out: &mut HashSet<ObjId>) {
+    if !out.insert(root) {
+        return;
+    }
+    for &child in &g.objects[root].children_array {
+        collect_subtree_ids(g, child, out);
+    }
+}
+
+fn build_constant_near_subgraphs(g: &Graph) -> (Vec<ConstantNearSubgraph>, HashSet<ObjId>, HashSet<usize>) {
+    let mut subgraphs = Vec::new();
+    let mut excluded_objects = HashSet::new();
+    let mut excluded_edges = HashSet::new();
+    let root_children = g.objects[g.root].children_array.clone();
+
+    for root_obj in root_children {
+        if !is_constant_near_key(g.objects[root_obj].near_key.as_deref()) {
+            continue;
+        }
+
+        let mut subtree = HashSet::new();
+        collect_subtree_ids(g, root_obj, &mut subtree);
+
+        let has_external_edges = g.edges.iter().any(|edge| {
+            let src_in = subtree.contains(&edge.src);
+            let dst_in = subtree.contains(&edge.dst);
+            src_in ^ dst_in
+        });
+        if has_external_edges {
+            continue;
+        }
+
+        let mut temp = Graph::new();
+        temp.theme = g.theme.clone();
+
+        let mut subtree_ids: Vec<ObjId> = subtree.iter().copied().collect();
+        subtree_ids.sort_unstable();
+
+        let mut orig_to_temp = HashMap::new();
+        for orig_id in &subtree_ids {
+            let mut cloned = g.objects[*orig_id].clone();
+            cloned.children.clear();
+            cloned.children_array.clear();
+            cloned.parent = if *orig_id == root_obj {
+                cloned.near_key = None;
+                Some(temp.root)
+            } else {
+                g.objects[*orig_id]
+                    .parent
+                    .and_then(|parent| orig_to_temp.get(&parent).copied())
+            };
+            let temp_id = temp.add_object(cloned);
+            orig_to_temp.insert(*orig_id, temp_id);
+        }
+
+        let mut edge_indices = Vec::new();
+        for (edge_idx, edge) in g.edges.iter().enumerate() {
+            if !(subtree.contains(&edge.src) && subtree.contains(&edge.dst)) {
+                continue;
+            }
+            let mut cloned = edge.clone();
+            cloned.src = orig_to_temp[&edge.src];
+            cloned.dst = orig_to_temp[&edge.dst];
+            temp.add_edge(cloned);
+            edge_indices.push(edge_idx);
+        }
+
+        excluded_objects.extend(subtree.iter().copied());
+        excluded_edges.extend(edge_indices.iter().copied());
+        subgraphs.push(ConstantNearSubgraph {
+            root_orig: root_obj,
+            edge_indices,
+            orig_to_temp,
+            temp,
+        });
+    }
+
+    (subgraphs, excluded_objects, excluded_edges)
+}
+
+fn constant_near_root(g: &Graph, obj_id: ObjId) -> Option<ObjId> {
+    let mut current = Some(obj_id);
+    while let Some(id) = current {
+        if is_constant_near_key(g.objects[id].near_key.as_deref()) {
+            return Some(id);
+        }
+        current = g.objects[id].parent;
+    }
+    None
+}
+
+fn constant_near_bounding_box(g: &Graph, placed_constant_nears: &HashSet<ObjId>) -> (Point, Point) {
+    if g.objects.len() <= 1 {
+        return (Point::new(0.0, 0.0), Point::new(0.0, 0.0));
+    }
+
+    let mut x1 = f64::INFINITY;
+    let mut y1 = f64::INFINITY;
+    let mut x2 = f64::NEG_INFINITY;
+    let mut y2 = f64::NEG_INFINITY;
+
+    for obj_id in 0..g.objects.len() {
+        if obj_id == g.root {
+            continue;
+        }
+        let obj = &g.objects[obj_id];
+        if let Some(near_key) = obj.near_key.as_deref() {
+            if !placed_constant_nears.contains(&obj_id) {
+                continue;
+            }
+            match near_key {
+                "top-center" | "bottom-center" => {
+                    x1 = x1.min(obj.top_left.x);
+                    x2 = x2.max(obj.top_left.x + obj.width);
+                }
+                "center-left" | "center-right" => {
+                    y1 = y1.min(obj.top_left.y);
+                    y2 = y2.max(obj.top_left.y + obj.height);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if constant_near_root(g, obj_id).is_some() {
+            continue;
+        }
+
+        x1 = x1.min(obj.top_left.x);
+        y1 = y1.min(obj.top_left.y);
+        x2 = x2.max(obj.top_left.x + obj.width);
+        y2 = y2.max(obj.top_left.y + obj.height);
+
+        if obj.has_label()
+            && obj
+                .label_position
+                .as_deref()
+                .is_some_and(|pos| pos.contains("OUTSIDE"))
+            && let Some(label_tl) = obj.get_label_top_left()
+        {
+            x1 = x1.min(label_tl.x);
+            y1 = y1.min(label_tl.y);
+            x2 = x2.max(label_tl.x + obj.label_dimensions.width as f64);
+            y2 = y2.max(label_tl.y + obj.label_dimensions.height as f64);
+        }
+    }
+
+    for edge in &g.edges {
+        if constant_near_root(g, edge.src).is_some() || constant_near_root(g, edge.dst).is_some() {
+            continue;
+        }
+        for point in &edge.route {
+            x1 = x1.min(point.x);
+            y1 = y1.min(point.y);
+            x2 = x2.max(point.x);
+            y2 = y2.max(point.y);
+        }
+    }
+
+    if x1.is_infinite() && x2.is_infinite() {
+        x1 = 0.0;
+        x2 = 0.0;
+    }
+    if y1.is_infinite() && y2.is_infinite() {
+        y1 = 0.0;
+        y2 = 0.0;
+    }
+
+    (Point::new(x1, y1), Point::new(x2, y2))
+}
+
+fn place_constant_near(
+    obj: &d2_graph::Object,
+    near_key: &str,
+    g: &Graph,
+    placed_constant_nears: &HashSet<ObjId>,
+) -> Point {
+    let (tl, br) = constant_near_bounding_box(g, placed_constant_nears);
+    let w = br.x - tl.x;
+    let h = br.y - tl.y;
+
+    let (mut x, mut y) = match near_key {
+        "top-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, tl.y - obj.height - CONSTANT_NEAR_PAD),
+        "top-center" => (tl.x + w / 2.0 - obj.width / 2.0, tl.y - obj.height - CONSTANT_NEAR_PAD),
+        "top-right" => (br.x + CONSTANT_NEAR_PAD, tl.y - obj.height - CONSTANT_NEAR_PAD),
+        "center-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, tl.y + h / 2.0 - obj.height / 2.0),
+        "center-right" => (br.x + CONSTANT_NEAR_PAD, tl.y + h / 2.0 - obj.height / 2.0),
+        "bottom-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, br.y + CONSTANT_NEAR_PAD),
+        "bottom-center" => (br.x - w / 2.0 - obj.width / 2.0, br.y + CONSTANT_NEAR_PAD),
+        "bottom-right" => (br.x + CONSTANT_NEAR_PAD, br.y + CONSTANT_NEAR_PAD),
+        _ => (obj.top_left.x, obj.top_left.y),
+    };
+
+    if let Some(label_position) = obj.label_position.as_deref()
+        && !label_position.contains("INSIDE")
+    {
+        if label_position.contains("_TOP_") {
+            if near_key.contains("bottom") {
+                y += obj.label_dimensions.height as f64;
+            }
+        } else if label_position.contains("_LEFT_") {
+            if near_key.contains("right") {
+                x += obj.label_dimensions.width as f64;
+            }
+        } else if label_position.contains("_RIGHT_") {
+            if near_key.contains("left") {
+                x -= obj.label_dimensions.width as f64;
+            }
+        } else if label_position.contains("_BOTTOM_") && near_key.contains("top") {
+            y -= obj.label_dimensions.height as f64;
+        }
+    }
+
+    Point::new(x, y)
+}
+
+fn apply_constant_near_subgraphs(
+    g: &mut Graph,
+    subgraphs: &mut [ConstantNearSubgraph],
+    opts: &ConfigurableOpts,
+) -> Result<(), String> {
+    let ordered_groups = [
+        ["top-center", "bottom-center"].as_slice(),
+        ["center-left", "center-right"].as_slice(),
+        ["top-left", "top-right", "bottom-left", "bottom-right"].as_slice(),
+    ];
+    let mut placed_constant_nears = HashSet::new();
+
+    for near_group in ordered_groups {
+        for subgraph in subgraphs.iter_mut() {
+            let near_key = g.objects[subgraph.root_orig]
+                .near_key
+                .as_deref()
+                .unwrap_or_default();
+            if !near_group.contains(&near_key) {
+                continue;
+            }
+
+            layout(&mut subgraph.temp, Some(opts))?;
+            let temp_root = subgraph.orig_to_temp[&subgraph.root_orig];
+            let mut placed_root = subgraph.temp.objects[temp_root].clone();
+            placed_root.near_key = g.objects[subgraph.root_orig].near_key.clone();
+            let placement = place_constant_near(
+                &placed_root,
+                placed_root.near_key.as_deref().unwrap_or_default(),
+                g,
+                &placed_constant_nears,
+            );
+            let current_top_left = subgraph.temp.objects[temp_root].top_left;
+            let dx = placement.x - current_top_left.x;
+            let dy = placement.y - current_top_left.y;
+
+            for obj in subgraph.temp.objects.iter_mut().skip(1) {
+                obj.top_left.x += dx;
+                obj.top_left.y += dy;
+                obj.update_box();
+            }
+            for edge in &mut subgraph.temp.edges {
+                for point in &mut edge.route {
+                    point.x += dx;
+                    point.y += dy;
+                }
+            }
+
+            for (orig_id, temp_id) in &subgraph.orig_to_temp {
+                let temp_obj = &subgraph.temp.objects[*temp_id];
+                let orig_obj = &mut g.objects[*orig_id];
+                orig_obj.top_left = temp_obj.top_left;
+                orig_obj.width = temp_obj.width;
+                orig_obj.height = temp_obj.height;
+                orig_obj.box_ = temp_obj.box_;
+                orig_obj.label_position = temp_obj.label_position.clone();
+                orig_obj.icon_position = temp_obj.icon_position.clone();
+            }
+
+            for (edge_idx, temp_edge) in subgraph
+                .edge_indices
+                .iter()
+                .copied()
+                .zip(subgraph.temp.edges.iter())
+            {
+                g.edges[edge_idx].route = temp_edge.route.clone();
+                g.edges[edge_idx].is_curve = temp_edge.is_curve;
+                g.edges[edge_idx].label_position = temp_edge.label_position.clone();
+            }
+
+            placed_constant_nears.insert(subgraph.root_orig);
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Layout entry point
 // ---------------------------------------------------------------------------
@@ -337,6 +654,8 @@ fn position_labels_icons(obj: &mut d2_graph::Object) {
 pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), String> {
     let default_opts = ConfigurableOpts::default();
     let opts = opts.unwrap_or(&default_opts);
+    let (mut constant_near_subgraphs, excluded_objects, excluded_edges) =
+        build_constant_near_subgraphs(g);
 
     // Determine direction
     let root_direction = g.root_obj().direction.value.clone();
@@ -360,7 +679,10 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
     // Compute max label dimensions for rank separation
     let mut max_label_width = 0;
     let mut max_label_height = 0;
-    for edge in &g.edges {
+    for (edge_idx, edge) in g.edges.iter().enumerate() {
+        if excluded_edges.contains(&edge_idx) {
+            continue;
+        }
         max_label_width = max_label_width.max(edge.label_dimensions.width);
         max_label_height = max_label_height.max(edge.label_dimensions.height);
     }
@@ -392,7 +714,9 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
     // Register all objects with the mapper
     let mut mapper = ObjectMapper::new();
-    let obj_ids: Vec<ObjId> = (0..g.objects.len()).filter(|&i| i != g.root).collect();
+    let obj_ids: Vec<ObjId> = (0..g.objects.len())
+        .filter(|&i| i != g.root && !excluded_objects.contains(&i))
+        .collect();
     for &obj_id in &obj_ids {
         mapper.register(obj_id);
     }
@@ -425,7 +749,8 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
     // Add edges
     // Collect edge endpoint data first (immutable borrow)
-    let edge_data: Vec<(ObjId, ObjId, i32, i32, String)> = (0..g.edges.len())
+    let edge_data: Vec<(usize, ObjId, ObjId, i32, i32, String)> = (0..g.edges.len())
+        .filter(|ei| !excluded_edges.contains(ei))
         .map(|ei| {
             let (src, dst) = get_edge_endpoints(g, ei);
             let edge = &g.edges[ei];
@@ -451,11 +776,11 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
             }
 
             let abs_id = edge.abs_id.clone();
-            (src, dst, width, height, abs_id)
+            (ei, src, dst, width, height, abs_id)
         })
         .collect();
 
-    for (src, dst, width, height, abs_id) in &edge_data {
+    for (_, src, dst, width, height, abs_id) in &edge_data {
         let src_dagre = mapper.to_dagre_id(*src).to_owned();
         let dst_dagre = mapper.to_dagre_id(*dst).to_owned();
         dagre_g.set_edge(
@@ -502,12 +827,17 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         }
     }
 
-    // Read back edge routes
+    // Read back edge routes. Mirror Go's flow carefully: store the raw
+    // dagre route on each edge (reversed for reverse arrows), perform a
+    // preliminary clip at src/dst boxes, and defer curve building until
+    // after `adjust_*_spacing` and `fit_container_padding` have had a
+    // chance to shift nodes and route points around.
     let dagre_edges = dagre_g.edges();
-    for (ei, edge_desc) in dagre_edges.iter().enumerate() {
-        if ei >= g.edges.len() {
+    for (route_idx, edge_desc) in dagre_edges.iter().enumerate() {
+        if route_idx >= edge_data.len() {
             break;
         }
+        let ei = edge_data[route_idx].0;
 
         if let Some(edge_label) = dagre_g.edge_by_obj(edge_desc) {
             let raw_points: Vec<Point> = edge_label
@@ -529,11 +859,13 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 raw_points
             };
 
-            // Clip route at source/destination bounding boxes
-            let src_obj = &g.objects[edge.src];
-            let dst_obj = &g.objects[edge.dst];
-
+            // Preliminary chop at src/dst boxes — mirrors Go's first pass
+            // in `d2dagrelayout.Layout` (the block right after reading
+            // `JSON.stringify(g.edge(...))`). The final TraceToShape runs
+            // later, after spacing adjustments.
             if edge.src != edge.dst && points.len() >= 2 {
+                let src_box = g.objects[edge.src].box_;
+                let dst_box = g.objects[edge.dst].box_;
                 let mut start_index = 0;
                 let mut end_index = points.len() - 1;
                 let mut start = points[0];
@@ -541,12 +873,12 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
                 for i in 1..points.len() {
                     let seg = Segment::new(points[i - 1], points[i]);
-                    let ints = src_obj.box_.intersections(&seg);
+                    let ints = src_box.intersections(&seg);
                     if !ints.is_empty() {
                         start = ints[0];
                         start_index = i - 1;
                     }
-                    let ints = dst_obj.box_.intersections(&seg);
+                    let ints = dst_box.intersections(&seg);
                     if !ints.is_empty() {
                         end = ints[0];
                         end_index = i;
@@ -558,77 +890,9 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 points[0] = start;
                 let last = points.len() - 1;
                 points[last] = end;
-
-                // Second pass — mirror Go d2graph.layout.go's `TraceToShape`
-                // helper. The first pass uses a forward segment
-                // (points[i-1] -> points[i]); this pass uses the *reversed*
-                // segment (points[1] -> points[0] for the source side, and
-                // points[end-1] -> points[end] for the destination side).
-                // The reversal matters because `IntersectionPoint` rounds
-                // (s * udx) to the nearest integer, and the value of `s`
-                // changes between forward and reversed orientations. Without
-                // this second pass, route points like (60.5, 66) come out as
-                // (60.5359..., 66), which propagates into the diagram-bytes
-                // hash and breaks every byte-identical SVG comparison.
-                //
-                // We skip the label / icon / TraceToShapeBorder branches
-                // here — they only matter for outside labels, outside icons,
-                // and non-rectangular shapes, none of which the simple e2e
-                // sanity cases exercise. They can be added incrementally as
-                // more cases drive the need.
-                if points.len() >= 2 {
-                    let last = points.len() - 1;
-                    // Source side: segment is (points[1] -> points[0]).
-                    let starting_segment = Segment::new(points[1], points[0]);
-                    let ints = src_obj.box_.intersections(&starting_segment);
-                    if let Some(p) = ints.first() {
-                        points[0] = *p;
-                    }
-                    // Destination side: segment is (points[end-1] -> points[end]).
-                    let ending_segment = Segment::new(points[last - 1], points[last]);
-                    let ints = dst_obj.box_.intersections(&ending_segment);
-                    if let Some(p) = ints.first() {
-                        points[last] = *p;
-                    }
-                }
             }
 
-            // Build curved path from route points. Mirror Go d2dagrelayout
-            // pathData: the inner loop runs `for i := 1; i < len(vectors)-2;
-            // i++`. With len(vectors) == 4 (so vectors index 0..3), Go
-            // iterates only `i=1`, NOT `i=1,2`. The earlier Rust port used
-            // `1..vectors.len()-1`, which inserted three extra control
-            // points per dummy node and bloated the route — and the JSON
-            // hash — for any edge spanning more than two ranks.
-            let mut path = Vec::new();
-            if points.len() > 2 {
-                let vectors: Vec<d2_geo::Vector> = (1..points.len())
-                    .map(|i| points[i - 1].vector_to(&points[i]))
-                    .collect();
-
-                path.push(points[0]);
-                if vectors.len() > 1 {
-                    path.push(points[0].add_vector(&vectors[0].multiply(0.8)));
-                    if vectors.len() >= 3 {
-                        for i in 1..vectors.len() - 2 {
-                            let p = points[i];
-                            let v = &vectors[i];
-                            path.push(p.add_vector(&v.multiply(0.2)));
-                            path.push(p.add_vector(&v.multiply(0.5)));
-                            path.push(p.add_vector(&v.multiply(0.8)));
-                        }
-                    }
-                    let last_pt_idx = points.len() - 2;
-                    let last_vec_idx = vectors.len() - 1;
-                    path.push(points[last_pt_idx].add_vector(&vectors[last_vec_idx].multiply(0.2)));
-                    g.edges[ei].is_curve = true;
-                }
-                path.push(points[points.len() - 1]);
-            } else {
-                path = points;
-            }
-
-            g.edges[ei].route = path;
+            g.edges[ei].route = points;
 
             // Set edge label position
             if !g.edges[ei].label.value.is_empty() {
@@ -645,8 +909,85 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         position_labels_icons(&mut g.objects[i]);
     }
 
+    // Post-dagre spacing passes (mirror Go d2dagrelayout.Layout). These
+    // account for outside labels / icons and 3D/multiple shape visual
+    // extensions, which dagre itself does not model. Without them, shapes
+    // with `style.multiple` or `style.3d` end up 10px short on their right
+    // side and outside labels overlap neighbouring shapes.
+    adjust_rank_spacing(g, ranksep as f64, is_horizontal);
+    adjust_cross_rank_spacing(g, ranksep as f64, !is_horizontal);
+
     // Shrink containers around their children + padding.
     fit_container_padding(g);
+
+    // Final edge post-processing (mirrors the second `for _, edge := range
+    // g.Edges` block in Go `d2dagrelayout.Layout`). At this point node
+    // positions and route control points have been fully shifted, so we
+    // do short-segment fixes, a second TraceToShape pass, and curve
+    // generation on the final points.
+    for ei in 0..g.edges.len() {
+        let edge_route = g.edges[ei].route.clone();
+        if edge_route.is_empty() {
+            continue;
+        }
+        let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+        let src_box = g.objects[src_id].box_;
+        let dst_box = g.objects[dst_id].box_;
+        let mut points = edge_route;
+
+        // Second-pass TraceToShape — reverse segments so IntersectionPoint
+        // rounds the same way Go's geo package does. This keeps simple
+        // rectangular shapes byte-identical; outside-label/icon and
+        // non-rectangular shape handling is still TODO.
+        if src_id != dst_id && points.len() >= 2 {
+            let last = points.len() - 1;
+            let starting_segment = Segment::new(points[1], points[0]);
+            let ints = src_box.intersections(&starting_segment);
+            if let Some(p) = ints.first() {
+                points[0] = *p;
+            }
+            let ending_segment = Segment::new(points[last - 1], points[last]);
+            let ints = dst_box.intersections(&ending_segment);
+            if let Some(p) = ints.first() {
+                points[last] = *p;
+            }
+        }
+
+        // Build curved path from route points. Mirror Go d2dagrelayout
+        // pathData: the inner loop runs `for i := 1; i < len(vectors)-2;
+        // i++`, so with len(vectors) == 4 it iterates only `i=1`.
+        let mut path = Vec::new();
+        if points.len() > 2 {
+            let vectors: Vec<d2_geo::Vector> = (1..points.len())
+                .map(|i| points[i - 1].vector_to(&points[i]))
+                .collect();
+
+            path.push(points[0]);
+            if vectors.len() > 1 {
+                path.push(points[0].add_vector(&vectors[0].multiply(0.8)));
+                if vectors.len() >= 3 {
+                    for i in 1..vectors.len() - 2 {
+                        let p = points[i];
+                        let v = &vectors[i];
+                        path.push(p.add_vector(&v.multiply(0.2)));
+                        path.push(p.add_vector(&v.multiply(0.5)));
+                        path.push(p.add_vector(&v.multiply(0.8)));
+                    }
+                }
+                let last_pt_idx = points.len() - 2;
+                let last_vec_idx = vectors.len() - 1;
+                path.push(points[last_pt_idx].add_vector(&vectors[last_vec_idx].multiply(0.2)));
+                g.edges[ei].is_curve = true;
+            }
+            path.push(points[points.len() - 1]);
+        } else {
+            path = points;
+        }
+
+        g.edges[ei].route = path;
+    }
+
+    apply_constant_near_subgraphs(g, &mut constant_near_subgraphs, opts)?;
 
     Ok(())
 }
@@ -663,6 +1004,9 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 fn fit_container_padding(g: &mut Graph) {
     let root_children: Vec<ObjId> = g.objects[g.root].children_array.clone();
     for child_id in root_children {
+        if is_constant_near_key(g.objects[child_id].near_key.as_deref()) {
+            continue;
+        }
         fit_padding(g, child_id);
     }
 }
@@ -779,6 +1123,955 @@ fn child_outside_margin(obj: &d2_graph::Object) -> (d2_geo::Spacing, d2_geo::Spa
         }
     }
     (margin, zero)
+}
+
+// ---------------------------------------------------------------------------
+// Post-layout rank spacing adjustments
+//
+// These mirror Go `d2layouts/d2dagrelayout/layout.go`:
+//   - `getRanks`
+//   - `shiftDown`
+//   - `shiftUp`
+//   - `shiftReachableDown`
+//   - `adjustRankSpacing`
+//   - `adjustCrossRankSpacing`
+//   - `adjustDeltaForEdges` / `adjustEdges`
+//
+// They run after dagre finishes so that shapes with outside labels, icons,
+// or 3D/multiple modifiers get enough surrounding space, and so that nested
+// containers keep their padding clean.
+// ---------------------------------------------------------------------------
+
+use d2_geo::Spacing;
+
+/// Build rank data for post-processing. Mirrors Go `getRanks` — groups
+/// non-container objects by their (post-dagre) center position along the
+/// cross-axis, then records, for every container, the min/max rank of its
+/// non-container descendants. Non-containers land in `object_ranks`.
+fn get_ranks(
+    g: &Graph,
+    is_horizontal: bool,
+) -> (
+    Vec<Vec<ObjId>>,
+    HashMap<ObjId, usize>,
+    HashMap<ObjId, usize>,
+    HashMap<ObjId, usize>,
+) {
+    // i64-keyed buckets so ordering is deterministic and stable across runs.
+    let mut aligned: std::collections::BTreeMap<i64, Vec<ObjId>> = Default::default();
+    for (i, obj) in g.objects.iter().enumerate() {
+        if i == g.root {
+            continue;
+        }
+        if obj.is_container() {
+            continue;
+        }
+        let key = if is_horizontal {
+            (obj.top_left.x + obj.width / 2.0).ceil()
+        } else {
+            (obj.top_left.y + obj.height / 2.0).ceil()
+        };
+        aligned.entry(key as i64).or_default().push(i);
+    }
+
+    let mut ranks: Vec<Vec<ObjId>> = Vec::with_capacity(aligned.len());
+    let mut object_ranks: HashMap<ObjId, usize> = HashMap::new();
+    for (rank_idx, (_, objs)) in aligned.into_iter().enumerate() {
+        for &o in &objs {
+            object_ranks.insert(o, rank_idx);
+        }
+        ranks.push(objs);
+    }
+
+    let mut starting_parent_ranks: HashMap<ObjId, usize> = HashMap::new();
+    let mut ending_parent_ranks: HashMap<ObjId, usize> = HashMap::new();
+    for (i, obj) in g.objects.iter().enumerate() {
+        if i == g.root || obj.is_container() {
+            continue;
+        }
+        let r = object_ranks[&i];
+        let mut p = obj.parent;
+        while let Some(pid) = p {
+            if pid == g.root {
+                break;
+            }
+            let e = starting_parent_ranks.entry(pid).or_insert(r);
+            if r < *e {
+                *e = r;
+            }
+            let e2 = ending_parent_ranks.entry(pid).or_insert(r);
+            if r > *e2 {
+                *e2 = r;
+            }
+            p = g.objects[pid].parent;
+        }
+    }
+
+    (ranks, object_ranks, starting_parent_ranks, ending_parent_ranks)
+}
+
+/// Shift everything at-or-below `start` down by `distance` (mirrors Go
+/// `shiftDown`). Also shifts edge routes with guards to avoid collapsing
+/// endpoints onto static neighbours.
+fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
+    if is_horizontal {
+        let edge_len = g.edges.len();
+        for ei in 0..edge_len {
+            let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            let src_right = g.objects[src_id].top_left.x + g.objects[src_id].width;
+            let src_left = g.objects[src_id].top_left.x;
+            let dst_right = g.objects[dst_id].top_left.x + g.objects[dst_id].width;
+            let dst_left = g.objects[dst_id].top_left.x;
+            let route = &mut g.edges[ei].route;
+            if route.is_empty() {
+                continue;
+            }
+            let last = route.len() - 1;
+            let first_x = route[0].x;
+            let last_x = route[last].x;
+            if start <= first_x {
+                let on_static_src = first_x == src_right && src_left < start;
+                if !on_static_src {
+                    route[0].x += distance;
+                }
+            }
+            if start <= last_x {
+                let on_static_dst = last_x == dst_right && dst_left < start;
+                if !on_static_dst {
+                    route[last].x += distance;
+                }
+            }
+            for i in 1..last {
+                if route[i].x < start {
+                    continue;
+                }
+                route[i].x += distance;
+            }
+        }
+        for i in 0..g.objects.len() {
+            if i == g.root {
+                continue;
+            }
+            if g.objects[i].top_left.x < start {
+                continue;
+            }
+            g.objects[i].top_left.x += distance;
+        }
+    } else {
+        let edge_len = g.edges.len();
+        for ei in 0..edge_len {
+            let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            let src_bot = g.objects[src_id].top_left.y + g.objects[src_id].height;
+            let src_top = g.objects[src_id].top_left.y;
+            let dst_bot = g.objects[dst_id].top_left.y + g.objects[dst_id].height;
+            let dst_top = g.objects[dst_id].top_left.y;
+            let route = &mut g.edges[ei].route;
+            if route.is_empty() {
+                continue;
+            }
+            let last = route.len() - 1;
+            let first_y = route[0].y;
+            let last_y = route[last].y;
+            if start <= first_y {
+                let on_static_src = first_y == src_bot && src_top < start;
+                if !on_static_src {
+                    route[0].y += distance;
+                }
+            }
+            if start <= last_y {
+                let on_static_dst = last_y == dst_bot && dst_top < start;
+                if !on_static_dst {
+                    route[last].y += distance;
+                }
+            }
+            for i in 1..last {
+                if route[i].y < start {
+                    continue;
+                }
+                route[i].y += distance;
+            }
+        }
+        for i in 0..g.objects.len() {
+            if i == g.root {
+                continue;
+            }
+            if g.objects[i].top_left.y < start {
+                continue;
+            }
+            g.objects[i].top_left.y += distance;
+        }
+    }
+}
+
+/// Mirror of Go `shiftUp`: shift everything at-or-above `start` up by
+/// `distance`, with the same edge-endpoint guards as `shift_down`.
+fn shift_up(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
+    if is_horizontal {
+        let edge_len = g.edges.len();
+        for ei in 0..edge_len {
+            let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            let src_left = g.objects[src_id].top_left.x;
+            let src_right = g.objects[src_id].top_left.x + g.objects[src_id].width;
+            let dst_left = g.objects[dst_id].top_left.x;
+            let dst_right = g.objects[dst_id].top_left.x + g.objects[dst_id].width;
+            let route = &mut g.edges[ei].route;
+            if route.is_empty() {
+                continue;
+            }
+            let last = route.len() - 1;
+            let first_x = route[0].x;
+            let last_x = route[last].x;
+            if first_x <= start {
+                let on_static_src = first_x == src_left && start < src_right;
+                if !on_static_src {
+                    route[0].x -= distance;
+                }
+            }
+            if last_x <= start {
+                let on_static_dst = last_x == dst_left && start < dst_right;
+                if !on_static_dst {
+                    route[last].x -= distance;
+                }
+            }
+            for i in 1..last {
+                if start < route[i].x {
+                    continue;
+                }
+                route[i].x -= distance;
+            }
+        }
+        for i in 0..g.objects.len() {
+            if i == g.root {
+                continue;
+            }
+            if start < g.objects[i].top_left.x {
+                continue;
+            }
+            g.objects[i].top_left.x -= distance;
+        }
+    } else {
+        let edge_len = g.edges.len();
+        for ei in 0..edge_len {
+            let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            let src_top = g.objects[src_id].top_left.y;
+            let src_bot = g.objects[src_id].top_left.y + g.objects[src_id].height;
+            let dst_top = g.objects[dst_id].top_left.y;
+            // Go `shiftUp` has a small typo where dst checks only
+            // `top_left.y` for `onStaticDst`; keep that quirk for bytewise
+            // parity.
+            let route = &mut g.edges[ei].route;
+            if route.is_empty() {
+                continue;
+            }
+            let last = route.len() - 1;
+            let first_y = route[0].y;
+            let last_y = route[last].y;
+            if first_y <= start {
+                let on_static_src = first_y == src_top && start < src_bot;
+                if !on_static_src {
+                    route[0].y -= distance;
+                }
+            }
+            if last_y <= start {
+                let on_static_dst = last_y == dst_top && start < dst_top;
+                if !on_static_dst {
+                    route[last].y -= distance;
+                }
+            }
+            for i in 1..last {
+                if start < route[i].y {
+                    continue;
+                }
+                route[i].y -= distance;
+            }
+        }
+        for i in 0..g.objects.len() {
+            if i == g.root {
+                continue;
+            }
+            if start < g.objects[i].top_left.y {
+                continue;
+            }
+            g.objects[i].top_left.y -= distance;
+        }
+    }
+}
+
+/// BFS shift used by `adjust_cross_rank_spacing`. Shifts the chain of objects
+/// reachable (via containment or edges) from `obj` down/right by `distance`,
+/// growing containers that get stretched, and returning the set of shapes
+/// whose "margin" has thereby expanded (so the caller can avoid re-adding the
+/// same shift).
+///
+/// Mirrors Go `shiftReachableDown`. The `is_margin` flag distinguishes the
+/// "move because of container padding" case (`false`) from the "move because
+/// of this shape's own margin" case (`true`); the only difference is whether
+/// objects exactly at `start` also move.
+#[allow(clippy::too_many_arguments)]
+fn shift_reachable_down(
+    g: &mut Graph,
+    obj: ObjId,
+    start: f64,
+    distance: f64,
+    is_horizontal: bool,
+    is_margin: bool,
+) -> HashSet<ObjId> {
+    const THRESHOLD: f64 = 100.0;
+
+    let mut q: Vec<ObjId> = vec![obj];
+    let mut needs_move: HashSet<ObjId> = HashSet::new();
+    let mut seen: HashSet<ObjId> = HashSet::new();
+    let mut shifted: HashSet<ObjId> = HashSet::new();
+    let mut shifted_edges: HashSet<usize> = HashSet::new();
+
+    // Local helper: check whether any object `other` sits just below/right of
+    // `curr` (within `threshold`) and should therefore also be shifted.
+    let check_below = |g: &Graph, q: &mut Vec<ObjId>, seen: &HashSet<ObjId>, shifted: &HashSet<ObjId>, curr: ObjId| {
+        let curr_obj = &g.objects[curr];
+        let curr_bottom = curr_obj.top_left.y + curr_obj.height;
+        let curr_right = curr_obj.top_left.x + curr_obj.width;
+        if is_horizontal {
+            let mut original_right = curr_right;
+            if shifted.contains(&curr) {
+                original_right -= distance;
+            }
+            for oi in 0..g.objects.len() {
+                if oi == g.root || oi == curr {
+                    continue;
+                }
+                if g.objects[curr].is_descendant_of(oi, g) {
+                    continue;
+                }
+                let o = &g.objects[oi];
+                if original_right < o.top_left.x
+                    && o.top_left.x < original_right + distance + THRESHOLD
+                    && curr_obj.top_left.y < o.top_left.y + o.height
+                    && o.top_left.y < curr_bottom
+                {
+                    if !seen.contains(&oi) {
+                        q.push(oi);
+                    }
+                }
+            }
+        } else {
+            let mut original_bottom = curr_bottom;
+            if shifted.contains(&curr) {
+                original_bottom -= distance;
+            }
+            for oi in 0..g.objects.len() {
+                if oi == g.root || oi == curr {
+                    continue;
+                }
+                if g.objects[curr].is_descendant_of(oi, g) {
+                    continue;
+                }
+                let o = &g.objects[oi];
+                if original_bottom < o.top_left.y
+                    && o.top_left.y < original_bottom + distance + THRESHOLD
+                    && curr_obj.top_left.x < o.top_left.x + o.width
+                    && o.top_left.x < curr_right
+                {
+                    if !seen.contains(&oi) {
+                        q.push(oi);
+                    }
+                }
+            }
+        }
+    };
+
+    // Inner BFS loop — wrapped in a closure-less helper so we can restart it
+    // after "grow containers" widens objects and brings new neighbours into
+    // range.
+    let mut grown: HashSet<ObjId> = HashSet::new();
+    // Initial pass
+    'outer: loop {
+        while let Some(curr) = (!q.is_empty()).then(|| q.remove(0)) {
+            if seen.contains(&curr) {
+                continue;
+            }
+
+            // Objects behind `start` don't move unless they were explicitly
+            // queued via `needs_move` (e.g. their reverse-direction edge
+            // anchor was pushed).
+            if curr != obj && !needs_move.contains(&curr) {
+                let pos = if is_horizontal {
+                    g.objects[curr].top_left.x
+                } else {
+                    g.objects[curr].top_left.y
+                };
+                if pos < start {
+                    continue;
+                }
+            }
+
+            // Decide whether to shift `curr`.
+            let pos = if is_horizontal {
+                g.objects[curr].top_left.x
+            } else {
+                g.objects[curr].top_left.y
+            };
+            let mut shift = needs_move.contains(&curr);
+            if !shift {
+                shift = if is_margin { start <= pos } else { start < pos };
+            }
+            if shift {
+                if is_horizontal {
+                    g.objects[curr].top_left.x += distance;
+                } else {
+                    g.objects[curr].top_left.y += distance;
+                }
+                shifted.insert(curr);
+            }
+            seen.insert(curr);
+
+            // Walk up the parent chain (unless curr is a descendant of the
+            // original obj), to revisit ancestors that may need growing.
+            if let Some(p) = g.objects[curr].parent {
+                if p != g.root && !g.objects[curr].is_descendant_of(obj, g) && !seen.contains(&p) {
+                    q.push(p);
+                }
+            }
+            // Walk into children.
+            let children: Vec<ObjId> = g.objects[curr].children_array.clone();
+            for c in children {
+                if !seen.contains(&c) {
+                    q.push(c);
+                }
+            }
+
+            // Walk edges incident on `curr`.
+            for ei in 0..g.edges.len() {
+                if shifted_edges.contains(&ei) {
+                    continue;
+                }
+                let (src, dst) = (g.edges[ei].src, g.edges[ei].dst);
+                if src == curr && dst == curr {
+                    // Self-edge: shift every route point.
+                    let route = &mut g.edges[ei].route;
+                    for p in route.iter_mut() {
+                        if is_horizontal {
+                            p.x += distance;
+                        } else {
+                            p.y += distance;
+                        }
+                    }
+                    shifted_edges.insert(ei);
+                    continue;
+                } else if src == curr {
+                    let (route_len, first, last) = {
+                        let r = &g.edges[ei].route;
+                        if r.is_empty() {
+                            (0, Point::new(0.0, 0.0), Point::new(0.0, 0.0))
+                        } else {
+                            (r.len(), r[0], r[r.len() - 1])
+                        }
+                    };
+                    if route_len == 0 {
+                        continue;
+                    }
+                    if is_horizontal {
+                        if start <= last.x
+                            && g.objects[dst].top_left.x + g.objects[dst].width < last.x + distance
+                        {
+                            needs_move.insert(dst);
+                        }
+                    } else if start <= last.y
+                        && g.objects[dst].top_left.y + g.objects[dst].height < last.y + distance
+                    {
+                        needs_move.insert(dst);
+                    }
+                    if !seen.contains(&dst) {
+                        q.push(dst);
+                    }
+                    let was_shifted = shifted.contains(&curr);
+                    let curr_tl_x = g.objects[curr].top_left.x;
+                    let curr_tl_y = g.objects[curr].top_left.y;
+                    let route = &mut g.edges[ei].route;
+                    let mut start_index = 0usize;
+                    if is_horizontal {
+                        if was_shifted && first.x < curr_tl_x && first.x < start {
+                            route[0].x += distance;
+                            start_index = 1;
+                        }
+                        for i in start_index..route.len() {
+                            if start <= route[i].x {
+                                route[i].x += distance;
+                            }
+                        }
+                    } else {
+                        if was_shifted && first.y < curr_tl_y && first.y < start {
+                            route[0].y += distance;
+                            start_index = 1;
+                        }
+                        for i in start_index..route.len() {
+                            if start <= route[i].y {
+                                route[i].y += distance;
+                            }
+                        }
+                    }
+                    shifted_edges.insert(ei);
+                } else if dst == curr {
+                    let (route_len, first, last) = {
+                        let r = &g.edges[ei].route;
+                        if r.is_empty() {
+                            (0, Point::new(0.0, 0.0), Point::new(0.0, 0.0))
+                        } else {
+                            (r.len(), r[0], r[r.len() - 1])
+                        }
+                    };
+                    if route_len == 0 {
+                        continue;
+                    }
+                    if is_horizontal {
+                        if start <= first.x
+                            && g.objects[src].top_left.x + g.objects[src].width < first.x + distance
+                        {
+                            needs_move.insert(src);
+                        }
+                    } else if start <= first.y
+                        && g.objects[src].top_left.y + g.objects[src].height < first.y + distance
+                    {
+                        needs_move.insert(src);
+                    }
+                    if !seen.contains(&src) {
+                        q.push(src);
+                    }
+                    let was_shifted = shifted.contains(&curr);
+                    let curr_tl_x = g.objects[curr].top_left.x;
+                    let curr_tl_y = g.objects[curr].top_left.y;
+                    let route = &mut g.edges[ei].route;
+                    let mut end_index = route_len;
+                    if is_horizontal {
+                        if was_shifted && last.x < curr_tl_x && last.x < start {
+                            route[route_len - 1].x += distance;
+                            end_index = route_len - 1;
+                        }
+                        for i in 0..end_index {
+                            if start <= route[i].x {
+                                route[i].x += distance;
+                            }
+                        }
+                    } else {
+                        if was_shifted && last.y < curr_tl_y && last.y < start {
+                            route[route_len - 1].y += distance;
+                            end_index = route_len - 1;
+                        }
+                        for i in 0..end_index {
+                            if start <= route[i].y {
+                                route[i].y += distance;
+                            }
+                        }
+                    }
+                    shifted_edges.insert(ei);
+                }
+            }
+
+            check_below(g, &mut q, &seen, &shifted, curr);
+        }
+
+        // Grow ancestor containers that weren't themselves shifted but whose
+        // descendants moved across `start`. Mirrors Go's post-BFS
+        // container-grow walk (called after each `processQueue()` round).
+        // We snapshot `seen` before walking so new entries added during grow
+        // don't restart the scan in this round — Go uses `for o := range seen`
+        // with the same semantics (Go map iteration doesn't guarantee seeing
+        // entries inserted during iteration).
+        //
+        // Whenever a parent is grown we immediately re-run the BFS (continue
+        // 'outer) so the newly widened container can pull in its neighbours.
+        let seen_snapshot: Vec<ObjId> = seen.iter().copied().collect();
+        for o in seen_snapshot {
+            let mut p = g.objects[o].parent;
+            while let Some(pid) = p {
+                if pid == g.root {
+                    break;
+                }
+                if shifted.contains(&pid) || grown.contains(&pid) {
+                    break;
+                }
+                let (tl_x, tl_y) = (g.objects[pid].top_left.x, g.objects[pid].top_left.y);
+                let mut did_grow = false;
+                if is_horizontal {
+                    if tl_x < start {
+                        g.objects[pid].width += distance;
+                        grown.insert(pid);
+                        did_grow = true;
+                        check_below(g, &mut q, &seen, &shifted, pid);
+                    }
+                } else if tl_y < start {
+                    g.objects[pid].height += distance;
+                    grown.insert(pid);
+                    did_grow = true;
+                    check_below(g, &mut q, &seen, &shifted, pid);
+                }
+                if did_grow {
+                    // Go calls processQueue() right here, before continuing
+                    // the parent chain walk. Restarting the BFS from here
+                    // achieves the same effect.
+                    continue 'outer;
+                }
+                p = g.objects[pid].parent;
+            }
+        }
+        if q.is_empty() {
+            // Compute the set of "counted" margin increases, matching Go's
+            // rule: a shifted/grown object's margin only counts if no other
+            // shifted/grown object sits directly above (or beside) within
+            // `threshold` of it, otherwise the other one already shifted
+            // things and the margin was already absorbed.
+            let mut moved: Vec<ObjId> = shifted.iter().copied().collect();
+            moved.extend(grown.iter().copied());
+            let mut increased: HashSet<ObjId> = HashSet::new();
+            for &m in &moved {
+                let mo = &g.objects[m];
+                let (mx, my, mw, mh) = (mo.top_left.x, mo.top_left.y, mo.width, mo.height);
+                let mut counts = true;
+                for &other in &moved {
+                    if other == m {
+                        continue;
+                    }
+                    let oo = &g.objects[other];
+                    if is_horizontal {
+                        if oo.top_left.y + oo.height < my || my + mh < oo.top_left.y {
+                            continue;
+                        }
+                        if oo.top_left.x < mx && mx < oo.top_left.x + oo.width + THRESHOLD {
+                            counts = false;
+                            break;
+                        }
+                    } else {
+                        if oo.top_left.x + oo.width < mx || mx + mw < oo.top_left.x {
+                            continue;
+                        }
+                        if oo.top_left.y < my && my < oo.top_left.y + oo.height + THRESHOLD {
+                            counts = false;
+                            break;
+                        }
+                    }
+                }
+                if counts {
+                    increased.insert(m);
+                }
+            }
+            return increased;
+        }
+        // else: restart loop with newly queued work
+    }
+}
+
+/// Port of Go `adjustRankSpacing`. Walks rank-by-rank from the deepest rank
+/// up, pulls each container's starting / ending ancestor positions outward
+/// based on its non-rank-based padding, and shifts everything behind those
+/// positions to create room, growing the stretched containers in the
+/// process. Preserves Go's two-pass (ending then starting) order so the
+/// containers' boxes match bytewise.
+fn adjust_rank_spacing(g: &mut Graph, rank_sep: f64, is_horizontal: bool) {
+    let (ranks, object_ranks, starting_parent_ranks, ending_parent_ranks) =
+        get_ranks(g, is_horizontal);
+
+    for rank in (0..ranks.len()).rev() {
+        let mut starting_parents: Vec<ObjId> = Vec::new();
+        let mut ending_parents: Vec<ObjId> = Vec::new();
+        for &obj_id in &ranks[rank] {
+            let parent = match g.objects[obj_id].parent {
+                Some(p) if p != g.root => p,
+                _ => continue,
+            };
+            if ending_parent_ranks.get(&parent).copied() == Some(rank) {
+                ending_parents.push(parent);
+            }
+            if starting_parent_ranks.get(&parent).copied() == Some(rank) {
+                starting_parents.push(parent);
+            }
+        }
+
+        // --- compute starting ancestor positions -------------------------------
+        let mut starting_positions: HashMap<ObjId, f64> = HashMap::new();
+        while !starting_parents.is_empty() {
+            let mut ancestors: Vec<ObjId> = Vec::new();
+            for &parent in &starting_parents {
+                let (_, padding) = g.objects[parent].spacing();
+                let entry = starting_positions.entry(parent).or_insert(f64::INFINITY);
+                let start_position = if is_horizontal {
+                    let padding_increase = (padding.left - rank_sep / 2.0).max(0.0);
+                    g.objects[parent].top_left.x - padding_increase
+                } else {
+                    let padding_increase = (padding.top - rank_sep / 2.0).max(0.0);
+                    g.objects[parent].top_left.y - padding_increase
+                };
+                if start_position < *entry {
+                    *entry = start_position;
+                }
+                let children: Vec<ObjId> = g.objects[parent].children_array.clone();
+                for child in children {
+                    let in_rank = match object_ranks.get(&child) {
+                        Some(&r) => r == rank,
+                        None => starting_parent_ranks.get(&child).copied() == Some(rank),
+                    };
+                    if !in_rank {
+                        continue;
+                    }
+                    let (margin, _) = g.objects[child].spacing();
+                    let child_start = if is_horizontal {
+                        g.objects[child].top_left.x - margin.left - padding.left
+                    } else {
+                        g.objects[child].top_left.y - margin.top - padding.top
+                    };
+                    let entry = starting_positions.entry(parent).or_insert(f64::INFINITY);
+                    if child_start < *entry {
+                        *entry = child_start;
+                    }
+                }
+                if let Some(pp) = g.objects[parent].parent {
+                    if pp != g.root {
+                        ancestors.push(pp);
+                    }
+                }
+            }
+            starting_parents = ancestors;
+        }
+
+        // --- compute ending ancestor positions ---------------------------------
+        let mut ending_positions: HashMap<ObjId, f64> = HashMap::new();
+        while !ending_parents.is_empty() {
+            let mut ancestors: Vec<ObjId> = Vec::new();
+            for &parent in &ending_parents {
+                let (_, padding) = g.objects[parent].spacing();
+                let entry = ending_positions.entry(parent).or_insert(f64::NEG_INFINITY);
+                let end_position = if is_horizontal {
+                    g.objects[parent].top_left.x + g.objects[parent].width + padding.right
+                        - rank_sep / 2.0
+                } else {
+                    g.objects[parent].top_left.y + g.objects[parent].height + padding.bottom
+                        - rank_sep / 2.0
+                };
+                if end_position > *entry {
+                    *entry = end_position;
+                }
+                let children: Vec<ObjId> = g.objects[parent].children_array.clone();
+                for child in children {
+                    let in_rank = match object_ranks.get(&child) {
+                        Some(&r) => r == rank,
+                        None => ending_parent_ranks.get(&child).copied() == Some(rank),
+                    };
+                    if !in_rank {
+                        continue;
+                    }
+                    let (margin, _) = g.objects[child].spacing();
+                    let child_end = if is_horizontal {
+                        g.objects[child].top_left.x
+                            + g.objects[child].width
+                            + margin.right
+                            + padding.right
+                    } else {
+                        g.objects[child].top_left.y
+                            + g.objects[child].height
+                            + margin.bottom
+                            + padding.bottom
+                    };
+                    let entry = ending_positions.entry(parent).or_insert(f64::NEG_INFINITY);
+                    if child_end > *entry {
+                        *entry = child_end;
+                    }
+                }
+                if let Some(pp) = g.objects[parent].parent {
+                    if pp != g.root {
+                        ancestors.push(pp);
+                    }
+                }
+            }
+            ending_parents = ancestors;
+        }
+
+        // Adjust ending ancestors bottom-up (largest end first).
+        let mut ending_order: Vec<ObjId> = ending_positions.keys().copied().collect();
+        ending_order.sort_by(|a, b| {
+            ending_positions[b]
+                .partial_cmp(&ending_positions[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for ancestor in &ending_order {
+            let (pos, end_delta) = if is_horizontal {
+                let p = g.objects[*ancestor].top_left.x + g.objects[*ancestor].width;
+                (p, ending_positions[ancestor] - p)
+            } else {
+                let p = g.objects[*ancestor].top_left.y + g.objects[*ancestor].height;
+                (p, ending_positions[ancestor] - p)
+            };
+            if end_delta > 0.0 {
+                for oi in 0..g.objects.len() {
+                    if oi == g.root {
+                        continue;
+                    }
+                    if !g.objects[oi].is_container() {
+                        continue;
+                    }
+                    let start = starting_parent_ranks.get(&oi).copied();
+                    let end = ending_parent_ranks.get(&oi).copied();
+                    if let (Some(s), Some(e)) = (start, end) {
+                        if s <= rank && rank <= e {
+                            if is_horizontal && pos <= g.objects[oi].top_left.x + g.objects[oi].width {
+                                g.objects[oi].width += end_delta;
+                            } else if !is_horizontal
+                                && pos <= g.objects[oi].top_left.y + g.objects[oi].height
+                            {
+                                g.objects[oi].height += end_delta;
+                            }
+                        }
+                    }
+                }
+                shift_down(g, pos, end_delta, is_horizontal);
+            }
+        }
+
+        // Adjust starting ancestors top-down (smallest start first).
+        let mut starting_order: Vec<ObjId> = starting_positions.keys().copied().collect();
+        starting_order.sort_by(|a, b| {
+            starting_positions[a]
+                .partial_cmp(&starting_positions[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for ancestor in &starting_order {
+            let (pos, start_delta) = if is_horizontal {
+                let p = g.objects[*ancestor].top_left.x;
+                (p, p - starting_positions[ancestor])
+            } else {
+                let p = g.objects[*ancestor].top_left.y;
+                (p, p - starting_positions[ancestor])
+            };
+            if start_delta > 0.0 {
+                for oi in 0..g.objects.len() {
+                    if oi == g.root {
+                        continue;
+                    }
+                    if !g.objects[oi].is_container() {
+                        continue;
+                    }
+                    let start = starting_parent_ranks.get(&oi).copied();
+                    let end = ending_parent_ranks.get(&oi).copied();
+                    if let (Some(s), Some(e)) = (start, end) {
+                        if s <= rank && rank <= e {
+                            if is_horizontal && g.objects[oi].top_left.x <= pos {
+                                g.objects[oi].width += start_delta;
+                            } else if !is_horizontal && g.objects[oi].top_left.y <= pos {
+                                g.objects[oi].height += start_delta;
+                            }
+                        }
+                    }
+                }
+                shift_up(g, pos, start_delta, is_horizontal);
+            }
+        }
+    }
+}
+
+/// Port of Go `adjustCrossRankSpacing`. For each non-grid object, uses
+/// `Spacing()` to reserve margin on the side facing the cross-axis, shifting
+/// reachable shapes (via `shift_reachable_down`) to open up room. The
+/// `prev_margin` maps record how much of each direction's margin has already
+/// been handed out to an object so nested margins don't double-count.
+fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool) {
+    let mut prev_top: HashMap<ObjId, f64> = HashMap::new();
+    let mut prev_bottom: HashMap<ObjId, f64> = HashMap::new();
+    let mut prev_left: HashMap<ObjId, f64> = HashMap::new();
+    let mut prev_right: HashMap<ObjId, f64> = HashMap::new();
+
+    let obj_ids: Vec<ObjId> = (0..g.objects.len()).filter(|&i| i != g.root).collect();
+    for obj in obj_ids {
+        if g.objects[obj].is_grid_diagram() {
+            continue;
+        }
+        let (mut margin, padding) = g.objects[obj].spacing();
+        if !is_horizontal {
+            if let Some(&pm) = prev_bottom.get(&obj) {
+                margin.bottom -= pm;
+            }
+            if margin.bottom > 0.0 {
+                let start = g.objects[obj].top_left.y + g.objects[obj].height;
+                let increased = shift_reachable_down(g, obj, start, margin.bottom, is_horizontal, true);
+                for o in increased {
+                    let e = prev_bottom.entry(o).or_insert(0.0);
+                    if margin.bottom > *e {
+                        *e = margin.bottom;
+                    }
+                }
+            }
+            if padding.bottom > 0.0 {
+                let start = g.objects[obj].top_left.y + g.objects[obj].height;
+                shift_reachable_down(g, obj, start, padding.bottom, is_horizontal, false);
+                g.objects[obj].height += padding.bottom;
+            }
+            if let Some(&pm) = prev_top.get(&obj) {
+                margin.top -= pm;
+            }
+            if margin.top > 0.0 {
+                let start = g.objects[obj].top_left.y;
+                let increased = shift_reachable_down(g, obj, start, margin.top, is_horizontal, true);
+                for o in increased {
+                    let e = prev_top.entry(o).or_insert(0.0);
+                    if margin.top > *e {
+                        *e = margin.top;
+                    }
+                }
+            }
+            if padding.top > 0.0 {
+                let start = g.objects[obj].top_left.y;
+                shift_reachable_down(g, obj, start, padding.top, is_horizontal, false);
+                g.objects[obj].height += padding.top;
+            }
+        } else {
+            if let Some(&pm) = prev_right.get(&obj) {
+                margin.right -= pm;
+            }
+            if margin.right > 0.0 {
+                let start = g.objects[obj].top_left.x + g.objects[obj].width;
+                let increased = shift_reachable_down(g, obj, start, margin.right, is_horizontal, true);
+                for o in increased {
+                    let e = prev_right.entry(o).or_insert(0.0);
+                    if margin.right > *e {
+                        *e = margin.right;
+                    }
+                }
+            }
+            if padding.right > 0.0 {
+                let start = g.objects[obj].top_left.x + g.objects[obj].width;
+                shift_reachable_down(g, obj, start, padding.right, is_horizontal, false);
+                g.objects[obj].width += padding.right;
+            }
+            if let Some(&pm) = prev_left.get(&obj) {
+                margin.left -= pm;
+            }
+            if margin.left > 0.0 {
+                let start = g.objects[obj].top_left.x;
+                let increased = shift_reachable_down(g, obj, start, margin.left, is_horizontal, true);
+                for o in increased {
+                    let e = prev_left.entry(o).or_insert(0.0);
+                    if margin.left > *e {
+                        *e = margin.left;
+                    }
+                }
+            }
+            if padding.left > 0.0 {
+                let start = g.objects[obj].top_left.x;
+                shift_reachable_down(g, obj, start, padding.left, is_horizontal, false);
+                g.objects[obj].width += padding.left;
+            }
+        }
+    }
+
+    // Update box_ after all shifting.
+    for i in 0..g.objects.len() {
+        if i == g.root {
+            continue;
+        }
+        g.objects[i].update_box();
+    }
+    let _ = Spacing {
+        top: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+        right: 0.0,
+    }; // silence unused-import in minimal builds
 }
 
 // ---------------------------------------------------------------------------

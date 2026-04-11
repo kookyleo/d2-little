@@ -974,6 +974,20 @@ fn draw_connection(
                 );
             }
 
+            // Background rect for labels with an explicit fill.
+            // Mirrors Go `drawConnection` — the rect has `rx=10`, sits 4px
+            // left / 3px top of the label, and is 8px wider / 6px taller.
+            if !connection.fill.is_empty() && connection.fill != "transparent" {
+                let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
+                rect_el.rx = Some(10.0);
+                rect_el.x = Some(label_tl.x - 4.0);
+                rect_el.y = Some(label_tl.y - 3.0);
+                rect_el.width = Some(connection.text.label_width as f64 + 8.0);
+                rect_el.height = Some(connection.text.label_height as f64 + 6.0);
+                rect_el.fill = connection.fill.clone();
+                buf.push_str(&rect_el.render());
+            }
+
             // Render label text
             let font_class = if connection.text.bold {
                 "text-bold"
@@ -2307,7 +2321,10 @@ pub fn embed_fonts(
 ) {
     buf.push_str(r#"<style type="text/css"><![CDATA["#);
 
-    // Regular text font
+    // Order below mirrors Go d2renderers/d2svg/d2svg.go `embedFonts` exactly.
+    // Reordering breaks byte-for-byte parity with the Go exporter.
+
+    // 1. Regular text font
     append_on_trigger(
         buf,
         source,
@@ -2333,7 +2350,92 @@ pub fn embed_fonts(
         ),
     );
 
-    // Bold font
+    // 2. Markdown semibold font (only when markdown content is present)
+    append_on_trigger(
+        buf,
+        source,
+        &[r#"class="md""#, r#"class="md "#],
+        &format!(
+            r#"
+@font-face {{
+	font-family: {dh}-font-semibold;
+	src: url("{url}");
+}}"#,
+            dh = diagram_hash,
+            url = font_family
+                .font(0, d2_fonts::FontStyle::Semibold)
+                .get_encoded_subset(corpus),
+        ),
+    );
+
+    // 3. Text underline
+    append_on_trigger(
+        buf,
+        source,
+        &["text-underline"],
+        r#"
+.text-underline {
+	text-decoration: underline;
+}"#,
+    );
+
+    // 4. Text link
+    append_on_trigger(
+        buf,
+        source,
+        &["text-link"],
+        r#"
+.text-link {
+	fill: blue;
+}
+
+.text-link:visited {
+	fill: purple;
+}"#,
+    );
+
+    // 5. Animated connection
+    append_on_trigger(
+        buf,
+        source,
+        &["animated-connection"],
+        r#"
+@keyframes dashdraw {
+	from {
+		stroke-dashoffset: 0;
+	}
+}
+"#,
+    );
+
+    // 6. Animated shape
+    append_on_trigger(
+        buf,
+        source,
+        &["animated-shape"],
+        r#"
+@keyframes shapeappear {
+    0%, 100% { transform: translateY(0); filter: drop-shadow(0px 0px 0px rgba(0,0,0,0)); }
+    50% { transform: translateY(-4px); filter: drop-shadow(0px 12.6px 25.2px rgba(50,50,93,0.25)) drop-shadow(0px 7.56px 15.12px rgba(0,0,0,0.1)); }
+}
+.animated-shape {
+	animation: shapeappear 1s linear infinite;
+}
+"#,
+    );
+
+    // 7. Appendix icon drop shadow
+    append_on_trigger(
+        buf,
+        source,
+        &["appendix-icon"],
+        r#"
+.appendix-icon {
+	filter: drop-shadow(0px 0px 32px rgba(31, 36, 58, 0.1));
+}"#,
+    );
+
+    // 8. Bold font
     append_on_trigger(
         buf,
         source,
@@ -2354,7 +2456,7 @@ pub fn embed_fonts(
         ),
     );
 
-    // Italic font
+    // 9. Italic font
     append_on_trigger(
         buf,
         source,
@@ -2375,7 +2477,7 @@ pub fn embed_fonts(
         ),
     );
 
-    // Mono font (regular). Trigger string matches Go d2svg.go.
+    // 10. Mono font (regular)
     append_on_trigger(
         buf,
         source,
@@ -2396,7 +2498,7 @@ pub fn embed_fonts(
         ),
     );
 
-    // Mono bold font.
+    // 11. Mono bold font
     append_on_trigger(
         buf,
         source,
@@ -2417,7 +2519,7 @@ pub fn embed_fonts(
         ),
     );
 
-    // Mono italic font.
+    // 12. Mono italic font
     append_on_trigger(
         buf,
         source,
@@ -2436,62 +2538,6 @@ pub fn embed_fonts(
                 .font(0, d2_fonts::FontStyle::Italic)
                 .get_encoded_subset(corpus),
         ),
-    );
-
-    // Text underline
-    append_on_trigger(
-        buf,
-        source,
-        &["text-underline"],
-        r#"
-.text-underline {
-	text-decoration: underline;
-}"#,
-    );
-
-    // Text link
-    append_on_trigger(
-        buf,
-        source,
-        &["text-link"],
-        r#"
-.text-link {
-	fill: blue;
-}
-
-.text-link:visited {
-	fill: purple;
-}"#,
-    );
-
-    // Animated connection
-    append_on_trigger(
-        buf,
-        source,
-        &["animated-connection"],
-        r#"
-@keyframes dashdraw {
-	from {
-		stroke-dashoffset: 0;
-	}
-}
-"#,
-    );
-
-    // Animated shape
-    append_on_trigger(
-        buf,
-        source,
-        &["animated-shape"],
-        r#"
-@keyframes shapeappear {
-    0%, 100% { transform: translateY(0); filter: drop-shadow(0px 0px 0px rgba(0,0,0,0)); }
-    50% { transform: translateY(-4px); filter: drop-shadow(0px 12.6px 25.2px rgba(50,50,93,0.25)) drop-shadow(0px 7.56px 15.12px rgba(0,0,0,0.1)); }
-}
-.animated-shape {
-	animation: shapeappear 1s linear infinite;
-}
-"#,
     );
 
     buf.push_str("]]></style>");
