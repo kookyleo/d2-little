@@ -1044,10 +1044,21 @@ fn label_top_left(
     (x, y)
 }
 
-fn icon_size(sw: f64, sh: f64) -> i32 {
-    let min_side = sw.min(sh);
-    let size = (min_side * 0.8) as i32;
-    size.min(MAX_ICON_SIZE).max(DEFAULT_ICON_SIZE)
+/// Port of Go `d2target.GetIconSize`. For outside / non-center icon
+/// positions the result is `min(minDim, max(DEFAULT_ICON_SIZE, ceil(minDim/2)))`,
+/// clamped to `MAX_ICON_SIZE`. `InsideMiddleCenter` returns `halfMinDimension`
+/// and clamps to the inner box minus label padding; that path isn't hit
+/// from `bounding_box` (which only uses outside positions) so we model
+/// only the outside branch here.
+fn icon_size(sw: f64, sh: f64, is_inside_center: bool) -> i32 {
+    let min_dim = sw.min(sh) as i32;
+    let half_min = (0.5 * min_dim as f64).ceil() as i32;
+    let size = if is_inside_center {
+        half_min
+    } else {
+        min_dim.min(DEFAULT_ICON_SIZE.max(half_min))
+    };
+    size.min(MAX_ICON_SIZE)
 }
 
 impl Diagram {
@@ -1121,7 +1132,10 @@ impl Diagram {
                 && !s.icon_position.is_empty()
                 && s.icon_position.contains("OUTSIDE")
             {
-                let icon_side = icon_size(s.width as f64, s.height as f64) as f64;
+                // Go passes `iconPosition.IsInsideCenter()` to GetIconSize;
+                // this block only runs for OUTSIDE_* positions so we pass
+                // `false`.
+                let icon_side = icon_size(s.width as f64, s.height as f64, false) as f64;
                 let icon_tl = label_top_left(
                     &s.icon_position,
                     s.pos.x as f64,
