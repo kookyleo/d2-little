@@ -524,16 +524,32 @@ impl Object {
 
     /// Return text info for this object.
     /// Matches Go d2graph.Object.Text(): leaf shapes default to bold;
-    /// containers/text shapes default to non-bold; explicit style.bold overrides.
-    pub fn text(&self) -> MText {
+    /// containers/text shapes default to non-bold; container labels scale
+    /// with depth (level 1 → XXL, 2 → XL, 3 → L, else M); explicit
+    /// `style.bold` / `style.font-size` always win.
+    pub fn text(&self, graph: &Graph) -> MText {
         let is_container = !self.children_array.is_empty();
         let mut is_bold = !is_container && self.shape.value != "text";
         if let Some(v) = self.style.bold.as_ref() {
             is_bold = v.value == "true";
         }
+        // Default font size: leaves get FONT_SIZE_M (16); containers (and
+        // grid diagrams, not yet modeled) scale by container level.
+        let font_size: i32 = if let Some(v) = self.style.font_size.as_ref() {
+            v.value.parse().unwrap_or(16)
+        } else if is_container && self.shape.value != "text" {
+            match self.level(graph) {
+                1 => 28, // FONT_SIZE_XXL
+                2 => 24, // FONT_SIZE_XL
+                3 => 20, // FONT_SIZE_L
+                _ => 16, // FONT_SIZE_M
+            }
+        } else {
+            16
+        };
         MText {
             text: self.label.value.clone(),
-            font_size: 16, // default
+            font_size,
             is_bold,
             is_italic: self
                 .style
@@ -576,13 +592,80 @@ impl Object {
         false
     }
 
-    /// Get the fill color based on style.
-    pub fn get_fill(&self) -> &str {
+    /// Get the fill color based on style. If the user set an explicit
+    /// `style.fill`, use it; otherwise pick the default color based on
+    /// shape type and container level. Mirrors Go d2graph.Object.GetFill
+    /// for the cases d2 emits in normal usage (sequence-diagram and the
+    /// exotic Cylinder/Step/Person/etc. branches are still TODO).
+    pub fn get_fill(&self, graph: &Graph) -> &str {
         if let Some(ref f) = self.style.fill {
-            &f.value
-        } else {
-            d2_color::B6
+            return &f.value;
         }
+
+        let shape = self.shape.value.to_lowercase();
+        if shape == d2_target::SHAPE_SQL_TABLE || shape == d2_target::SHAPE_CLASS {
+            return d2_color::N1;
+        }
+
+        let level = self.level(graph);
+        let is_container = self.is_container();
+        let is_rect_like = shape.is_empty()
+            || shape == d2_target::SHAPE_SQUARE
+            || shape == d2_target::SHAPE_CIRCLE
+            || shape == d2_target::SHAPE_OVAL
+            || shape == d2_target::SHAPE_RECTANGLE
+            || shape == d2_target::SHAPE_HIERARCHY;
+        if is_rect_like {
+            return match level {
+                1 => {
+                    if is_container {
+                        d2_color::B4
+                    } else {
+                        d2_color::B6
+                    }
+                }
+                2 => d2_color::B5,
+                3 => d2_color::B6,
+                _ => d2_color::N7,
+            };
+        }
+
+        if shape == d2_target::SHAPE_CYLINDER
+            || shape == d2_target::SHAPE_STORED_DATA
+            || shape == d2_target::SHAPE_PACKAGE
+        {
+            return if level == 1 {
+                d2_color::AA4
+            } else {
+                d2_color::AA5
+            };
+        }
+        if shape == d2_target::SHAPE_STEP
+            || shape == d2_target::SHAPE_PAGE
+            || shape == d2_target::SHAPE_DOCUMENT
+        {
+            return if level == 1 {
+                d2_color::AB4
+            } else {
+                d2_color::AB5
+            };
+        }
+        if shape == d2_target::SHAPE_PERSON || shape == d2_target::SHAPE_C4_PERSON {
+            return d2_color::B3;
+        }
+        if shape == d2_target::SHAPE_DIAMOND {
+            return d2_color::N4;
+        }
+        if shape == d2_target::SHAPE_CLOUD || shape == d2_target::SHAPE_CALLOUT {
+            return d2_color::N7;
+        }
+        if shape == d2_target::SHAPE_QUEUE
+            || shape == d2_target::SHAPE_PARALLELOGRAM
+            || shape == d2_target::SHAPE_HEXAGON
+        {
+            return d2_color::N5;
+        }
+        d2_color::N7
     }
 
     /// Get the stroke color based on style and stroke-dash.

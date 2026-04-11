@@ -593,10 +593,15 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 }
             }
 
-            // Build curved path from route points
+            // Build curved path from route points. Mirror Go d2dagrelayout
+            // pathData: the inner loop runs `for i := 1; i < len(vectors)-2;
+            // i++`. With len(vectors) == 4 (so vectors index 0..3), Go
+            // iterates only `i=1`, NOT `i=1,2`. The earlier Rust port used
+            // `1..vectors.len()-1`, which inserted three extra control
+            // points per dummy node and bloated the route — and the JSON
+            // hash — for any edge spanning more than two ranks.
             let mut path = Vec::new();
             if points.len() > 2 {
-                // Build vectors between consecutive points
                 let vectors: Vec<d2_geo::Vector> = (1..points.len())
                     .map(|i| points[i - 1].vector_to(&points[i]))
                     .collect();
@@ -604,12 +609,14 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 path.push(points[0]);
                 if vectors.len() > 1 {
                     path.push(points[0].add_vector(&vectors[0].multiply(0.8)));
-                    for i in 1..vectors.len().saturating_sub(1) {
-                        let p = points[i];
-                        let v = &vectors[i];
-                        path.push(p.add_vector(&v.multiply(0.2)));
-                        path.push(p.add_vector(&v.multiply(0.5)));
-                        path.push(p.add_vector(&v.multiply(0.8)));
+                    if vectors.len() >= 3 {
+                        for i in 1..vectors.len() - 2 {
+                            let p = points[i];
+                            let v = &vectors[i];
+                            path.push(p.add_vector(&v.multiply(0.2)));
+                            path.push(p.add_vector(&v.multiply(0.5)));
+                            path.push(p.add_vector(&v.multiply(0.8)));
+                        }
                     }
                     let last_pt_idx = points.len() - 2;
                     let last_vec_idx = vectors.len() - 1;
@@ -630,7 +637,148 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         }
     }
 
+    // Position default labels/icons (mirrors Go positionLabelsIcons).
+    for i in 0..g.objects.len() {
+        if i == g.root {
+            continue;
+        }
+        position_labels_icons(&mut g.objects[i]);
+    }
+
+    // Shrink containers around their children + padding.
+    fit_container_padding(g);
+
     Ok(())
+}
+
+/// Recursively shrink each top-level container to wrap its children with the
+/// minimum padding (mirrors Go d2layouts/d2dagrelayout/layout.go
+/// fitContainerPadding + fitPadding).
+///
+/// We only port the simple-rectangle path: containers with a non-rectangle
+/// shape, an inside label, an inside icon, or any internal-edge label-mask
+/// overlap detection are left alone for now. Those rely on `Object.Spacing`
+/// returning per-direction margin/padding values that account for label and
+/// icon positioning, which we haven't implemented yet.
+fn fit_container_padding(g: &mut Graph) {
+    let root_children: Vec<ObjId> = g.objects[g.root].children_array.clone();
+    for child_id in root_children {
+        fit_padding(g, child_id);
+    }
+}
+
+fn fit_padding(g: &mut Graph, obj_id: ObjId) {
+    let dsl_shape = g.objects[obj_id].shape.value.clone();
+    let is_container = !g.objects[obj_id].children_array.is_empty();
+
+    // Recurse depth-first regardless: nested containers must be sized first
+    // so the parent's inner-box computation sees their final dimensions.
+    let children: Vec<ObjId> = g.objects[obj_id].children_array.clone();
+    for child in &children {
+        fit_padding(g, *child);
+    }
+
+    // Match Go: only square-type containers (rectangle, sequence diagram,
+    // hierarchy, default "") get their bounds shrunk. Others are left to
+    // whatever dagre produced.
+    let is_square = matches!(
+        dsl_shape.as_str(),
+        "" | "rectangle" | "sequence_diagram" | "hierarchy"
+    );
+    if !is_container || !is_square {
+        return;
+    }
+
+    // Compute inner box from children's positions plus the parent's padding.
+    // We use a simplified Spacing: the parent gets DEFAULT_PADDING on all
+    // sides, and children get their own outside-label margin (e.g. nested
+    // containers with OUTSIDE_TOP_CENTER labels need extra room on top).
+    let pad_top = DEFAULT_PADDING;
+    let pad_bottom = DEFAULT_PADDING;
+    let pad_left = DEFAULT_PADDING;
+    let pad_right = DEFAULT_PADDING;
+
+    let current_top = g.objects[obj_id].top_left.y;
+    let current_bottom = g.objects[obj_id].top_left.y + g.objects[obj_id].height;
+    let current_left = g.objects[obj_id].top_left.x;
+    let current_right = g.objects[obj_id].top_left.x + g.objects[obj_id].width;
+
+    let mut inner_top = f64::INFINITY;
+    let mut inner_bottom = f64::NEG_INFINITY;
+    let mut inner_left = f64::INFINITY;
+    let mut inner_right = f64::NEG_INFINITY;
+
+    for &child in &children {
+        let c = &g.objects[child];
+        let (margin, _) = child_outside_margin(c);
+        let (dx, dy) = c.get_modifier_element_adjustments();
+        inner_top = inner_top.min(c.top_left.y - dy - margin.top.max(pad_top));
+        inner_bottom = inner_bottom.max(c.top_left.y + c.height + margin.bottom.max(pad_bottom));
+        inner_left = inner_left.min(c.top_left.x - margin.left.max(pad_left));
+        inner_right = inner_right.max(c.top_left.x + c.width + dx + margin.right.max(pad_right));
+    }
+
+    // Internal edges: Go also walks all edges that are descendants of this
+    // container and includes their route points (and label boxes). We skip
+    // that for now — most simple cases don't have internal edges that
+    // poke outside the children's bounding box.
+
+    let top_delta = inner_top - current_top;
+    let bottom_delta = current_bottom - inner_bottom;
+    let left_delta = inner_left - current_left;
+    let right_delta = current_right - inner_right;
+
+    // Only shrink (positive delta = excess space we can trim).
+    if top_delta > 0.0 {
+        g.objects[obj_id].top_left.y += top_delta;
+        g.objects[obj_id].height -= top_delta;
+    }
+    if bottom_delta > 0.0 {
+        g.objects[obj_id].height -= bottom_delta;
+    }
+    if left_delta > 0.0 {
+        g.objects[obj_id].top_left.x += left_delta;
+        g.objects[obj_id].width -= left_delta;
+    }
+    if right_delta > 0.0 {
+        g.objects[obj_id].width -= right_delta;
+    }
+    g.objects[obj_id].update_box();
+}
+
+/// Outside-label margin for a child object — mirrors the margin half of
+/// Go's `Object.Spacing()`. Used by `fit_padding` to leave enough room
+/// above/below/beside a child for its outside label.
+fn child_outside_margin(obj: &d2_graph::Object) -> (d2_geo::Spacing, d2_geo::Spacing) {
+    let zero = d2_geo::Spacing {
+        top: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+        right: 0.0,
+    };
+    let mut margin = zero;
+    if obj.has_label() && obj.label_position.is_some() {
+        // Go uses 2 * label.PADDING (== 10) of slack around the label.
+        const LABEL_PADDING_2X: f64 = 10.0;
+        let lw = obj.label_dimensions.width as f64 + LABEL_PADDING_2X;
+        let lh = obj.label_dimensions.height as f64 + LABEL_PADDING_2X;
+        match obj.label_position.as_deref().unwrap_or("") {
+            "OUTSIDE_TOP_LEFT" | "OUTSIDE_TOP_CENTER" | "OUTSIDE_TOP_RIGHT" => {
+                margin.top = lh;
+            }
+            "OUTSIDE_BOTTOM_LEFT" | "OUTSIDE_BOTTOM_CENTER" | "OUTSIDE_BOTTOM_RIGHT" => {
+                margin.bottom = lh;
+            }
+            "OUTSIDE_LEFT_TOP" | "OUTSIDE_LEFT_MIDDLE" | "OUTSIDE_LEFT_BOTTOM" => {
+                margin.left = lw;
+            }
+            "OUTSIDE_RIGHT_TOP" | "OUTSIDE_RIGHT_MIDDLE" | "OUTSIDE_RIGHT_BOTTOM" => {
+                margin.right = lw;
+            }
+            _ => {}
+        }
+    }
+    (margin, zero)
 }
 
 // ---------------------------------------------------------------------------

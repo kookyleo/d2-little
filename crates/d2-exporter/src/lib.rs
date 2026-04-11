@@ -158,7 +158,7 @@ fn apply_theme(
     g: &d2_graph::Graph,
 ) {
     shape.stroke = obj.get_stroke(shape.stroke_dash).to_owned();
-    shape.fill = obj.get_fill().to_owned();
+    shape.fill = obj.get_fill(g).to_owned();
 
     if obj.shape.value == d2_target::SHAPE_TEXT {
         shape.text.color = d2_color::N1.to_owned();
@@ -253,7 +253,7 @@ fn to_shape(obj: &d2_graph::Object, g: &d2_graph::Graph) -> d2_target::Shape {
     shape.height = obj.height as i32;
     shape.text.language = obj.language.clone();
 
-    let text = obj.text();
+    let text = obj.text(g);
     shape.text.bold = text.is_bold;
     shape.text.italic = text.is_italic;
     shape.text.font_size = text.font_size;

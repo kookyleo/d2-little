@@ -228,12 +228,24 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             .italic
             .as_ref()
             .is_some_and(|v| v.value == "true");
-        let font_size: i32 = g.objects[i]
-            .style
-            .font_size
-            .as_ref()
-            .and_then(|v| v.value.parse().ok())
-            .unwrap_or(FONT_SIZE_M);
+        // Default font size is FONT_SIZE_M (16). Containers (and grid
+        // diagrams, which we don't yet model) get a level-based size that
+        // scales with depth: level 1 → XXL, 2 → XL, 3 → L, else M. An
+        // explicit `style.font-size` always wins. Mirrors Go
+        // d2graph.Object.Text() + ContainerLevel.LabelSize().
+        let font_size: i32 = if let Some(v) = g.objects[i].style.font_size.as_ref() {
+            v.value.parse().unwrap_or(FONT_SIZE_M)
+        } else if is_container && shape != "text" {
+            let level = g.objects[i].level(g);
+            match level {
+                1 => d2_fonts::FONT_SIZE_XXL,
+                2 => d2_fonts::FONT_SIZE_XL,
+                3 => d2_fonts::FONT_SIZE_L,
+                _ => FONT_SIZE_M,
+            }
+        } else {
+            FONT_SIZE_M
+        };
 
         let font_style = if is_bold {
             FontStyle::Bold

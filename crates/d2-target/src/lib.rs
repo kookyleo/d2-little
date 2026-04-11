@@ -939,6 +939,111 @@ fn fnv1a32_mix(mut h: u32, data: &[u8]) -> u32 {
     h
 }
 
+/// Get the top-left of a label given its position string and the shape's
+/// bounding box. Mirrors Go `label.Position.GetPointOnBox`.
+fn label_top_left(
+    pos: &str,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    padding: f64,
+    lw: f64,
+    lh: f64,
+) -> (f64, f64) {
+    let cx = sx + sw / 2.0;
+    let cy = sy + sh / 2.0;
+    let (mut x, mut y) = (sx, sy);
+    match pos {
+        "OUTSIDE_TOP_LEFT" => {
+            x -= padding;
+            y -= padding + lh;
+        }
+        "OUTSIDE_TOP_CENTER" => {
+            x = cx - lw / 2.0;
+            y -= padding + lh;
+        }
+        "OUTSIDE_TOP_RIGHT" => {
+            x += sw - lw - padding;
+            y -= padding + lh;
+        }
+        "OUTSIDE_LEFT_TOP" => {
+            x -= padding + lw;
+            y += padding;
+        }
+        "OUTSIDE_LEFT_MIDDLE" => {
+            x -= padding + lw;
+            y = cy - lh / 2.0;
+        }
+        "OUTSIDE_LEFT_BOTTOM" => {
+            x -= padding + lw;
+            y += sh - lh - padding;
+        }
+        "OUTSIDE_RIGHT_TOP" => {
+            x += sw + padding;
+            y += padding;
+        }
+        "OUTSIDE_RIGHT_MIDDLE" => {
+            x += sw + padding;
+            y = cy - lh / 2.0;
+        }
+        "OUTSIDE_RIGHT_BOTTOM" => {
+            x += sw + padding;
+            y += sh - lh - padding;
+        }
+        "OUTSIDE_BOTTOM_LEFT" => {
+            x += padding;
+            y += sh + padding;
+        }
+        "OUTSIDE_BOTTOM_CENTER" => {
+            x = cx - lw / 2.0;
+            y += sh + padding;
+        }
+        "OUTSIDE_BOTTOM_RIGHT" => {
+            x += sw - lw - padding;
+            y += sh + padding;
+        }
+        "INSIDE_TOP_LEFT" => {
+            x += padding;
+            y += padding;
+        }
+        "INSIDE_TOP_CENTER" => {
+            x = cx - lw / 2.0;
+            y += padding;
+        }
+        "INSIDE_TOP_RIGHT" => {
+            x += sw - lw - padding;
+            y += padding;
+        }
+        "INSIDE_MIDDLE_LEFT" => {
+            x += padding;
+            y = cy - lh / 2.0;
+        }
+        "INSIDE_MIDDLE_CENTER" => {
+            x = cx - lw / 2.0;
+            y = cy - lh / 2.0;
+        }
+        "INSIDE_MIDDLE_RIGHT" => {
+            x += sw - lw - padding;
+            y = cy - lh / 2.0;
+        }
+        "INSIDE_BOTTOM_LEFT" => {
+            x += padding;
+            y += sh - lh - padding;
+        }
+        "INSIDE_BOTTOM_CENTER" => {
+            x = cx - lw / 2.0;
+            y += sh - lh - padding;
+        }
+        "INSIDE_BOTTOM_RIGHT" => {
+            x += sw - lw - padding;
+            y += sh - lh - padding;
+        }
+        _ => {}
+    }
+    (x, y)
+}
+
 impl Diagram {
     /// Compute the axis-aligned bounding box of all shapes and connections.
     ///
@@ -977,6 +1082,32 @@ impl Diagram {
             if s.multiple {
                 y1 = y1.min(s.pos.y - MULTIPLE_OFFSET - s.stroke_width);
                 x2 = x2.max(s.pos.x + MULTIPLE_OFFSET + s.width + s.stroke_width);
+            }
+
+            // Include the shape's label box. For inside-label shapes the
+            // label sits within the shape and doesn't extend the bbox, but
+            // outside-label shapes (containers with default OUTSIDE_TOP_
+            // CENTER, image with OUTSIDE_BOTTOM_CENTER, etc.) need their
+            // label region included so the diagram has room above/below.
+            if !s.text.label.is_empty() && !s.label_position.is_empty() {
+                let lw = s.text.label_width as f64;
+                let lh = s.text.label_height as f64;
+                // label.PADDING from Go d2's lib/label = 5.
+                const LABEL_PADDING: f64 = 5.0;
+                let label_tl = label_top_left(
+                    &s.label_position,
+                    s.pos.x as f64,
+                    s.pos.y as f64,
+                    s.width as f64,
+                    s.height as f64,
+                    LABEL_PADDING,
+                    lw,
+                    lh,
+                );
+                x1 = x1.min(label_tl.0 as i32);
+                y1 = y1.min(label_tl.1 as i32);
+                x2 = x2.max(label_tl.0 as i32 + s.text.label_width);
+                y2 = y2.max(label_tl.1 as i32 + s.text.label_height);
             }
         }
 
