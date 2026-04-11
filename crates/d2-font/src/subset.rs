@@ -381,14 +381,20 @@ impl Utf8FontFile {
             while (flags & SYMBOL_CONTINUE) != 0 {
                 flags = self.reader.read_u16();
                 let symbol_index = self.reader.read_u16() as usize;
-                if !symbol_set.contains_key(&symbol_index) {
+                let is_new = !symbol_set.contains_key(&symbol_index);
+                if is_new {
                     symbol_set.insert(symbol_index, symbols_collection.len());
                     symbols_collection.insert(symbol_index, 1);
                     keys.push(symbol_index);
                 }
-                let old_pos = self.reader.pos;
-                self.get_symbols(symbol_index, begin, symbol_set, symbols_collection, keys);
-                self.reader.seek_abs(old_pos);
+                // Only recurse for newly-discovered symbols (prevents cycles).
+                // Already-seen symbols are pushed to `keys` so they get processed
+                // by the iterative caller loop.
+                if is_new {
+                    let old_pos = self.reader.pos;
+                    self.get_symbols(symbol_index, begin, symbol_set, symbols_collection, keys);
+                    self.reader.seek_abs(old_pos);
+                }
 
                 if (flags & SYMBOL_WORDS) != 0 {
                     self.reader.skip(4);

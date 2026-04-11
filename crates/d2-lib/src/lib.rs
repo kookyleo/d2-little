@@ -370,3 +370,37 @@ mod tests {
         assert!(!ast.nodes.is_empty());
     }
 }
+
+#[cfg(test)]
+mod overflow_tests {
+    #[test]
+    fn binary_tree_pipeline() {
+        let script = "a -> b\na -> c\nb -> d\nb -> e\nc -> f\nc -> g\nd -> h\nd -> i\ne -> j\ne -> k\nf -> l\nf -> m\ng -> n\ng -> o\n";
+        eprintln!("[1] Compiling...");
+        let mut g = d2_compiler::compile("", script).unwrap();
+        eprintln!("[1] OK: {} objects, {} edges", g.objects.len(), g.edges.len());
+
+        eprintln!("[2] Theme...");
+        let theme = d2_themes::catalog::find(0).cloned();
+        g.theme = theme;
+        eprintln!("[2] OK");
+
+        eprintln!("[3] set_dimensions...");
+        let mut ruler = d2_textmeasure::Ruler::new().unwrap();
+        super::set_dimensions(&mut g, &mut ruler).unwrap();
+        eprintln!("[3] OK");
+
+        eprintln!("[4] dagre layout...");
+        d2_dagre_layout::layout(&mut g, None).unwrap();
+        eprintln!("[4] OK");
+
+        eprintln!("[5] export...");
+        let diagram = d2_exporter::export(&g, None, None).unwrap();
+        eprintln!("[5] OK");
+
+        eprintln!("[6] svg render...");
+        let opts = d2_svg_render::RenderOpts::default();
+        let svg = d2_svg_render::render(&diagram, &opts).unwrap();
+        eprintln!("[6] OK: {} bytes", svg.len());
+    }
+}
