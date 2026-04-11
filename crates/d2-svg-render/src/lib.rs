@@ -990,14 +990,23 @@ fn draw_connection(
                 buf.push_str(&rect_el.render());
             }
 
-            // Render label text
-            let font_class = if connection.text.bold {
-                "text-bold"
-            } else if connection.text.italic {
-                "text-italic"
+            // Render label text. Mirror Go `drawConnection`'s font-class
+            // construction: start from `text`/`text-mono` based on
+            // fontFamily, then suffix with `-bold`/`-italic`, and append
+            // a ` text-underline` token when needed.
+            let mut font_class = if connection.text.font_family == "mono" {
+                "text-mono".to_owned()
             } else {
-                "text"
+                "text".to_owned()
             };
+            if connection.text.bold {
+                font_class.push_str("-bold");
+            } else if connection.text.italic {
+                font_class.push_str("-italic");
+            }
+            if connection.text.underline {
+                font_class.push_str(" text-underline");
+            }
 
             let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
             text_el.x = Some(label_tl.x + connection.text.label_width as f64 / 2.0);
