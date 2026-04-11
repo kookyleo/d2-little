@@ -1,9 +1,15 @@
 use d2_geo::{BezierCurve, PathElement, Point, Segment};
 
-/// Truncate to float32 precision, then round to 4 decimal places.
-/// Ensures negative zero becomes positive zero.
+/// Mirror Go `lib/svg/path.go`'s `chopPrecision`: bring the value down to
+/// float32 precision, divide by 10000, and *then* round to nearest integer
+/// via `math.Round`. The net effect is that every shape path coordinate
+/// collapses to an integer — page-shape control points like `0.456297`
+/// end up as `0`, and `74.1836` ends up as `74`. This is what keeps Go's
+/// generated SVG paths byte-identical to the expected fixtures (which are
+/// all integer-valued).
 fn chop_precision(f: f64) -> f64 {
-    let result = ((f as f32 * 10000.0) as f64).round() / 10000.0;
+    let scaled = (f * 10000.0) as f32;
+    let result = (scaled as f64 / 10000.0).round();
     if result == 0.0 { 0.0 } else { result }
 }
 
@@ -467,7 +473,11 @@ mod tests {
 
     #[test]
     fn test_chop_precision() {
-        assert_eq!(chop_precision(1.23456), 1.2346);
+        // Go `math.Round` rounds to the nearest integer, so
+        // chopPrecision always lands on a whole number.
+        assert_eq!(chop_precision(1.23456), 1.0);
+        assert_eq!(chop_precision(74.1836), 74.0);
+        assert_eq!(chop_precision(16.5), 17.0);
         assert_eq!(chop_precision(-0.0), 0.0);
         assert_eq!(chop_precision(0.0), 0.0);
     }
