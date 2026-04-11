@@ -497,11 +497,253 @@ fn make_mapping(
     (mapping, bounds)
 }
 
-/// 对照 Go `face.GlyphBounds`：返回缩放后的 Int26_6 包围盒 + advance。
-/// 关键差异：
-/// * Go 会翻转 Y 轴（`xmin = +bMin.X; ymin = -bMax.Y; ymax = -bMin.Y`）。
-/// * 当 cmap 中找不到 rune 时，Go 使用 gid 0（.notdef）。这里也保持一致，
-///   这样 `unicode.ReplacementChar` 会 fallback 到 .notdef。
+/// Scaled-bounds output for a glyph. `b*` are Int26_6 values in Go's
+/// Y-inverted coordinate system (`xmin = +Min.X`, `ymin = -Max.Y`,
+/// `xmax = +Max.X`, `ymax = -Min.Y`).
+#[derive(Clone, Copy, Debug, Default)]
+struct ScaledBounds {
+    has_any: bool,
+    x_min: i32,
+    y_min: i32,
+    x_max: i32,
+    y_max: i32,
+}
+
+impl ScaledBounds {
+    fn ingest(&mut self, x: i32, y: i32) {
+        if !self.has_any {
+            self.has_any = true;
+            self.x_min = x;
+            self.x_max = x;
+            self.y_min = y;
+            self.y_max = y;
+            return;
+        }
+        if x < self.x_min {
+            self.x_min = x;
+        }
+        if x > self.x_max {
+            self.x_max = x;
+        }
+        if y < self.y_min {
+            self.y_min = y;
+        }
+        if y > self.y_max {
+            self.y_max = y;
+        }
+    }
+
+    fn union(&mut self, other: &ScaledBounds) {
+        if !other.has_any {
+            return;
+        }
+        self.ingest(other.x_min, other.y_min);
+        self.ingest(other.x_max, other.y_max);
+    }
+
+    fn shift(&self, dx: i32, dy: i32) -> ScaledBounds {
+        ScaledBounds {
+            has_any: self.has_any,
+            x_min: self.x_min + dx,
+            x_max: self.x_max + dx,
+            y_min: self.y_min + dy,
+            y_max: self.y_max + dy,
+        }
+    }
+}
+
+/// Read the raw glyf slice for the given gid so we can detect compound
+/// glyphs (numContours < 0) and iterate their component records. Simple
+/// glyphs use ttf-parser's regular bounding-box path.
+fn get_glyf_slice<'a>(face: &Face<'a>, gid: ttf_parser::GlyphId) -> Option<&'a [u8]> {
+    // ttf-parser doesn't expose a public helper to grab the raw glyf
+    // range, so pull it out of the RawFace table list. We look up the
+    // `loca` and `glyf` tables manually and index into them.
+    let raw = face.raw_face();
+    let loca_data = raw.table(ttf_parser::Tag::from_bytes(b"loca"))?;
+    let glyf_data = raw.table(ttf_parser::Tag::from_bytes(b"glyf"))?;
+    let head_data = raw.table(ttf_parser::Tag::from_bytes(b"head"))?;
+    // head.indexToLocFormat at byte 50 (u16)
+    if head_data.len() < 52 {
+        return None;
+    }
+    let loca_fmt = u16::from_be_bytes([head_data[50], head_data[51]]);
+    let idx = gid.0 as usize;
+    let (start, end) = if loca_fmt == 0 {
+        // short format: u16 offsets * 2
+        if loca_data.len() < 2 * idx + 4 {
+            return None;
+        }
+        let a = u16::from_be_bytes([loca_data[2 * idx], loca_data[2 * idx + 1]]) as usize * 2;
+        let b =
+            u16::from_be_bytes([loca_data[2 * idx + 2], loca_data[2 * idx + 3]]) as usize * 2;
+        (a, b)
+    } else {
+        if loca_data.len() < 4 * idx + 8 {
+            return None;
+        }
+        let a = u32::from_be_bytes([
+            loca_data[4 * idx],
+            loca_data[4 * idx + 1],
+            loca_data[4 * idx + 2],
+            loca_data[4 * idx + 3],
+        ]) as usize;
+        let b = u32::from_be_bytes([
+            loca_data[4 * idx + 4],
+            loca_data[4 * idx + 5],
+            loca_data[4 * idx + 6],
+            loca_data[4 * idx + 7],
+        ]) as usize;
+        (a, b)
+    };
+    if start >= end || end > glyf_data.len() {
+        return None;
+    }
+    Some(&glyf_data[start..end])
+}
+
+/// Compute Go-compatible `glyphBuf.Bounds` for a single glyph (scaled
+/// to Int26_6) by walking its compound components when necessary and
+/// applying `roundXYToGrid` to the component translations. Returns the
+/// bounds in the *pre-Y-inversion* coordinate system — callers must
+/// still apply the `(xmin=+Min.X, ymin=-Max.Y, …)` flip before storing
+/// `GlyphMetrics`.
+fn compute_glyph_bounds_scaled(
+    face: &Face<'_>,
+    gid: ttf_parser::GlyphId,
+    scale_26_6: i32,
+    fupe: i32,
+    recursion: u32,
+) -> ScaledBounds {
+    if recursion >= 32 {
+        return ScaledBounds::default();
+    }
+    let gd = match get_glyf_slice(face, gid) {
+        Some(d) => d,
+        None => return ScaledBounds::default(),
+    };
+    if gd.len() < 10 {
+        return ScaledBounds::default();
+    }
+    let ne = i16::from_be_bytes([gd[0], gd[1]]);
+    if ne >= 0 {
+        // Simple glyph: ttf-parser's glyph_bounding_box already returns
+        // the control-point rectangle in funit. Scale it and return.
+        let bb = match face.glyph_bounding_box(gid) {
+            Some(b) => b,
+            None => return ScaledBounds::default(),
+        };
+        let mut out = ScaledBounds::default();
+        out.ingest(
+            scale_funit_to_26_6(bb.x_min as i32, scale_26_6, fupe),
+            scale_funit_to_26_6(bb.y_min as i32, scale_26_6, fupe),
+        );
+        out.ingest(
+            scale_funit_to_26_6(bb.x_max as i32, scale_26_6, fupe),
+            scale_funit_to_26_6(bb.y_max as i32, scale_26_6, fupe),
+        );
+        return out;
+    }
+
+    // Compound glyph: walk each component record, load its own bounds
+    // recursively, apply the transform/translation and merge.
+    const FLAG_ARG_1_AND_2_ARE_WORDS: u16 = 0x0001;
+    const FLAG_ARGS_ARE_XY_VALUES: u16 = 0x0002;
+    const FLAG_ROUND_XY_TO_GRID: u16 = 0x0004;
+    const FLAG_WE_HAVE_A_SCALE: u16 = 0x0008;
+    const FLAG_MORE_COMPONENTS: u16 = 0x0020;
+    const FLAG_WE_HAVE_AN_X_AND_Y_SCALE: u16 = 0x0040;
+    const FLAG_WE_HAVE_A_TWO_BY_TWO: u16 = 0x0080;
+
+    let mut out = ScaledBounds::default();
+    let mut p = 10usize;
+    loop {
+        if p + 4 > gd.len() {
+            break;
+        }
+        let flags = u16::from_be_bytes([gd[p], gd[p + 1]]);
+        let comp_idx = u16::from_be_bytes([gd[p + 2], gd[p + 3]]);
+        p += 4;
+
+        let (dx_raw, dy_raw) = if flags & FLAG_ARG_1_AND_2_ARE_WORDS != 0 {
+            if p + 4 > gd.len() {
+                break;
+            }
+            let dx = i16::from_be_bytes([gd[p], gd[p + 1]]) as i32;
+            let dy = i16::from_be_bytes([gd[p + 2], gd[p + 3]]) as i32;
+            p += 4;
+            (dx, dy)
+        } else {
+            if p + 2 > gd.len() {
+                break;
+            }
+            let dx = (gd[p] as i8) as i32;
+            let dy = (gd[p + 1] as i8) as i32;
+            p += 2;
+            (dx, dy)
+        };
+
+        // We only support `args are XY values` + no transform (the
+        // common case for Source Sans Pro). Glyphs requesting a point
+        // matching / scale / 2×2 transform fall through to the
+        // component's bounds without adjustment — they're rare enough
+        // that we'd rather log an approximation than panic.
+        let has_transform = flags
+            & (FLAG_WE_HAVE_A_SCALE | FLAG_WE_HAVE_AN_X_AND_Y_SCALE | FLAG_WE_HAVE_A_TWO_BY_TWO)
+            != 0;
+        if has_transform {
+            // Skip past the transform bytes.
+            let skip = if flags & FLAG_WE_HAVE_A_SCALE != 0 {
+                2
+            } else if flags & FLAG_WE_HAVE_AN_X_AND_Y_SCALE != 0 {
+                4
+            } else {
+                8
+            };
+            p += skip;
+        }
+
+        let component_bounds = compute_glyph_bounds_scaled(
+            face,
+            ttf_parser::GlyphId(comp_idx),
+            scale_26_6,
+            fupe,
+            recursion + 1,
+        );
+
+        if flags & FLAG_ARGS_ARE_XY_VALUES != 0 {
+            // Translate by (dx, dy). Go scales the raw Int26_6 dx by
+            // `font.scale(g.scale * dx)` which is effectively
+            // `scale_funit_to_26_6(dx_raw, scale_26_6, fupe)`.
+            let mut dx_scaled = scale_funit_to_26_6(dx_raw, scale_26_6, fupe);
+            let mut dy_scaled = scale_funit_to_26_6(dy_raw, scale_26_6, fupe);
+            if flags & FLAG_ROUND_XY_TO_GRID != 0 {
+                // `(v + 32) &^ 63` — round to the nearest integer pixel
+                // boundary in Int26_6.
+                dx_scaled = (dx_scaled + 32) & !63;
+                dy_scaled = (dy_scaled + 32) & !63;
+            }
+            let shifted = component_bounds.shift(dx_scaled, dy_scaled);
+            out.union(&shifted);
+        } else {
+            // Point matching: not yet supported, just merge without
+            // translation. Should not affect Source Sans Pro tests.
+            out.union(&component_bounds);
+        }
+
+        if flags & FLAG_MORE_COMPONENTS == 0 {
+            break;
+        }
+    }
+
+    out
+}
+
+/// Build `GlyphMetrics` (Int26_6 control-box + advance) for a char,
+/// matching Go freetype's `face.GlyphBounds` output — including the
+/// `roundXYToGrid` adjustment applied by compound glyph records. Using
+/// ttf-parser's raw `glyph_bounding_box` for compound glyphs is off by
+/// up to one pixel because it skips that rounding step.
 fn compute_glyph_metrics(
     face: &Face<'_>,
     ch: char,
@@ -512,36 +754,26 @@ fn compute_glyph_metrics(
     let advance_funit = face.glyph_hor_advance(gid)? as i32;
     let advance = scale_funit_to_26_6(advance_funit, scale_26_6, fupe);
 
-    // ttf-parser 的 `glyph_bounding_box`：
-    //   * 字形存在且有 outline → Some(Rect)
-    //   * 字形存在但无 outline（e.g. ' '）→ None
-    //   * 字形完全不存在 → None
-    // Go 对空轮廓字形 (' ') 实际上 **仍会返回 ok=true** 的零矩形 + 正常 advance，
-    //   因为 `glyphBuf.Load` 把 `g.Bounds` 初始化为零矩形而 `GlyphBounds` 里
-    //   `xmin > xmax || ymin > ymax` 的检查对 0 == 0 是 false。所以为了和 Go 对齐，
-    //   这里把 bbox=None 当作 (0,0,0,0)，advance 照常。
-    let (x_min_funit, y_min_funit, x_max_funit, y_max_funit) = match face.glyph_bounding_box(gid) {
-        Some(b) => (
-            b.x_min as i32,
-            b.y_min as i32,
-            b.x_max as i32,
-            b.y_max as i32,
-        ),
-        None => (0, 0, 0, 0),
-    };
+    let bounds = compute_glyph_bounds_scaled(face, gid, scale_26_6, fupe, 0);
+    if !bounds.has_any {
+        // Go returns (0,0,0,0) + the normal advance for glyphs with no
+        // outline (e.g. space). Mirror that so `.w() * .h() == 0` falls
+        // through in the caller.
+        return Some(GlyphMetrics {
+            bx_min: 0,
+            by_min: 0,
+            bx_max: 0,
+            by_max: 0,
+            advance,
+        });
+    }
 
-    // Go freetype 对每个控制点做 `font.scale(g.scale * p)` 后计算 bounds。
-    // 这里等价地先算出缩放后的四个极值；注意 y 轴翻转。
-    let sx_min = scale_funit_to_26_6(x_min_funit, scale_26_6, fupe);
-    let sx_max = scale_funit_to_26_6(x_max_funit, scale_26_6, fupe);
-    let sy_min = scale_funit_to_26_6(y_min_funit, scale_26_6, fupe);
-    let sy_max = scale_funit_to_26_6(y_max_funit, scale_26_6, fupe);
-
-    // Go: xmin = +Min.X, ymin = -Max.Y, xmax = +Max.X, ymax = -Min.Y
-    let bx_min = sx_min;
-    let bx_max = sx_max;
-    let by_min = -sy_max;
-    let by_max = -sy_min;
+    // Go stores glyph bounds in a Y-inverted coordinate system:
+    //   xmin = +Min.X, ymin = -Max.Y, xmax = +Max.X, ymax = -Min.Y
+    let bx_min = bounds.x_min;
+    let bx_max = bounds.x_max;
+    let by_min = -bounds.y_max;
+    let by_max = -bounds.y_min;
 
     if bx_min > bx_max || by_min > by_max {
         return None;
