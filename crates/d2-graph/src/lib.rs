@@ -787,11 +787,14 @@ impl Edge {
             text: self.label.value.clone(),
             font_size,
             is_bold: self.style.bold.as_ref().is_some_and(|v| v.value == "true"),
+            // Match Go d2graph.Edge.Text(): edge labels default to italic.
+            // An explicit `style.italic: false` opts out, but absent any
+            // style the value should still be true.
             is_italic: self
                 .style
                 .italic
                 .as_ref()
-                .is_some_and(|v| v.value == "true"),
+                .map_or(true, |v| v.value == "true"),
             dimensions: self.label_dimensions,
         }
     }
@@ -987,7 +990,17 @@ impl Graph {
         } else {
             "--"
         };
-        let index = self.edges.len();
+        // Match Go d2graph.Edge.initIndex: the index counts only edges with
+        // the same (src, src_arrow, dst, dst_arrow) tuple — not the global
+        // edge count. So a graph with edges `a -> b` then `a -> c` produces
+        // `(a -> b)[0]` and `(a -> c)[0]`, not `[0]` and `[1]`.
+        let index = self
+            .edges
+            .iter()
+            .filter(|e| {
+                e.src == src && e.dst == dst && e.src_arrow == src_arrow && e.dst_arrow == dst_arrow
+            })
+            .count();
         let abs_id = format!("({} {} {})[{}]", src_id, arrow_str, dst_id, index);
 
         let edge = Edge {

@@ -6,11 +6,16 @@
 use std::process::Command;
 
 fn fixture_path(category: &str, name: &str) -> std::path::PathBuf {
+    // The Go d2 e2e harness writes fixtures to directories whose names have
+    // spaces replaced with underscores (testdata/<category>/<name>/dagre/...).
+    // Keep that translation here so a case named "1 to 2" looks up
+    // testdata/sanity/1_to_2/dagre/sketch.exp.svg.
+    let dir_name = name.replace(' ', "_");
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("e2e_testdata")
         .join(category)
-        .join(name)
+        .join(dir_name)
         .join("dagre")
         .join("sketch.exp.svg")
 }

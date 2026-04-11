@@ -179,7 +179,11 @@ pub fn d2_to_svg(input: &str) -> Result<Vec<u8>, String> {
 ///
 /// This is a simplified port of Go's `Graph.SetDimensions`.
 pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<(), String> {
-    let font_family = if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
+    // Default font family for the diagram. Themes with the `mono` special
+    // rule (e.g. the terminal theme) force everything to mono; otherwise
+    // start from SourceSansPro and let per-object `style.font: mono` opt
+    // individual labels into mono. Mirrors Go d2graph.GetLabelSize.
+    let default_family = if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
         FontFamily::SourceCodePro
     } else {
         FontFamily::SourceSansPro
@@ -190,6 +194,14 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
     for i in 1..count {
         let label = g.objects[i].label.value.clone();
         let shape = g.objects[i].shape.value.clone();
+        // Match Go d2graph.GetLabelSize: if the object has `style.font`,
+        // resolve it through the d2fonts.D2_FONT_TO_FAMILY map (only "mono"
+        // is currently meaningful — anything else stays on the default
+        // family).
+        let font_family = match g.objects[i].style.font.as_ref().map(|v| v.value.as_str()) {
+            Some("mono") => FontFamily::SourceCodePro,
+            _ => default_family,
+        };
 
         // Parse desired dimensions from user attributes
         let desired_width: i32 = g.objects[i]
@@ -322,11 +334,14 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             .bold
             .as_ref()
             .is_some_and(|v| v.value == "true");
+        // Match Go d2graph.Edge.Text(): edge labels default to italic.
+        // An explicit `style.italic: false` can turn it off, but absent
+        // a style we still measure with the italic font.
         let is_italic = g.edges[i]
             .style
             .italic
             .as_ref()
-            .is_some_and(|v| v.value == "true");
+            .map_or(true, |v| v.value == "true");
         let font_size: i32 = g.edges[i]
             .style
             .font_size
@@ -342,7 +357,13 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             FontStyle::Regular
         };
 
-        let font = d2_fonts::Font::new(font_family, font_style, font_size);
+        // Per-edge font override (matches Go d2graph.Edge.Text + GetLabelSize).
+        let edge_font_family = match g.edges[i].style.font.as_ref().map(|v| v.value.as_str()) {
+            Some("mono") => FontFamily::SourceCodePro,
+            _ => default_family,
+        };
+
+        let font = d2_fonts::Font::new(edge_font_family, font_style, font_size);
         let (tw, th) = ruler.measure(font, &label);
         g.edges[i].label_dimensions = d2_graph::Dimensions {
             width: tw,

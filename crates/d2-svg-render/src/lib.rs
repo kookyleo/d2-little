@@ -860,8 +860,10 @@ fn make_label_mask(label_tl: &d2_geo::Point, width: i32, height: i32, opacity: f
     } else {
         format!("rgba(0,0,0,{:.2})", opacity)
     };
+    // X/Y are float64 in Go, formatted with `%f` (six decimal places). Width
+    // and height are still int — Go uses `%d` for those.
     format!(
-        r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"></rect>"#,
+        r#"<rect x="{:.6}" y="{:.6}" width="{}" height="{}" fill="{}"></rect>"#,
         label_tl.x - 2.0,
         label_tl.y,
         width + 4,
@@ -2357,7 +2359,7 @@ pub fn embed_fonts(
         ),
     );
 
-    // Mono font
+    // Mono font (regular). Trigger string matches Go d2svg.go.
     append_on_trigger(
         buf,
         source,
@@ -2374,6 +2376,48 @@ pub fn embed_fonts(
             dh = diagram_hash,
             url = mono_font_family
                 .font(0, d2_fonts::FontStyle::Regular)
+                .get_encoded_subset(corpus),
+        ),
+    );
+
+    // Mono bold font.
+    append_on_trigger(
+        buf,
+        source,
+        &[r#"class="text-mono-bold"#],
+        &format!(
+            r#"
+.{dh} .text-mono-bold {{
+	font-family: "{dh}-font-mono-bold";
+}}
+@font-face {{
+	font-family: {dh}-font-mono-bold;
+	src: url("{url}");
+}}"#,
+            dh = diagram_hash,
+            url = mono_font_family
+                .font(0, d2_fonts::FontStyle::Bold)
+                .get_encoded_subset(corpus),
+        ),
+    );
+
+    // Mono italic font.
+    append_on_trigger(
+        buf,
+        source,
+        &[r#"class="text-mono-italic"#],
+        &format!(
+            r#"
+.{dh} .text-mono-italic {{
+	font-family: "{dh}-font-mono-italic";
+}}
+@font-face {{
+	font-family: {dh}-font-mono-italic;
+	src: url("{url}");
+}}"#,
+            dh = diagram_hash,
+            url = mono_font_family
+                .font(0, d2_fonts::FontStyle::Italic)
                 .get_encoded_subset(corpus),
         ),
     );
@@ -2851,7 +2895,12 @@ pub fn wrap(
         String::new()
     };
 
-    // Outer wrapper
+    // Outer wrapper. Note: this path mirrors Go d2animate.Wrap, which uses
+    // the OLDER `d2Version="..."` attribute name (not `data-d2-version`).
+    // d2animate's wrapper hasn't been updated to track d2svg.go's rename, so
+    // matching it byte-for-byte means keeping the old name here. The
+    // single-board path (boards.len() == 1) bypasses wrap() entirely and
+    // gets the modern `data-d2-version` from d2svg::render_multiboard.
     write!(
         buf,
         r#"<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" d2Version="v0.7.1-HEAD" preserveAspectRatio="xMinYMin meet" viewBox="0 0 {} {}"{}>"#,

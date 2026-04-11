@@ -471,12 +471,16 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         );
     }
 
-    // Run layout
+    // Run layout. `tie_keep_first = true` makes dagre-rs match dagre.js
+    // v0.8.5 (the version Go d2 v0.7.1 bundles), which is critical for
+    // byte-identical SVG output: without it, the order phase mirrors x
+    // coordinates for any rank with no crossings.
     let layout_opts = dagre::LayoutOptions {
         rankdir,
         nodesep: opts.node_sep as f64,
         edgesep: opts.edge_sep as f64,
         ranksep: ranksep as f64,
+        tie_keep_first: true,
         ..Default::default()
     };
     dagre::layout(&mut dagre_g, Some(layout_opts));
@@ -554,6 +558,39 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 points[0] = start;
                 let last = points.len() - 1;
                 points[last] = end;
+
+                // Second pass — mirror Go d2graph.layout.go's `TraceToShape`
+                // helper. The first pass uses a forward segment
+                // (points[i-1] -> points[i]); this pass uses the *reversed*
+                // segment (points[1] -> points[0] for the source side, and
+                // points[end-1] -> points[end] for the destination side).
+                // The reversal matters because `IntersectionPoint` rounds
+                // (s * udx) to the nearest integer, and the value of `s`
+                // changes between forward and reversed orientations. Without
+                // this second pass, route points like (60.5, 66) come out as
+                // (60.5359..., 66), which propagates into the diagram-bytes
+                // hash and breaks every byte-identical SVG comparison.
+                //
+                // We skip the label / icon / TraceToShapeBorder branches
+                // here — they only matter for outside labels, outside icons,
+                // and non-rectangular shapes, none of which the simple e2e
+                // sanity cases exercise. They can be added incrementally as
+                // more cases drive the need.
+                if points.len() >= 2 {
+                    let last = points.len() - 1;
+                    // Source side: segment is (points[1] -> points[0]).
+                    let starting_segment = Segment::new(points[1], points[0]);
+                    let ints = src_obj.box_.intersections(&starting_segment);
+                    if let Some(p) = ints.first() {
+                        points[0] = *p;
+                    }
+                    // Destination side: segment is (points[end-1] -> points[end]).
+                    let ending_segment = Segment::new(points[last - 1], points[last]);
+                    let ints = dst_obj.box_.intersections(&ending_segment);
+                    if let Some(p) = ints.first() {
+                        points[last] = *p;
+                    }
+                }
             }
 
             // Build curved path from route points
