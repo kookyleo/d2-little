@@ -801,30 +801,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(test)]
-mod overflow_test {
-    use super::*;
-    use d2_graph::*;
-
-    #[test]
-    fn binary_tree_layout() {
-        let mut g = Graph::new();
-        let names = ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o"];
-        for n in &names {
-            let id = g.ensure_child(&[n.to_string()]);
-            g.objects[id].width = 50.0;
-            g.objects[id].height = 50.0;
-        }
-        let edges = [("a","b"),("a","c"),("b","d"),("b","e"),("c","f"),("c","g"),
-                     ("d","h"),("d","i"),("e","j"),("e","k"),("f","l"),("f","m"),
-                     ("g","n"),("g","o")];
-        let root = g.root;
-        for (s,d) in &edges {
-            let _ = g.connect(root, &[s.to_string()], &[d.to_string()], false, true, "");
-        }
-        eprintln!("Graph built: {} objects, {} edges", g.objects.len(), g.edges.len());
-        let result = layout(&mut g, None);
-        eprintln!("Layout result: {:?}", result);
-    }
-}
