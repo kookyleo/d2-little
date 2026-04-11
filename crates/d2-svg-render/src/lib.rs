@@ -199,9 +199,12 @@ pub fn render_text(text: &str, x: f64, height: f64) -> String {
         };
         let escaped = d2_svg_path::escape_text(line);
         let escaped = if escaped.is_empty() { " " } else { &escaped };
+        // x and dy are float64 in Go, formatted with %f. The %.6f rounding
+        // also gives us 17.666667 instead of 17.666666666666668 for the
+        // common dy = height / line_count case.
         write!(
             result,
-            r#"<tspan x="{}" dy="{}">{}</tspan>"#,
+            r#"<tspan x="{:.6}" dy="{:.6}">{}</tspan>"#,
             x, dy, escaped
         )
         .unwrap();
@@ -887,7 +890,7 @@ fn draw_connection(
     let mut label_mask = String::new();
 
     let opacity_style = if (connection.opacity - 1.0).abs() > f64::EPSILON {
-        format!(" style='opacity:{}'", connection.opacity)
+        format!(" style='opacity:{:.6}'", connection.opacity)
     } else {
         String::new()
     };
@@ -1026,7 +1029,7 @@ fn draw_shape(
     }
 
     let opacity_style = if (target_shape.opacity - 1.0).abs() > f64::EPSILON {
-        format!(" style='opacity:{}'", target_shape.opacity)
+        format!(" style='opacity:{:.6}'", target_shape.opacity)
     } else {
         String::new()
     };
@@ -1610,9 +1613,13 @@ fn render_3d_rect(
     let h = target_shape.height;
     let off = d2_target::THREE_DEE_OFFSET;
 
-    // Border path segments
+    // Border path segments. Mirrors Go d2svg.go render3DRect: integer
+    // coordinates (`%d,%d`), one M to start, eight L points around the
+    // perimeter (the eighth is `(width, height)`, *not* a duplicate of
+    // `(width, 0)`), then a final M+L pair to draw the missing top-right
+    // edge without overlapping the previous strokes.
     let border_d = format!(
-        "M{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} L{:.6},{:.6} M{:.6},{:.6} L{:.6},{:.6}",
+        "M{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} L{},{} M{},{} L{},{}",
         px,
         py,
         px + off,
@@ -1629,6 +1636,8 @@ fn render_3d_rect(
         py,
         px + w,
         py,
+        px + w,
+        py + h,
         px + w,
         py,
         px + w + off,
@@ -1644,17 +1653,21 @@ fn render_3d_rect(
         d2_svg_path::escape_text(&target_shape.id)
     );
 
-    // Border mask
+    // Border mask. Mirror Go d2svg.go: each piece is separated by `\n`, so
+    // the joined fragment looks like
+    //   <defs><mask...>\n<rect.../>\n<path.../></mask></defs>
     write!(
         result,
-        r#"<defs><mask id="{}" maskUnits="userSpaceOnUse" x="{}" y="{}" width="{}" height="{}"><rect x="{}" y="{}" width="{}" height="{}" fill="white"></rect>"#,
+        "<defs><mask id=\"{}\" maskUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\">\n<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"white\"></rect>\n",
         mask_id, px, py - off, w + off, h + off,
         px, py - off, w + off, h + off,
     ).unwrap();
 
-    // Compact border segments for mask path
+    // Compact border segments for mask path. Same point sequence as the
+    // visible border (Go reuses the slice via strings.Join("", ...)) — the
+    // eighth point is `(width, height)`, not a duplicate of `(width, 0)`.
     let mask_border_d = format!(
-        "M{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}L{:.6},{:.6}M{:.6},{:.6}L{:.6},{:.6}",
+        "M{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}L{},{}M{},{}L{},{}",
         px,
         py,
         px + off,
@@ -1671,6 +1684,8 @@ fn render_3d_rect(
         py,
         px + w,
         py,
+        px + w,
+        py + h,
         px + w,
         py,
         px + w + off,
@@ -1698,9 +1713,10 @@ fn render_3d_rect(
     main_el.style = style.clone();
     result.push_str(&main_el.render());
 
-    // Side polygons
+    // Side polygons. Go d2svg.go formats these as `%d,%d` (integer), so we
+    // do the same — px/py/w/h are all i32 here.
     let side_points = format!(
-        "{:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6} {:.6},{:.6}",
+        "{},{} {},{} {},{} {},{} {},{} {},{}",
         px,
         py,
         px + off,

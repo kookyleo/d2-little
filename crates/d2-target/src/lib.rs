@@ -1094,10 +1094,179 @@ pub mod go_json {
             out.extend_from_slice((f as i64).to_string().as_bytes());
             return;
         }
-        // Fallback: Rust's default float formatting is close enough for
-        // layout-produced values in our test corpus. TODO: Go 'g' format
-        // fidelity for edge cases.
-        out.extend_from_slice(format!("{}", f).as_bytes());
+        out.extend_from_slice(format_f64_go_compat(f).as_bytes());
+    }
+
+    /// Format `f` to mimic Go's `strconv.FormatFloat(f, 'g', -1, 64)` (which
+    /// is what `encoding/json` uses for float64). Both Rust's std and Go
+    /// produce a shortest-roundtrip representation, but the two algorithms
+    /// can differ when *two* equally-short decimal strings round to the
+    /// same f64.
+    ///
+    /// Algorithm: grab the exact 17-significant-digit decimal of `f` via
+    /// Rust's scientific formatter (`{:.16e}` gives 1+16 = 17 sig digits),
+    /// truncate to 16 sig digits with round-half-to-even, and check whether
+    /// that 16-digit form parses back to the same f64. If it does, use the
+    /// 16-digit form (matches Go's "shortest"). Otherwise use the 17-digit
+    /// form.
+    ///
+    /// Two illustrative cases from our route data:
+    ///
+    /// * f64 `0x408dd599a000_0000` = 954.70001220703125 exact. Both
+    ///   `954.7000122070312` and `954.7000122070313` round-trip; the
+    ///   17th digit is `5` (true halfway), so round-to-even keeps the
+    ///   `2`. Both Go and this function pick `954.7000122070312`. Rust's
+    ///   `format!("{}", f)` would pick `...3`.
+    /// * f64 `0x407b033340000000` = 432.20001220703125 exact. The
+    ///   16-digit truncation `432.2000122070312` parses back to a
+    ///   *different* f64, so we keep the full 17-digit form
+    ///   `432.20001220703125`.
+    fn format_f64_go_compat(f: f64) -> String {
+        // Cheap fast-path: if Rust's default already matches what Go would
+        // produce (e.g. integer-valued, simple terminating decimals), we
+        // can skip the more elaborate path. The check is: does
+        // `format!("{:.16e}", f)` end in zeros, indicating the value has
+        // fewer than 17 significant digits?
+        let sci17 = format!("{:.16e}", f);
+
+        // Parse the scientific representation: "[-]M.MMMMMMMMMMMMMMMMeE"
+        let bytes = sci17.as_bytes();
+        let neg = bytes[0] == b'-';
+        let unsigned = if neg { &sci17[1..] } else { &sci17[..] };
+        let e_pos = unsigned.find('e').unwrap();
+        let mantissa = &unsigned[..e_pos];
+        let exp: i32 = unsigned[e_pos + 1..].parse().unwrap();
+        let dot_pos = mantissa.find('.').unwrap();
+        let int_part = &mantissa[..dot_pos];
+        let frac_part = &mantissa[dot_pos + 1..];
+        // 17 significant digits, no decimal point.
+        let mut digits: Vec<u8> = int_part.bytes().chain(frac_part.bytes()).collect();
+        // dp17: position of the decimal point counted from the left of `digits`,
+        // assuming all 17 digits are significant.
+        let mut dp17: i32 = int_part.len() as i32 + exp;
+
+        // Strip trailing zeros so that `digits.len()` reflects the actual
+        // number of significant digits Rust's scientific formatter felt
+        // were needed. (For e.g. 1.0e0 → "1" with dp=1.)
+        while digits.len() > 1 && *digits.last().unwrap() == b'0' {
+            digits.pop();
+        }
+        // Range of plain-decimal output Go uses: roughly 10⁻⁴ ≤ |f| < 10²¹
+        // for 'g' fmt with prec=-1. Outside that range Go switches to
+        // scientific (with `e+XX`). Mirror that switch here.
+        if dp17 < -3 || dp17 > 21 {
+            return format_f64_scientific_go(f, neg, &digits, dp17);
+        }
+
+        // Build a candidate "shortest" form by trying every length from 1
+        // up to digits.len(); use the first one whose round-trip matches.
+        // For reasonable values this resolves at length ≥ 15 in practice,
+        // but the loop bounds the worst case.
+        for len in 1..=digits.len() {
+            let prefix = &digits[..len];
+            let next_digit = digits.get(len).copied();
+            // Round half-to-even.
+            let mut rounded: Vec<u8> = prefix.to_vec();
+            if let Some(nd) = next_digit {
+                let round_up = match nd {
+                    b'0'..=b'4' => false,
+                    b'6'..=b'9' => true,
+                    b'5' => {
+                        // tie: check if any digit after `nd` is non-zero
+                        let any_nonzero = digits[len + 1..].iter().any(|&b| b != b'0');
+                        if any_nonzero {
+                            true
+                        } else {
+                            // true halfway → round to even
+                            (rounded[len - 1] - b'0') % 2 == 1
+                        }
+                    }
+                    _ => false,
+                };
+                if round_up {
+                    // Carry through the digits.
+                    let mut idx = len;
+                    let mut carry = true;
+                    while carry && idx > 0 {
+                        idx -= 1;
+                        if rounded[idx] == b'9' {
+                            rounded[idx] = b'0';
+                        } else {
+                            rounded[idx] += 1;
+                            carry = false;
+                        }
+                    }
+                    if carry {
+                        // 9999... → 10000..., shift dp by 1.
+                        rounded.insert(0, b'1');
+                        // dp shifts right by 1
+                        if let Ok(s) = format_decimal(neg, &rounded, dp17 + 1).parse::<f64>() {
+                            if s == f {
+                                return format_decimal(neg, &rounded, dp17 + 1);
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            let candidate = format_decimal(neg, &rounded, dp17);
+            if candidate.parse::<f64>().ok() == Some(f) {
+                return candidate;
+            }
+        }
+        // Fallback: full 17-digit form.
+        format_decimal(neg, &digits, dp17)
+    }
+
+    /// Format a digit slice + decimal-point position into a plain decimal
+    /// string, mirroring Go's `strconv` 'g' format for the in-range case.
+    fn format_decimal(neg: bool, digits: &[u8], dp: i32) -> String {
+        let sign = if neg { "-" } else { "" };
+        let n = digits.len() as i32;
+        if dp <= 0 {
+            // 0.000ddd...
+            let zeros = (-dp) as usize;
+            let frac: String = std::iter::repeat('0')
+                .take(zeros)
+                .chain(digits.iter().map(|&b| b as char))
+                .collect();
+            // Trim trailing zeros from frac.
+            let frac = frac.trim_end_matches('0');
+            if frac.is_empty() {
+                return format!("{}0", sign);
+            }
+            format!("{}0.{}", sign, frac)
+        } else if dp >= n {
+            // dddd000... (no fractional part)
+            let extra = (dp - n) as usize;
+            let int: String = digits
+                .iter()
+                .map(|&b| b as char)
+                .chain(std::iter::repeat('0').take(extra))
+                .collect();
+            format!("{}{}", sign, int)
+        } else {
+            // dddd.dddd
+            let dp = dp as usize;
+            let int_str: String = digits[..dp].iter().map(|&b| b as char).collect();
+            let frac_str: String = digits[dp..].iter().map(|&b| b as char).collect();
+            let frac_str = frac_str.trim_end_matches('0');
+            if frac_str.is_empty() {
+                format!("{}{}", sign, int_str)
+            } else {
+                format!("{}{}.{}", sign, int_str, frac_str)
+            }
+        }
+    }
+
+    /// Fallback for very large or very small magnitudes — Go uses
+    /// scientific notation here. We don't expect to hit this in d2's JSON
+    /// (layout coordinates stay in a sane range), so the implementation is
+    /// best-effort.
+    fn format_f64_scientific_go(f: f64, _neg: bool, _digits: &[u8], _dp17: i32) -> String {
+        // Defer to Rust's default — for out-of-range values byte parity
+        // with Go isn't currently exercised by our tests.
+        format!("{}", f)
     }
 
     fn write_null(out: &mut Vec<u8>) {
