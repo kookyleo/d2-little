@@ -620,7 +620,11 @@ fn arrowhead_marker(
 
             let mut g_el = d2_themes::ThemableElement::new("g", inline_theme);
             if !is_target {
-                g_el.transform = format!("scale(-1) translate(-{}, -{})", width, height);
+                // Go renders these with `%f` which is six-decimal
+                // formatting; keeping the same format avoids a byte diff
+                // for every crow-foot/cf-many/cf-one connection.
+                g_el.transform =
+                    format!("scale(-1) translate(-{:.6}, -{:.6})", width, height);
             }
             g_el.fill = d2_target::BG_COLOR.to_owned();
             g_el.stroke = connection.stroke.clone();
@@ -1489,11 +1493,13 @@ fn draw_shape(
             String::new()
         };
         if let Some(ref icon) = target_shape.icon {
-            // Escape XML special chars in the href (notably `&` → `&amp;`)
-            // so icon URLs like `.../u/27873294?s=200&v=4` round-trip.
+            // Match Go `d2svg.go`: x/y are formatted with `%f` (six
+            // decimals), width/height are integers. Without the decimal
+            // form the icon-label/investigate fixtures drift by tens of
+            // bytes.
             write!(
                 buf,
-                r#"<image href="{}" x="{}" y="{}" width="{}" height="{}"{} />"#,
+                r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}"{} />"#,
                 d2_svg_path::escape_text(icon),
                 icon_tl.x,
                 icon_tl.y,
@@ -2178,11 +2184,30 @@ fn define_gradients(buf: &mut String, css_gradient: &str) {
 // Icon size helper
 // ---------------------------------------------------------------------------
 
-fn get_icon_size(geo_box: &d2_geo::Box2D, _icon_position: &str) -> i32 {
-    let min_side = geo_box.width.min(geo_box.height);
-    let size = (min_side * 0.8) as i32;
-    size.min(d2_target::MAX_ICON_SIZE)
-        .max(d2_target::DEFAULT_ICON_SIZE)
+/// Mirror Go `d2target.GetIconSize`: icon size depends on the label
+/// position — inside-middle-center gets half the box's shorter side,
+/// other inside positions clamp to `[DEFAULT_ICON_SIZE, min_side]`, then
+/// the whole thing is clipped to `MAX_ICON_SIZE` and (for non-outside
+/// placements) to `box_side − 2*PADDING`.
+fn get_icon_size(geo_box: &d2_geo::Box2D, icon_position: &str) -> i32 {
+    let pos = d2_label::Position::from_string(icon_position);
+    let min_dimension = geo_box.width.min(geo_box.height) as i32;
+    let half_min = (0.5 * min_dimension as f64).ceil() as i32;
+
+    let mut size = if matches!(pos, d2_label::Position::InsideMiddleCenter) {
+        half_min
+    } else {
+        min_dimension.min(d2_target::DEFAULT_ICON_SIZE.max(half_min))
+    };
+    size = size.min(d2_target::MAX_ICON_SIZE);
+
+    if !pos.is_outside() {
+        let pad = d2_label::PADDING as i32;
+        let w_cap = (geo_box.width as i32 - 2 * pad).max(0);
+        let h_cap = (geo_box.height as i32 - 2 * pad).max(0);
+        size = size.min(w_cap.min(h_cap));
+    }
+    size
 }
 
 // ---------------------------------------------------------------------------

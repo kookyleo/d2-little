@@ -736,7 +736,28 @@ impl Compiler {
                         }
                     }
                 } else if keyword == "style" && f2.name_is_unquoted {
-                    // Arrowhead style - simplified, skip
+                    // Parse `style.filled: <bool>` so circle/box arrowheads
+                    // can distinguish outlined vs filled variants.
+                    if let Some(smap) = f2.map() {
+                        for sf in &smap.fields {
+                            if sf.name == "filled" && sf.name_is_unquoted {
+                                if let Some(val) = sf.primary_string() {
+                                    let b = val == "true";
+                                    if is_src {
+                                        if let Some(ref mut ah) =
+                                            g.edges[edge_idx].src_arrowhead
+                                        {
+                                            ah.filled = Some(b);
+                                        }
+                                    } else if let Some(ref mut ah) =
+                                        g.edges[edge_idx].dst_arrowhead
+                                    {
+                                        ah.filled = Some(b);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
