@@ -508,7 +508,9 @@ impl Object {
 
     /// Returns nesting level: 0 for root children, 1 for grandchildren, etc.
     pub fn level(&self, graph: &Graph) -> u32 {
-        let mut depth = 0;
+        // Go d2graph.Object.Level() returns 1 for top-level (immediate children
+        // of root), 2 for grandchildren, etc.
+        let mut depth = 1;
         let mut p = self.parent;
         while let Some(pid) = p {
             if pid == graph.root {
@@ -520,12 +522,19 @@ impl Object {
         depth
     }
 
-    /// Return text info for this object (simplified).
+    /// Return text info for this object.
+    /// Matches Go d2graph.Object.Text(): leaf shapes default to bold;
+    /// containers/text shapes default to non-bold; explicit style.bold overrides.
     pub fn text(&self) -> MText {
+        let is_container = !self.children_array.is_empty();
+        let mut is_bold = !is_container && self.shape.value != "text";
+        if let Some(v) = self.style.bold.as_ref() {
+            is_bold = v.value == "true";
+        }
         MText {
             text: self.label.value.clone(),
             font_size: 16, // default
-            is_bold: self.style.bold.as_ref().is_some_and(|v| v.value == "true"),
+            is_bold,
             is_italic: self
                 .style
                 .italic

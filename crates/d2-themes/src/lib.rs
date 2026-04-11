@@ -414,47 +414,47 @@ impl ThemableElement {
             out += &format!(r#" href="{}""#, self.href);
         }
         if let Some(v) = self.x {
-            out += &format!(r#" x="{v}""#);
+            out += &format!(r#" x="{v:.6}""#);
         }
         if let Some(v) = self.x1 {
-            out += &format!(r#" x1="{v}""#);
+            out += &format!(r#" x1="{v:.6}""#);
         }
         if let Some(v) = self.x2 {
-            out += &format!(r#" x2="{v}""#);
+            out += &format!(r#" x2="{v:.6}""#);
         }
         if let Some(v) = self.y {
-            out += &format!(r#" y="{v}""#);
+            out += &format!(r#" y="{v:.6}""#);
         }
         if let Some(v) = self.y1 {
-            out += &format!(r#" y1="{v}""#);
+            out += &format!(r#" y1="{v:.6}""#);
         }
         if let Some(v) = self.y2 {
-            out += &format!(r#" y2="{v}""#);
+            out += &format!(r#" y2="{v:.6}""#);
         }
         if let Some(v) = self.width {
-            out += &format!(r#" width="{v}""#);
+            out += &format!(r#" width="{v:.6}""#);
         }
         if let Some(v) = self.height {
-            out += &format!(r#" height="{v}""#);
+            out += &format!(r#" height="{v:.6}""#);
         }
         if let Some(v) = self.r {
-            out += &format!(r#" r="{v}""#);
+            out += &format!(r#" r="{v:.6}""#);
         }
         if let Some(rx) = self.rx {
             let w = self.width.unwrap_or(f64::MAX);
             let h = self.height.unwrap_or(f64::MAX);
-            out += &format!(r#" rx="{}""#, calculate_axis_radius(rx, w, h));
+            out += &format!(r#" rx="{:.6}""#, calculate_axis_radius(rx, w, h));
         }
         if let Some(ry) = self.ry {
             let w = self.width.unwrap_or(f64::MAX);
             let h = self.height.unwrap_or(f64::MAX);
-            out += &format!(r#" ry="{}""#, calculate_axis_radius(ry, w, h));
+            out += &format!(r#" ry="{:.6}""#, calculate_axis_radius(ry, w, h));
         }
         if let Some(v) = self.cx {
-            out += &format!(r#" cx="{v}""#);
+            out += &format!(r#" cx="{v:.6}""#);
         }
         if let Some(v) = self.cy {
-            out += &format!(r#" cy="{v}""#);
+            out += &format!(r#" cy="{v:.6}""#);
         }
         if !self.stroke_dash_array.is_empty() {
             out += &format!(r#" stroke-dasharray="{}""#, self.stroke_dash_array);

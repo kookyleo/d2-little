@@ -7,5 +7,5 @@ authors.workspace = true
 
 [dependencies]
 d2-fonts = { path = "../d2-fonts" }
-rusttype = "0.9"
+ttf-parser = "0.21"
 unicode-segmentation = "1"

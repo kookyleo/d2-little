@@ -17,8 +17,10 @@ use d2_themes;
 
 const DEFAULT_SHAPE_SIZE: f64 = 100.0;
 const MIN_SHAPE_SIZE: f64 = 5.0;
-/// Padding added around label text inside a shape.
-const INNER_LABEL_PADDING: f64 = 16.0;
+/// Padding added around label text inside a shape (Go d2graph.INNER_LABEL_PADDING = 5).
+const INNER_LABEL_PADDING: f64 = 5.0;
+/// Default shape padding (matches Go lib/shape baseShape.defaultPadding = 40).
+const DEFAULT_SHAPE_PADDING: f64 = 40.0;
 
 // ---------------------------------------------------------------------------
 // CompileOptions
@@ -176,7 +178,7 @@ pub fn d2_to_svg(input: &str) -> Result<Vec<u8>, String> {
 /// Measure label text for each object and edge, then set their width/height.
 ///
 /// This is a simplified port of Go's `Graph.SetDimensions`.
-fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<(), String> {
+pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<(), String> {
     let font_family = if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
         FontFamily::SourceCodePro
     } else {
@@ -201,12 +203,14 @@ fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<()
             .and_then(|v| v.value.parse().ok())
             .unwrap_or(0);
 
-        // Determine font style
-        let is_bold = g.objects[i]
-            .style
-            .bold
-            .as_ref()
-            .is_some_and(|v| v.value == "true");
+        // Determine font style.
+        // Match Go d2graph.Object.Text(): leaf shapes (not container, not "text"
+        // shape) default to bold; explicit style.bold can override.
+        let is_container = !g.objects[i].children_array.is_empty();
+        let mut is_bold = !is_container && shape != "text";
+        if let Some(v) = g.objects[i].style.bold.as_ref() {
+            is_bold = v.value == "true";
+        }
         let is_italic = g.objects[i]
             .style
             .italic
@@ -262,11 +266,28 @@ fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<()
             height: th,
         };
 
-        // Compute shape dimensions from label + padding
-        let pad_w = INNER_LABEL_PADDING * 2.0;
-        let pad_h = INNER_LABEL_PADDING * 2.0;
-        let mut w = (tw as f64 + pad_w).max(MIN_SHAPE_SIZE);
-        let mut h = (th as f64 + pad_h).max(MIN_SHAPE_SIZE);
+        // Compute shape dimensions from label + padding (matches Go d2graph SetDimensions):
+        //   defaultDims = labelDims + INNER_LABEL_PADDING(5) (when withLabelPadding)
+        //   obj.Width   = defaultDims.Width + paddingX (40 for rectangle)
+        //   obj.Height  = defaultDims.Height + paddingY (40 for rectangle)
+        let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text";
+        let label_pad = if with_label_padding {
+            INNER_LABEL_PADDING
+        } else {
+            0.0
+        };
+        let pad_x = if desired_width != 0 {
+            0.0
+        } else {
+            DEFAULT_SHAPE_PADDING
+        };
+        let pad_y = if desired_height != 0 {
+            0.0
+        } else {
+            DEFAULT_SHAPE_PADDING
+        };
+        let mut w = (tw as f64 + label_pad + pad_x).max(MIN_SHAPE_SIZE);
+        let mut h = (th as f64 + label_pad + pad_y).max(MIN_SHAPE_SIZE);
 
         // Apply desired dimensions
         if desired_width > 0 {
