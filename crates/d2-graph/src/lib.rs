@@ -604,9 +604,14 @@ impl Object {
         self.icon.is_some() && self.shape.value != d2_target::SHAPE_IMAGE
     }
 
-    /// Whether the object has an outside bottom label (e.g., image shapes).
+    /// Whether the object has an outside bottom label. Matches Go
+    /// `d2graph.Object.HasOutsideBottomLabel`: image and person shapes
+    /// default their label to `OUTSIDE_BOTTOM_CENTER`.
     pub fn has_outside_bottom_label(&self) -> bool {
-        self.shape.value == d2_target::SHAPE_IMAGE
+        matches!(
+            self.shape.value.as_str(),
+            d2_target::SHAPE_IMAGE | d2_target::SHAPE_PERSON
+        )
     }
 
     /// Update the bounding box from top_left + width + height.
