@@ -946,8 +946,13 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
             // Source side.
             let starting_segment = Segment::new(points[1], points[0]);
-            let src_label_hit = outside_label_box(&g.objects[src_id]).and_then(|b| {
-                b.intersections(&starting_segment).first().copied()
+            let src_label_hit = outside_label_box(&g.objects[src_id]).and_then(|(b, pos)| {
+                let ints = b.intersections(&starting_segment);
+                if ints.is_empty() {
+                    None
+                } else {
+                    Some(find_outer_intersection(pos, &ints))
+                }
             });
             if let Some(p) = src_label_hit {
                 points[0] = p;
@@ -960,8 +965,13 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
 
             // Destination side.
             let ending_segment = Segment::new(points[last - 1], points[last]);
-            let dst_label_hit = outside_label_box(&g.objects[dst_id]).and_then(|b| {
-                b.intersections(&ending_segment).first().copied()
+            let dst_label_hit = outside_label_box(&g.objects[dst_id]).and_then(|(b, pos)| {
+                let ints = b.intersections(&ending_segment);
+                if ints.is_empty() {
+                    None
+                } else {
+                    Some(find_outer_intersection(pos, &ints))
+                }
             });
             if let Some(p) = dst_label_hit {
                 points[last] = p;
@@ -1288,12 +1298,14 @@ fn precision_eq(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1.0
 }
 
-/// Compute the outside-label `Box2D` for an object — i.e. the rectangle
-/// occupied by the shape's label when it sits outside the shape border.
-/// Returns `None` when the object has no outside label (no label, no
-/// position, or the position is not `OUTSIDE_*`). Mirrors the label box
+/// Compute the outside-label `Box2D` and its position for an object — the
+/// rectangle occupied by the shape's label when it sits outside the shape
+/// border. Returns `None` when the object has no outside label (no label,
+/// no position, or the position is not `OUTSIDE_*`). Mirrors the label box
 /// construction at the top of Go `Edge.TraceToShape`.
-fn outside_label_box(obj: &d2_graph::Object) -> Option<d2_geo::Box2D> {
+fn outside_label_box(
+    obj: &d2_graph::Object,
+) -> Option<(d2_geo::Box2D, d2_label::Position)> {
     if !obj.has_label() {
         return None;
     }
@@ -1312,7 +1324,36 @@ fn outside_label_box(obj: &d2_graph::Object) -> Option<d2_geo::Box2D> {
     let mut box_ = d2_geo::Box2D::new(label_tl, label_width, label_height);
     box_.top_left.x -= d2_label::PADDING;
     box_.width += 2.0 * d2_label::PADDING;
-    Some(box_)
+    Some((box_, pos))
+}
+
+/// Mirror Go `findOuterIntersection`: from a set of label-box intersections,
+/// pick the point that sits on the "outside" side of the labelled shape.
+/// For an OUTSIDE_TOP_* label that means the smallest Y, OUTSIDE_BOTTOM_*
+/// the largest Y, OUTSIDE_LEFT_* the smallest X, OUTSIDE_RIGHT_* the
+/// largest X. Falls back to the first intersection for any other case.
+fn find_outer_intersection(pos: d2_label::Position, intersections: &[Point]) -> Point {
+    use d2_label::Position::*;
+    if intersections.len() <= 1 {
+        return intersections[0];
+    }
+    let mut sorted: Vec<Point> = intersections.to_vec();
+    match pos {
+        OutsideTopLeft | OutsideTopRight | OutsideTopCenter => {
+            sorted.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        OutsideBottomLeft | OutsideBottomRight | OutsideBottomCenter => {
+            sorted.sort_by(|a, b| b.y.partial_cmp(&a.y).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
+            sorted.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+            sorted.sort_by(|a, b| b.x.partial_cmp(&a.x).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        _ => {}
+    }
+    sorted[0]
 }
 
 /// Outside-label margin for a child object — mirrors the margin half of
