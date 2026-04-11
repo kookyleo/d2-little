@@ -318,19 +318,37 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             height: th,
         };
 
-        // Compute shape dimensions from label + padding (matches Go d2graph SetDimensions):
-        //   defaultDims = labelDims + INNER_LABEL_PADDING(5) (when withLabelPadding)
-        //   obj.Width   = defaultDims.Width + paddingX (per-shape from d2-shape)
-        //   obj.Height  = defaultDims.Height + paddingY (per-shape)
+        // Compute "default dimensions" — the content box the shape needs to
+        // wrap. Mirrors Go d2graph.GetDefaultSize: labelDims plus
+        // INNER_LABEL_PADDING (5) on each axis when there's no explicit
+        // width/height and the shape isn't `text`. Width/height are then
+        // floored to MIN_SHAPE_SIZE.
         let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text";
         let label_pad = if with_label_padding {
             INNER_LABEL_PADDING
         } else {
             0.0
         };
-        // Get per-shape padding from d2-shape (matches Go lib/shape per-shape).
-        let dummy_box = d2_geo::Box2D::new(d2_geo::Point::new(0.0, 0.0), 100.0, 100.0);
-        let s = d2_shape::Shape::new(&shape, dummy_box);
+        let mut content_w = (tw as f64 + label_pad).max(MIN_SHAPE_SIZE);
+        let mut content_h = (th as f64 + label_pad).max(MIN_SHAPE_SIZE);
+        // For `text` shape the content box can fall below MIN_SHAPE_SIZE in
+        // Go (it's bumped back up only when needed); we keep that branch
+        // simple by always lifting.
+        if shape == "text" {
+            content_w = (tw as f64).max(MIN_SHAPE_SIZE);
+            content_h = (th as f64).max(MIN_SHAPE_SIZE);
+        }
+
+        // Build a Shape wrapper at the content size and ask it to fit. This
+        // is the shape-specific path Go calls in `SetDimensions` →
+        // `SizeToContent`. The dummy box passed to `Shape::new` must have
+        // the *content* size because some shapes (oval especially) use it
+        // when computing the fitted dimensions. Note: d2-shape uses
+        // PascalCase shape type names (e.g. "Oval"), while the DSL uses
+        // lowercase ("oval"); convert via `dsl_shape_to_shape_type`.
+        let shape_type_name = d2_target::dsl_shape_to_shape_type(&shape);
+        let content_box = d2_geo::Box2D::new(d2_geo::Point::new(0.0, 0.0), content_w, content_h);
+        let s = d2_shape::Shape::new(shape_type_name, content_box);
         let (mut pad_x, mut pad_y) = d2_shape::ShapeOps::get_default_padding(&s);
         if desired_width != 0 {
             pad_x = 0.0;
@@ -338,22 +356,56 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         if desired_height != 0 {
             pad_y = 0.0;
         }
-        let mut w = (tw as f64 + label_pad + pad_x).max(MIN_SHAPE_SIZE);
-        let mut h = (th as f64 + label_pad + pad_y).max(MIN_SHAPE_SIZE);
 
-        // Apply desired dimensions
-        if desired_width > 0 {
-            w = w.max(desired_width as f64);
-        }
-        if desired_height > 0 {
-            h = h.max(desired_height as f64);
+        // Person shapes don't use the per-shape AR/wedge math in
+        // get_dimensions_to_fit — Go's SizeToContent special-cases them
+        // with `fitWidth = contentWidth + paddingX`. Mirror that.
+        let (fit_w, fit_h) = if shape == "person" || shape == "c4_person" {
+            (content_w + pad_x, content_h + pad_y)
+        } else {
+            d2_shape::ShapeOps::get_dimensions_to_fit(&s, content_w, content_h, pad_x, pad_y)
+        };
+
+        // SizeToContent: an explicit desired width/height *overrides* the
+        // fit, except for class/sql_table/code which take the max.
+        let mut w = if desired_width > 0 {
+            desired_width as f64
+        } else {
+            fit_w
+        };
+        let mut h = if desired_height > 0 {
+            desired_height as f64
+        } else {
+            fit_h
+        };
+        if g.objects[i].sql_table.is_some()
+            || g.objects[i].class.is_some()
+            || !g.objects[i].language.is_empty()
+        {
+            w = (desired_width as f64).max(fit_w);
+            h = (desired_height as f64).max(fit_h);
         }
 
-        // Square and circle shapes must be equal width/height
-        if shape == "circle" || shape == "square" {
+        // Aspect-ratio-1 shapes (RealSquare, Circle) must be square.
+        // Person and Oval get an aspect-ratio limit applied next.
+        if d2_shape::ShapeOps::aspect_ratio_1(&s) {
             let side = w.max(h);
             w = side;
             h = side;
+        } else if desired_height == 0 || desired_width == 0 {
+            match shape.as_str() {
+                "person" => {
+                    let (lw, lh) = d2_shape::limit_ar(w, h, 1.5);
+                    w = lw;
+                    h = lh;
+                }
+                "oval" => {
+                    let (lw, lh) = d2_shape::limit_ar(w, h, 3.0);
+                    w = lw;
+                    h = lh;
+                }
+                _ => {}
+            }
         }
 
         g.objects[i].width = w;
