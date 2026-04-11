@@ -35,6 +35,12 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
         g.is_folder_only = true;
     }
 
+    // Mirror Go d2compiler.Compile: after compileIR, reorder objects (and
+    // edges, when we port that too) by their first AST reference position.
+    // Without this, fields and edges that introduce the same object in a
+    // different order than the IR field tree drift apart from Go's output.
+    g.sort_objects_by_ast();
+
     if c.errors.is_empty() {
         Ok(g)
     } else {
@@ -161,6 +167,18 @@ impl Compiler {
 
         // Regular field -> child object
         let child = g.ensure_child_of(obj, &[f.name.clone()]);
+
+        // Mirror Go d2compiler.compileField: copy the IR field's references
+        // into d2graph.Object.References. The sort_objects_by_ast pass uses
+        // the first reference to put objects in source order.
+        for fr in &f.references {
+            if let Some(ref kp) = fr.key_path {
+                g.objects[child].references.push(d2_graph::Reference {
+                    key: kp.clone(),
+                    key_path_index: fr.key_path_index,
+                });
+            }
+        }
 
         // Set label from primary value
         if let Some(ref primary) = f.primary {

@@ -3,10 +3,20 @@
 //! These types bridge the d2 AST/IR with layout engines and exporters.
 //! Ported from Go `d2graph/d2graph.go`.
 
+use d2_ast as ast;
 use d2_geo::{self, Box2D, Point, Segment, Spacing};
 use d2_label;
 use d2_target;
 use d2_themes;
+
+/// Compare two AST source ranges by start position. Mirrors Go's
+/// `Range.Before` ordering used in `SortObjectsByAST`.
+fn range_cmp(a: &ast::Range, b: &ast::Range) -> std::cmp::Ordering {
+    a.start
+        .byte
+        .cmp(&b.start.byte)
+        .then(a.end.byte.cmp(&b.end.byte))
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -441,6 +451,23 @@ pub struct Object {
 
     pub z_index: i32,
     pub classes: Vec<String>,
+
+    /// AST references that named this object. Mirrors Go
+    /// d2graph.Object.References. Used by `Graph::sort_objects_by_ast` to
+    /// reorder objects to match the order they first appear in the source.
+    pub references: Vec<Reference>,
+}
+
+/// AST reference back-pointer for an object. Mirrors Go d2graph.Reference
+/// for the fields the sorter actually consumes (Key + KeyPathIndex).
+#[derive(Debug, Clone)]
+pub struct Reference {
+    /// The originating AST KeyPath (e.g. for `g.b`, both g's and b's
+    /// References point to the same `g.b` KeyPath, distinguished by
+    /// `key_path_index`).
+    pub key: ast::KeyPath,
+    /// Index into `key.path` for the segment this reference represents.
+    pub key_path_index: usize,
 }
 
 impl Default for Object {
@@ -486,6 +513,7 @@ impl Default for Object {
             horizontal_gap: None,
             z_index: 0,
             classes: Vec::new(),
+            references: Vec::new(),
         }
     }
 }
@@ -963,6 +991,84 @@ impl Graph {
     /// Create a new empty graph with a root object at index 0.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reorder objects so they appear in source order, mirroring Go
+    /// d2graph.Graph.SortObjectsByAST. Sort key is the AST range of the
+    /// first reference's `key.path[key_path_index]`.
+    ///
+    /// Because ObjIds are positions in `self.objects`, this also rewrites
+    /// every parent / children / children_array / edge endpoint with the
+    /// new positions so the graph remains internally consistent.
+    pub fn sort_objects_by_ast(&mut self) {
+        // Stable sort the non-root objects by AST position. The root is
+        // always at index 0 and shouldn't move.
+        let mut order: Vec<ObjId> = (0..self.objects.len()).collect();
+        // Skip root in the comparison so it stays put.
+        let root = self.root;
+        order.sort_by(|&a, &b| {
+            if a == root || b == root {
+                return a.cmp(&b);
+            }
+            let oa = &self.objects[a];
+            let ob = &self.objects[b];
+            // No reference → leave order unchanged.
+            if oa.references.is_empty() || ob.references.is_empty() {
+                return a.cmp(&b);
+            }
+            let ra = &oa.references[0];
+            let rb = &ob.references[0];
+            let pa = ra.key.path.get(ra.key_path_index);
+            let pb = rb.key.path.get(rb.key_path_index);
+            match (pa, pb) {
+                (Some(sa), Some(sb)) => {
+                    let range_a = sa.get_range();
+                    let range_b = sb.get_range();
+                    range_cmp(&range_a, &range_b)
+                }
+                _ => a.cmp(&b),
+            }
+        });
+
+        // No-op if already sorted.
+        if order.iter().enumerate().all(|(i, &j)| i == j) {
+            return;
+        }
+
+        // Build old_to_new mapping.
+        let mut old_to_new = vec![0usize; self.objects.len()];
+        for (new_idx, &old_idx) in order.iter().enumerate() {
+            old_to_new[old_idx] = new_idx;
+        }
+
+        // Reorder self.objects.
+        let mut new_objects: Vec<Object> = Vec::with_capacity(self.objects.len());
+        for &old_idx in &order {
+            new_objects.push(std::mem::take(&mut self.objects[old_idx]));
+        }
+        self.objects = new_objects;
+
+        // Rewrite ObjId references inside each object.
+        for obj in self.objects.iter_mut() {
+            if let Some(ref mut p) = obj.parent {
+                *p = old_to_new[*p];
+            }
+            for c in obj.children.iter_mut() {
+                *c = old_to_new[*c];
+            }
+            for c in obj.children_array.iter_mut() {
+                *c = old_to_new[*c];
+            }
+        }
+
+        // Rewrite root.
+        self.root = old_to_new[self.root];
+
+        // Rewrite edge endpoints.
+        for e in self.edges.iter_mut() {
+            e.src = old_to_new[e.src];
+            e.dst = old_to_new[e.dst];
+        }
     }
 
     /// Get the root object.

@@ -101,6 +101,14 @@ pub struct RefContext {
 pub struct FieldReference {
     /// The string node that named this field.
     pub string: String,
+    /// The full AST key path this reference came from (e.g. for `g.b`,
+    /// even the FieldReference inside `g`'s field carries the entire
+    /// `g.b` path). Mirrors Go d2ir.FieldReference.KeyPath.
+    pub key_path: Option<ast::KeyPath>,
+    /// Index into `key_path.path` for the segment this reference
+    /// represents (0 for `g`, 1 for `b` in `g.b`). Mirrors Go
+    /// d2ir.FieldReference.KeyPathIndex().
+    pub key_path_index: usize,
     /// Whether this reference sets the primary value.
     pub primary: bool,
     pub context: RefContext,
@@ -503,14 +511,38 @@ impl Compiler {
             let m = unsafe { &mut *cur_map };
 
             if i == path.len() - 1 {
-                // Terminal: ensure field exists and apply value
+                // Terminal: ensure field exists, record the reference, then
+                // apply the value.
                 let f = self.ensure_field(m, &name, is_unquoted);
+                f.references.push(FieldReference {
+                    string: name.clone(),
+                    key_path: Some(kp.clone()),
+                    key_path_index: i,
+                    primary: true,
+                    context: RefContext {
+                        key: key.clone(),
+                        edge_ast: None,
+                        scope_map_idx: None,
+                    },
+                });
                 self.apply_field_value(f, key);
                 return;
             }
 
-            // Non-terminal: ensure field and descend into its map
+            // Non-terminal: ensure field, record the reference, then descend
+            // into its map.
             let f = self.ensure_field(m, &name, is_unquoted);
+            f.references.push(FieldReference {
+                string: name.clone(),
+                key_path: Some(kp.clone()),
+                key_path_index: i,
+                primary: false,
+                context: RefContext {
+                    key: key.clone(),
+                    edge_ast: None,
+                    scope_map_idx: None,
+                },
+            });
             if f.composite.is_none() {
                 f.composite = Some(Composite::Map(Map::new()));
             }
@@ -623,10 +655,39 @@ impl Compiler {
     }
 
     fn ensure_field_path<'a>(&mut self, dst: &'a mut Map, path: &[String]) -> &'a mut Map {
+        self.ensure_field_path_with_refs(dst, path, None, None, 0)
+    }
+
+    /// Variant that records FieldReferences along the path. `kp` is the
+    /// originating AST KeyPath (e.g. the src/dst of an edge), `key` is its
+    /// containing AST Key, and `kp_offset` is the index in `kp.path` where
+    /// `path[0]` lives. Used by edge processing so the new fields end up
+    /// with reference info that points back to the right AST nodes.
+    fn ensure_field_path_with_refs<'a>(
+        &mut self,
+        dst: &'a mut Map,
+        path: &[String],
+        kp: Option<&ast::KeyPath>,
+        key: Option<&ast::Key>,
+        kp_offset: usize,
+    ) -> &'a mut Map {
         let mut cur = dst as *mut Map;
-        for name in path {
+        for (i, name) in path.iter().enumerate() {
             let m = unsafe { &mut *cur };
             let f = self.ensure_field(m, name, true);
+            if let (Some(kp), Some(key)) = (kp, key) {
+                f.references.push(FieldReference {
+                    string: name.clone(),
+                    key_path: Some(kp.clone()),
+                    key_path_index: kp_offset + i,
+                    primary: false,
+                    context: RefContext {
+                        key: key.clone(),
+                        edge_ast: None,
+                        scope_map_idx: None,
+                    },
+                });
+            }
             if f.composite.is_none() {
                 f.composite = Some(Composite::Map(Map::new()));
             }
@@ -765,13 +826,25 @@ impl Compiler {
         src_arrow: bool,
         dst_arrow: bool,
     ) {
-        // Ensure src and dst fields exist
+        // Ensure src and dst fields exist, recording the AST KeyPath for
+        // each new field reference. The KeyPath comes from the AST edge
+        // (per src/dst). For a common-prefix edge like `a.b -> a.c`, the
+        // common `a` was already added as a field by the caller (with the
+        // src KeyPath); we account for that via `kp_offset`.
+        let ast_edge_for_paths = key.edges.get(edge_idx);
+        let common_offset = match key.key.as_ref() {
+            Some(kp) => kp.path.len(),
+            None => 0,
+        };
         if !src_path.is_empty() {
-            self.ensure_field_path(dst, src_path);
+            let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
+            self.ensure_field_path_with_refs(dst, src_path, src_kp, Some(key), 0);
         }
         if !dst_path.is_empty() {
-            self.ensure_field_path(dst, dst_path);
+            let dst_kp = ast_edge_for_paths.and_then(|e| e.dst.as_ref());
+            self.ensure_field_path_with_refs(dst, dst_path, dst_kp, Some(key), 0);
         }
+        let _ = common_offset; // reserved for future common-prefix sharing
 
         // Count existing edges with same src/dst/arrows (to compute index)
         let match_eid = EdgeID {
