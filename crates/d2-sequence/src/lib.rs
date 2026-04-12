@@ -131,6 +131,7 @@ fn new_sequence_diagram(
                 queue.remove(0);
                 g.objects[curr].label_position =
                     Some(d2_label::Position::InsideTopLeft.to_string());
+                g.objects[curr].is_sequence_diagram_group = true;
                 groups.push(curr);
                 let children = g.objects[curr].children_array.clone();
                 queue.extend(children);

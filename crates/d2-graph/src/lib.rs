@@ -568,6 +568,11 @@ pub struct Object {
     /// `get_fill` to return the correct note fill color (N7).
     pub is_sequence_diagram_note: bool,
 
+    /// Set to `true` by the sequence layout for group objects. Used by
+    /// `get_fill` to return the correct group fill color (N5), and by the
+    /// exporter to set `stroke_width=0`, `blend=true`, `label_fill`.
+    pub is_sequence_diagram_group: bool,
+
     /// AST references that named this object. Mirrors Go
     /// d2graph.Object.References. Used by `Graph::sort_objects_by_ast` to
     /// reorder objects to match the order they first appear in the source.
@@ -634,6 +639,7 @@ impl Default for Object {
             z_index: 0,
             classes: Vec::new(),
             is_sequence_diagram_note: false,
+            is_sequence_diagram_group: false,
             references: Vec::new(),
         }
     }
@@ -822,6 +828,9 @@ impl Object {
         // Sequence diagram special fills (Go: GetFill lines 520-542)
         if self.is_sequence_diagram_note {
             return d2_color::N7;
+        }
+        if self.is_sequence_diagram_group {
+            return d2_color::N5;
         }
         // Direct children of a sequence_diagram root always get B5.
         if let Some(pid) = self.parent {
@@ -1139,7 +1148,7 @@ impl Object {
 
     /// Is this a sequence diagram group?
     pub fn is_sequence_diagram_group(&self) -> bool {
-        false // simplified
+        self.is_sequence_diagram_group
     }
 
     /// Is this a grid diagram?
