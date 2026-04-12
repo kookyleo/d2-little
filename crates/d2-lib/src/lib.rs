@@ -787,8 +787,21 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             };
             // Header label is measured in the regular (non-mono) font
             // for sql_table — Go uses `GetTextDimensions` in that branch.
+            // The font style follows Go `obj.Text()`:
+            //   isBold = !IsContainer() && shape != "text"
+            //   if OuterSequenceDiagram() != nil { isBold = false }
+            // After compilation, sql_table children are moved to columns
+            // (is_container = false), so normally isBold = true. But inside
+            // a sequence diagram, isBold is forced to false.
             let header_font_size = table_font_size + d2_target::HEADER_FONT_ADD;
-            let header_font = d2_fonts::Font::new(font_family, FontStyle::Bold, header_font_size);
+            let header_style = if in_seq {
+                FontStyle::Regular
+            } else if is_bold {
+                FontStyle::Bold
+            } else {
+                FontStyle::Regular
+            };
+            let header_font = d2_fonts::Font::new(font_family, header_style, header_font_size);
             // Empty-label fallback uses placeholder text "Table" (mirrors
             // Go `GetLabelSize` special case). Go stores the placeholder
             // dimensions on `obj.LabelDimensions` regardless of whether the
@@ -1146,17 +1159,60 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         let font = d2_fonts::Font::new(edge_font_family, font_style, font_size);
         if !label.is_empty() {
-            // Edges aren't shapes — pass a non-code marker so the
-            // `shape == code` branch in `measure_label` never fires.
-            let (tw, th) = measure_label(
-                ruler,
-                "",
-                &g.edges[i].language,
-                edge_font_family,
-                font,
-                font_size,
-                &label,
-            )?;
+            // Go's edge label measurement follows the same path as
+            // GetTextDimensions/GetTextDimensionsWithMono:
+            // - If language != "": use MeasureMono with SourceCodePro at
+            //   CODE_LINE_HEIGHT (same path as code shape labels)
+            // - If language == "markdown": use markdown measurement
+            // - Otherwise: regular text measurement with font style
+            let edge_language = &g.edges[i].language;
+            let (tw, th) = if edge_language == "latex" {
+                // Latex: not implemented, fallback to ruler
+                ruler.measure(font, &label)
+            } else if edge_language == "markdown" {
+                d2_textmeasure::measure_markdown(
+                    &label,
+                    ruler,
+                    Some(edge_font_family),
+                    Some(FontFamily::SourceCodePro),
+                    font_size,
+                )?
+            } else if !edge_language.is_empty() {
+                // Non-empty language: Go's GetTextDimensions uses
+                // MeasureMono with SourceCodePro Regular + CODE_LINE_HEIGHT
+                let original_lh = ruler.line_height_factor;
+                ruler.line_height_factor = d2_textmeasure::CODE_LINE_HEIGHT;
+                let mono_font = d2_fonts::Font::new(
+                    FontFamily::SourceCodePro,
+                    d2_fonts::FontStyle::Regular,
+                    font_size,
+                );
+                let (w, mut h) = ruler.measure_mono(mono_font, &label);
+                ruler.line_height_factor = original_lh;
+
+                // Count empty leading/trailing lines (same as object code)
+                let lines: Vec<&str> = label.split('\n').collect();
+                let has_leading = !lines.is_empty()
+                    && lines.first().map(|l| l.trim().is_empty()).unwrap_or(false);
+                let mut num_trailing = 0usize;
+                for l in lines.iter().rev() {
+                    if l.trim().is_empty() {
+                        num_trailing += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if has_leading && num_trailing < lines.len() {
+                    h += font_size;
+                }
+                h += (d2_textmeasure::CODE_LINE_HEIGHT
+                    * f64::from(font_size * num_trailing as i32))
+                    .ceil() as i32;
+                (w, h)
+            } else {
+                // Regular text measurement
+                ruler.measure(font, &label)
+            };
             g.edges[i].label_dimensions = d2_graph::Dimensions {
                 width: tw,
                 height: th,

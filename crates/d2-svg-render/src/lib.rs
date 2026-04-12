@@ -1063,6 +1063,67 @@ fn draw_connection(
 
                 buf.push_str(&md_el.render());
                 buf.push_str("</foreignObject></g>");
+            } else if !connection.text.language.is_empty()
+                && connection.text.language != "latex"
+            {
+                // Code block rendering with syntax highlighting.
+                // Mirrors Go drawConnection lines 1207-1252.
+                if let Some(tokens) = d2_chroma::tokenize(
+                    &connection.text.language,
+                    &connection.text.label,
+                ) {
+                    let line_height: f64 = d2_textmeasure::CODE_LINE_HEIGHT;
+                    let lines = d2_chroma::split_into_lines(&tokens);
+
+                    for is_light in [true, false] {
+                        let theme_name = if is_light {
+                            "github"
+                        } else {
+                            "catppuccin-mocha"
+                        };
+                        let theme = d2_chroma::get_theme(theme_name).unwrap();
+                        let class =
+                            if is_light { "light-code" } else { "dark-code" };
+
+                        let font_size_attr =
+                            if connection.text.font_size != d2_fonts::FONT_SIZE_M as i32 {
+                                format!(
+                                    " style=\"font-size:{}\"",
+                                    connection.text.font_size,
+                                )
+                            } else {
+                                String::new()
+                            };
+
+                        write!(
+                            buf,
+                            "<g transform=\"translate({:.6} {:.6})\" class=\"{}\"{}>",
+                            label_tl.x, label_tl.y, class, font_size_attr,
+                        )
+                        .unwrap();
+
+                        for (index, line_tokens) in lines.iter().enumerate() {
+                            write!(
+                                buf,
+                                "<text class=\"text-mono\" x=\"0\" y=\"{:.6}em\">",
+                                1.0 + index as f64 * line_height,
+                            )
+                            .unwrap();
+                            for tok in line_tokens {
+                                let text = d2_chroma::svg_escape(&tok.value);
+                                let attr = d2_chroma::style_attr(&theme, tok.token_type);
+                                if attr.is_empty() {
+                                    buf.push_str(&text);
+                                } else {
+                                    write!(buf, "<tspan {}>{}</tspan>", attr, text)
+                                        .unwrap();
+                                }
+                            }
+                            buf.push_str("</text>");
+                        }
+                        buf.push_str("</g>");
+                    }
+                }
             } else {
                 // Background rect for labels with an explicit fill.
                 // Mirrors Go `drawConnection` — the rect has `rx=10`, sits 4px
