@@ -470,6 +470,7 @@ impl SequenceDiagram {
                 value: d2_target::SHAPE_PAGE.to_string(),
             };
             note.label_position = Some("INSIDE_MIDDLE_CENTER".to_string());
+            note.is_sequence_diagram_note = true;
         }
     }
 
@@ -537,6 +538,9 @@ impl SequenceDiagram {
 
             let label_w = g.edges[msg_idx].label_dimensions.width as f64;
             let label_h = g.edges[msg_idx].label_dimensions.height as f64;
+            // Go does integer division: `message.LabelDimensions.Height/2`
+            // then converts to float64. We must match to avoid 0.5px drift.
+            let label_h_half = (g.edges[msg_idx].label_dimensions.height / 2) as f64;
 
             if is_self_message || is_to_descendant || is_from_descendant || is_to_sibling {
                 let mid_x = start_x
@@ -552,12 +556,12 @@ impl SequenceDiagram {
                 ];
                 message_offset = end_y + self.y_step - note_offset;
             } else {
-                let start_y = message_offset + note_offset + label_h / 2.0;
+                let start_y = message_offset + note_offset + label_h_half;
                 g.edges[msg_idx].route = vec![
                     Point::new(start_x, start_y),
                     Point::new(end_x, start_y),
                 ];
-                message_offset = start_y + label_h / 2.0 + self.y_step - note_offset;
+                message_offset = start_y + label_h_half + self.y_step - note_offset;
             }
 
             if !g.edges[msg_idx].label.value.is_empty() {
@@ -869,10 +873,19 @@ impl SequenceDiagram {
                 stroke = Some(s.clone());
             }
 
+            // Synthetic lifeline-end ID matching Go format:
+            // actor.ID + "-lifeline-end-" + StringToIntHash(actor.ID + "-lifeline-end")
+            let lifeline_end_id = format!(
+                "{}-lifeline-end-{}",
+                actor.id,
+                string_to_int_hash(&format!("{}-lifeline-end", actor.id))
+            );
+
             self.lifelines.push(Edge {
                 abs_id: format!("({} -- )[0]", actor.abs_id),
                 src: actor_id,
                 dst: 0, // placeholder - lifeline end is synthetic
+                dst_id_override: Some(lifeline_end_id),
                 src_arrow: false,
                 dst_arrow: false,
                 route: vec![
@@ -886,7 +899,6 @@ impl SequenceDiagram {
                     ..Default::default()
                 },
                 z_index: LIFELINE_Z_INDEX,
-                // Store the lifeline end ID for the renderer
                 label: d2_graph::Label {
                     value: String::new(),
                     map_key: None,
@@ -996,13 +1008,17 @@ fn get_center_x_with_placed(g: &Graph, obj_id: ObjId, placed: &std::collections:
     }
 }
 
-/// Simple string hash matching Go's go2.StringToIntHash.
-fn string_to_int_hash(s: &str) -> i32 {
-    let mut hash: u32 = 0;
-    for b in s.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(b as u32);
+/// FNV-1a 32-bit hash matching Go's `go2.StringToIntHash` (which uses
+/// `hash/fnv.New32a`).
+fn string_to_int_hash(s: &str) -> u32 {
+    const OFFSET_BASIS: u32 = 2166136261;
+    const PRIME: u32 = 16777619;
+    let mut h: u32 = OFFSET_BASIS;
+    for &b in s.as_bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(PRIME);
     }
-    hash as i32
+    h
 }
 
 // ---------------------------------------------------------------------------

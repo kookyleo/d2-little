@@ -291,10 +291,16 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         // Determine font style.
         // Match Go d2graph.Object.Text(): leaf shapes (not container, not "text"
         // shape) default to bold; explicit style.bold can override.
+        // Inside sequence diagrams all objects get isBold=false (Go:
+        // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
         let is_container = !g.objects[i].children_array.is_empty();
+        let in_seq = g.objects[i].is_inside_sequence_diagram(g);
         let mut is_bold = !is_container && shape != "text";
         if let Some(v) = g.objects[i].style.bold.as_ref() {
             is_bold = v.value == "true";
+        }
+        if in_seq {
+            is_bold = false;
         }
         let is_italic = g.objects[i]
             .style
@@ -308,7 +314,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         // d2graph.Object.Text() + ContainerLevel.LabelSize().
         let font_size: i32 = if let Some(v) = g.objects[i].style.font_size.as_ref() {
             v.value.parse().unwrap_or(FONT_SIZE_M)
-        } else if is_container && shape != "text" {
+        } else if !in_seq && is_container && shape != "text" {
             let level = g.objects[i].level(g);
             match level {
                 1 => d2_fonts::FONT_SIZE_XXL,

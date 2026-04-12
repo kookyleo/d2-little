@@ -452,6 +452,10 @@ pub struct Object {
     pub z_index: i32,
     pub classes: Vec<String>,
 
+    /// Set to `true` by the sequence layout for note objects. Used by
+    /// `get_fill` to return the correct note fill color (N7).
+    pub is_sequence_diagram_note: bool,
+
     /// AST references that named this object. Mirrors Go
     /// d2graph.Object.References. Used by `Graph::sort_objects_by_ast` to
     /// reorder objects to match the order they first appear in the source.
@@ -513,6 +517,7 @@ impl Default for Object {
             horizontal_gap: None,
             z_index: 0,
             classes: Vec::new(),
+            is_sequence_diagram_note: false,
             references: Vec::new(),
         }
     }
@@ -557,6 +562,7 @@ impl Object {
     /// `style.bold` / `style.font-size` always win.
     pub fn text(&self, graph: &Graph) -> MText {
         let is_container = !self.children_array.is_empty();
+        let in_seq = self.is_inside_sequence_diagram(graph);
         let mut is_bold = !is_container && self.shape.value != "text";
         if let Some(v) = self.style.bold.as_ref() {
             is_bold = v.value == "true";
@@ -574,13 +580,6 @@ impl Object {
         // adds HEADER_FONT_ADD back for the header text.
         let mut font_size: i32 = if let Some(v) = self.style.font_size.as_ref() {
             v.value.parse().unwrap_or(16)
-        } else if is_container && self.shape.value != "text" {
-            match self.level(graph) {
-                1 => 28, // FONT_SIZE_XXL
-                2 => 24, // FONT_SIZE_XL
-                3 => 20, // FONT_SIZE_L
-                _ => 16, // FONT_SIZE_M
-            }
         } else if self.shape.value == d2_target::SHAPE_CLASS
             || self.shape.value == d2_target::SHAPE_SQL_TABLE
         {
@@ -588,6 +587,23 @@ impl Object {
         } else {
             16
         };
+        // Container font scaling only applies outside sequence diagrams.
+        // Inside sequence diagrams, objects get isBold=false (Go:
+        // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
+        if !in_seq {
+            if is_container && self.shape.value != "text" {
+                if self.style.font_size.is_none() {
+                    font_size = match self.level(graph) {
+                        1 => 28, // FONT_SIZE_XXL
+                        2 => 24, // FONT_SIZE_XL
+                        3 => 20, // FONT_SIZE_L
+                        _ => 16, // FONT_SIZE_M
+                    };
+                }
+            }
+        } else {
+            is_bold = false;
+        }
         if self.shape.value == d2_target::SHAPE_CLASS
             || self.shape.value == d2_target::SHAPE_SQL_TABLE
         {
@@ -684,6 +700,44 @@ impl Object {
         let shape = self.shape.value.to_lowercase();
         if shape == d2_target::SHAPE_SQL_TABLE || shape == d2_target::SHAPE_CLASS {
             return d2_color::N1;
+        }
+
+        // Sequence diagram special fills (Go: GetFill lines 520-542)
+        if self.is_sequence_diagram_note {
+            return d2_color::N7;
+        }
+        // Direct children of a sequence_diagram root always get B5.
+        if let Some(pid) = self.parent {
+            if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
+                return d2_color::B5;
+            }
+        }
+        // Spans inside sequence diagrams: fill by depth relative to the
+        // sequence diagram root. Go uses 0-based Level() for root; our
+        // level() returns 1 for root. Adjust the mapping accordingly:
+        // Go rel 2 (grandchild) -> B4, our rel 1 -> B4, etc.
+        if self.is_inside_sequence_diagram(graph) {
+            // Find the sequence diagram ancestor
+            let mut sd_level = 0u32;
+            let mut cur = self.parent;
+            while let Some(pid) = cur {
+                if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
+                    sd_level = graph.objects[pid].level(graph);
+                    break;
+                }
+                cur = graph.objects[pid].parent;
+            }
+            let rel = self.level(graph) - sd_level;
+            return match rel {
+                1 => d2_color::B4,
+                2 => d2_color::B5,
+                3 => d2_color::N6,
+                _ => d2_color::N7,
+            };
+        }
+
+        if shape == d2_target::SHAPE_SEQUENCE_DIAGRAM {
+            return d2_color::N7;
         }
 
         let level = self.level(graph);
@@ -947,6 +1001,19 @@ impl Object {
         self.shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM
     }
 
+    /// Walk up the parent chain and return `true` if any ancestor is a
+    /// sequence diagram. Mirrors Go `Object.OuterSequenceDiagram() != nil`.
+    pub fn is_inside_sequence_diagram(&self, graph: &Graph) -> bool {
+        let mut cur = self.parent;
+        while let Some(pid) = cur {
+            if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
+                return true;
+            }
+            cur = graph.objects[pid].parent;
+        }
+        false
+    }
+
     /// Is this a sequence diagram group?
     pub fn is_sequence_diagram_group(&self) -> bool {
         false // simplified
@@ -1028,6 +1095,10 @@ pub struct Edge {
     /// Index of the destination column inside its sql_table. Mirrors
     /// Go `d2graph.Edge.DstTableColumnIndex`.
     pub dst_table_column_index: Option<usize>,
+
+    /// Overrides the normal `g.objects[dst].abs_id()` for exporter output.
+    /// Used for synthetic lifeline-end objects in sequence diagrams.
+    pub dst_id_override: Option<String>,
 }
 
 impl Default for Edge {
@@ -1058,6 +1129,7 @@ impl Default for Edge {
             first_ast_range: None,
             src_table_column_index: None,
             dst_table_column_index: None,
+            dst_id_override: None,
         }
     }
 }

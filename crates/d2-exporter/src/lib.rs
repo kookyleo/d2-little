@@ -512,7 +512,11 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
     conn.is_curve = edge.is_curve;
 
     conn.src = g.objects[edge.src].abs_id().to_owned();
-    conn.dst = g.objects[edge.dst].abs_id().to_owned();
+    conn.dst = if let Some(ref ovr) = edge.dst_id_override {
+        ovr.clone()
+    } else {
+        g.objects[edge.dst].abs_id().to_owned()
+    };
 
     // C4 theme overrides for connections
     if let Some(ref theme) = g.theme {
