@@ -237,6 +237,8 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         let mut sub_g = Graph::new();
 
         // Copy the container's attributes to the root of the subgraph.
+        // label_dimensions must be included so that sequence layout can
+        // account for the container label height when computing total height.
         {
             let container = &g.objects[container_id];
             sub_g.objects[sub_g.root].shape = container.shape.clone();
@@ -244,6 +246,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             sub_g.objects[sub_g.root].label = container.label.clone();
             sub_g.objects[sub_g.root].label_position = container.label_position.clone();
             sub_g.objects[sub_g.root].icon_position = container.icon_position.clone();
+            sub_g.objects[sub_g.root].label_dimensions = container.label_dimensions.clone();
         }
 
         // Map from main graph ObjId to subgraph ObjId.
