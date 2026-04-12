@@ -182,39 +182,55 @@ fn new_sequence_diagram(
             }
         }
 
-        let actor = &g.objects[actor_id];
-        sd.max_actor_height = sd.max_actor_height.max(actor.height);
+        {
+            let actor = &g.objects[actor_id];
+            sd.max_actor_height = sd.max_actor_height.max(actor.height);
+        }
 
         // Process children: find notes and spans
-        let mut queue: Vec<ObjId> = actor.children_array.clone();
+        let mut queue: Vec<ObjId> = g.objects[actor_id].children_array.clone();
         let mut max_note_width: f64 = 0.0;
 
         while let Some(child_id) = queue.first().copied() {
             queue.remove(0);
-            let child = &g.objects[child_id];
 
-            // Check if it's a note (no edge refs, no children, no contained edges)
+            // Gather data from immutable borrow before mutating
             let has_edge_ref = child_has_edge_ref(g, child_id);
-            let has_children = !child.children_array.is_empty();
+            let has_children = !g.objects[child_id].children_array.is_empty();
+            let child_children = g.objects[child_id].children_array.clone();
+            let child_width = g.objects[child_id].width;
 
             if !has_edge_ref && !has_children {
-                // It's a note
+                // It's a note — matches Go behavior:
+                //   child.Shape = PAGE_TYPE
+                //   child.LabelPosition = INSIDE_MIDDLE_CENTER
+                let note = &mut g.objects[child_id];
+                note.shape = ScalarValue { value: d2_target::SHAPE_PAGE.to_owned() };
+                note.label_position = Some("INSIDE_MIDDLE_CENTER".to_string());
                 sd.vertical_indices
-                    .insert(child.abs_id.clone(), get_obj_earliest_line_num(child));
+                    .insert(note.abs_id.clone(), get_obj_earliest_line_num(note));
                 sd.notes.push(child_id);
                 sd.object_rank.insert(child_id, rank);
-                max_note_width = max_note_width.max(child.width);
+                max_note_width = max_note_width.max(child_width);
             } else {
-                // It's a span
+                // It's a span — matches Go behavior:
+                //   child.Label = ""
+                //   child.Shape = SQUARE_TYPE
+                let span = &mut g.objects[child_id];
+                span.label = d2_graph::Label {
+                    value: String::new(),
+                    map_key: span.label.map_key.take(),
+                };
+                span.shape = ScalarValue { value: "square".to_owned() };
                 sd.spans.push(child_id);
                 sd.object_rank.insert(child_id, rank);
             }
 
-            queue.extend_from_slice(&child.children_array);
+            queue.extend_from_slice(&child_children);
         }
 
         if rank < actors.len() - 1 {
-            let actor_hw = actor.width / 2.0;
+            let actor_hw = g.objects[actor_id].width / 2.0;
             let next_actor = &g.objects[actors[rank + 1]];
             let next_actor_hw = next_actor.width / 2.0;
             sd.actor_x_step[rank] =

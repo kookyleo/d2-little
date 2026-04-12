@@ -839,25 +839,30 @@ impl Object {
             }
         }
         // Spans inside sequence diagrams: fill by depth relative to the
-        // sequence diagram root. Go uses 0-based Level() for root; our
-        // level() returns 1 for root. Adjust the mapping accordingly:
-        // Go rel 2 (grandchild) -> B4, our rel 1 -> B4, etc.
+        // sequence diagram root. Go Level() returns 0 for root, our level()
+        // returns 1 for root. For non-root objects they match. Adjust for
+        // root-level SD by using 0 when the SD is the graph root.
         if self.is_inside_sequence_diagram(graph) {
-            // Find the sequence diagram ancestor
-            let mut sd_level = 0u32;
+            // Find the sequence diagram ancestor and its Go-equivalent level
+            let mut go_sd_level = 0u32;
             let mut cur = self.parent;
             while let Some(pid) = cur {
                 if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
-                    sd_level = graph.objects[pid].level(graph);
+                    if pid == graph.root {
+                        go_sd_level = 0; // Go root.Level() = 0
+                    } else {
+                        go_sd_level = graph.objects[pid].level(graph);
+                    }
                     break;
                 }
                 cur = graph.objects[pid].parent;
             }
-            let rel = self.level(graph) - sd_level;
+            let rel = self.level(graph) - go_sd_level;
             return match rel {
-                1 => d2_color::B4,
-                2 => d2_color::B5,
-                3 => d2_color::N6,
+                1 => d2_color::B3,
+                2 => d2_color::B4,
+                3 => d2_color::B5,
+                4 => d2_color::N6,
                 _ => d2_color::N7,
             };
         }
