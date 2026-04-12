@@ -1012,6 +1012,11 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     Some(find_outer_intersection(pos, &ints))
                 }
             });
+            // Track whether a 3d/multiple modifier shift was applied so the
+            // non-rectangular perimeter trace that follows sees the same
+            // offset outline (mirror of Go's `edge.Src.TopLeft` mutation in
+            // `d2dagrelayout.Layout`).
+            let mut src_trace_box: Option<d2_geo::Box2D> = None;
             if let Some(p) = src_label_hit {
                 points[0] = p;
             } else {
@@ -1028,6 +1033,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     let mut b = src_box;
                     b.top_left.x += dx;
                     b.top_left.y -= dy;
+                    src_trace_box = Some(b);
                     b
                 } else {
                     src_box
@@ -1038,7 +1044,18 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 }
             }
             if !src_is_rect {
-                let traced = trace_to_shape_border(&g.objects[src_id], points[0], points[1]);
+                let bbox = src_trace_box
+                    .unwrap_or_else(|| d2_geo::Box2D::new(
+                        g.objects[src_id].top_left,
+                        g.objects[src_id].width,
+                        g.objects[src_id].height,
+                    ));
+                let traced = trace_to_shape_border_with_box(
+                    &g.objects[src_id],
+                    bbox,
+                    points[0],
+                    points[1],
+                );
                 points[0] = traced;
             }
 
@@ -1052,6 +1069,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     Some(find_outer_intersection(pos, &ints))
                 }
             });
+            let mut dst_trace_box: Option<d2_geo::Box2D> = None;
             if let Some(p) = dst_label_hit {
                 points[last] = p;
             } else {
@@ -1063,6 +1081,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     let mut b = dst_box;
                     b.top_left.x += dx;
                     b.top_left.y -= dy;
+                    dst_trace_box = Some(b);
                     b
                 } else {
                     dst_box
@@ -1073,12 +1092,21 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 }
             }
             if !dst_is_rect {
-                let traced =
-                    trace_to_shape_border(&g.objects[dst_id], points[last], points[last - 1]);
+                let bbox = dst_trace_box
+                    .unwrap_or_else(|| d2_geo::Box2D::new(
+                        g.objects[dst_id].top_left,
+                        g.objects[dst_id].width,
+                        g.objects[dst_id].height,
+                    ));
+                let traced = trace_to_shape_border_with_box(
+                    &g.objects[dst_id],
+                    bbox,
+                    points[last],
+                    points[last - 1],
+                );
                 points[last] = traced;
             }
         }
-
         // Build curved path from route points. Mirror Go d2dagrelayout
         // pathData: the inner loop runs `for i := 1; i < len(vectors)-2;
         // i++`, so with len(vectors) == 4 it iterates only `i=1`.
@@ -1405,12 +1433,19 @@ fn precision_eq(a: f64, b: f64) -> bool {
 /// Cloud shapes additionally need their inner-box aspect ratio so the
 /// dashed cloud outline matches Go; forward it if the object already
 /// computed one via `Object::content_aspect_ratio`.
-fn trace_to_shape_border(
+/// Like a thin wrapper around `d2_shape::trace_to_shape_border`, but lets
+/// the caller override the shape's bounding box. Needed for the
+/// 3d/multiple modifier zone: Go's `d2dagrelayout.Layout` temporarily
+/// mutates `edge.Dst.TopLeft` before `Edge.TraceToShape`, so the
+/// downstream `shape.TraceToShapeBorder` sees the offset outline. We
+/// replicate that by passing the shifted box here instead of mutating
+/// the graph object.
+fn trace_to_shape_border_with_box(
     obj: &d2_graph::Object,
+    bbox: d2_geo::Box2D,
     rect_border_point: Point,
     prev_point: Point,
 ) -> Point {
-    let bbox = d2_geo::Box2D::new(obj.top_left, obj.width, obj.height);
     let shape_type = d2_target::dsl_shape_to_shape_type(obj.shape.value.as_str());
     let mut shape = d2_shape::Shape::new(shape_type, bbox);
     if obj.shape.value == d2_target::SHAPE_CLOUD
