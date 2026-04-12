@@ -296,6 +296,18 @@ impl Map {
         let idx = self.edges.iter().position(|e| e.id.matches(eid))?;
         Some(self.edges.remove(idx))
     }
+
+    /// Copy the map without layers/scenarios/steps fields.
+    /// Mirrors Go d2ir.Map.CopyBase.
+    pub fn copy_base(&self) -> Map {
+        let mut m = self.clone();
+        m.delete_field("layers");
+        m.delete_field("scenarios");
+        m.delete_field("steps");
+        // Also remove "label" as Go does in overlay
+        m.delete_field("label");
+        m
+    }
 }
 
 impl Default for Map {

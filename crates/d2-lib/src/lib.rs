@@ -80,36 +80,11 @@ pub fn compile(
     // Step 1: parse + IR + compile -> Graph
     let mut g = d2_compiler::compile("", input).map_err(|e| format!("{}", e))?;
 
-    // Step 2: apply theme
     let theme_id = opts.theme_id.unwrap_or(0);
-    if let Some(theme) = d2_themes::catalog::find(theme_id) {
-        g.theme = Some(theme.clone());
-    }
 
-    // Step 3: set dimensions on objects using text measurement
-    let mut ruler = match opts.ruler {
-        Some(ref _r) => None, // we'll use the provided ruler below
-        None => Some(d2_textmeasure::Ruler::new().map_err(|e| format!("ruler init: {}", e))?),
-    };
-    let ruler_ref: &mut d2_textmeasure::Ruler = if let Some(ref mut r) = ruler {
-        r
-    } else {
-        // This branch is unreachable given the logic above, but let's be safe.
-        // We always create a ruler if none is provided.
-        return Err("no ruler available".to_string());
-    };
-
-    set_dimensions(&mut g, ruler_ref)?;
-
-    // Step 4: layout
-    if g.root_obj().is_sequence_diagram() {
-        d2_sequence::layout(&mut g)?;
-    } else {
-        d2_dagre_layout::layout(&mut g, None)?;
-    }
-
-    // Step 5: export
-    let mut diagram = d2_exporter::export(&g, None, None)?;
+    // Step 2-5: recursively compile graph (theme, dimensions, layout, export)
+    let mut ruler = d2_textmeasure::Ruler::new().map_err(|e| format!("ruler init: {}", e))?;
+    let mut diagram = compile_graph(&mut g, theme_id, &mut ruler)?;
 
     // Match Go d2lib.Compile: copy selected render options back into
     // diagram.Config so the diagram hash (used for CSS scoping) accounts for
@@ -159,6 +134,51 @@ pub fn compile(
     };
 
     Ok((diagram, svg))
+}
+
+/// Recursively compile a graph into a diagram: apply theme, set dimensions,
+/// run layout, export, then recurse into layers/scenarios/steps.
+/// Mirrors Go d2lib.compile.
+fn compile_graph(
+    g: &mut Graph,
+    theme_id: i64,
+    ruler: &mut d2_textmeasure::Ruler,
+) -> Result<d2_target::Diagram, String> {
+    // Apply theme
+    if let Some(theme) = d2_themes::catalog::find(theme_id) {
+        g.theme = Some(theme.clone());
+    }
+
+    if g.objects.len() > 1 || !g.edges.is_empty() {
+        // Set dimensions
+        set_dimensions(g, ruler)?;
+
+        // Layout
+        if g.root_obj().is_sequence_diagram() {
+            d2_sequence::layout(g)?;
+        } else {
+            d2_dagre_layout::layout(g, None)?;
+        }
+    }
+
+    // Export
+    let mut diagram = d2_exporter::export(g, None, None)?;
+
+    // Recursively compile nested boards
+    for layer in &mut g.layers {
+        let ld = compile_graph(layer, theme_id, ruler)?;
+        diagram.layers.push(ld);
+    }
+    for scenario in &mut g.scenarios {
+        let sd = compile_graph(scenario, theme_id, ruler)?;
+        diagram.scenarios.push(sd);
+    }
+    for step in &mut g.steps {
+        let sd = compile_graph(step, theme_id, ruler)?;
+        diagram.steps.push(sd);
+    }
+
+    Ok(diagram)
 }
 
 /// Convenience function: D2 source text -> SVG bytes with default options.

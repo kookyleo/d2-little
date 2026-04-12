@@ -3794,7 +3794,7 @@ fn make_keyframe(
 
     if percentage_end.ceil() as i64 == 100 {
         return format!(
-            "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n}}",
+            "@keyframes d2Transition-{}-{} {{\n\t\t0%, {:.6}% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%, {:.6}% {{\n\t\t\t\topacity: 1;\n\t\t}}\n}}",
             diagram_hash,
             identifier,
             percentage_before,
@@ -3805,7 +3805,7 @@ fn make_keyframe(
 
     let percentage_after = ((delay_ms + duration_ms) as f64 / total) * 100.0;
     format!(
-        "@keyframes d2Transition-{}-{} {{\n\t\t0%%, {:.6}%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%%, {:.6}%% {{\n\t\t\t\topacity: 1;\n\t\t}}\n\t\t{:.6}%%, 100%% {{\n\t\t\t\topacity: 0;\n\t\t}}\n}}",
+        "@keyframes d2Transition-{}-{} {{\n\t\t0%, {:.6}% {{\n\t\t\t\topacity: 0;\n\t\t}}\n\t\t{:.6}%, {:.6}% {{\n\t\t\t\topacity: 1;\n\t\t}}\n\t\t{:.6}%, 100% {{\n\t\t\t\topacity: 0;\n\t\t}}\n}}",
         diagram_hash,
         identifier,
         percentage_before,

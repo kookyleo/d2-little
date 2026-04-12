@@ -1358,6 +1358,11 @@ pub struct Graph {
     pub theme: Option<d2_themes::Theme>,
     pub legend: Option<GraphLegend>,
 
+    // Nested boards (layers, scenarios, steps)
+    pub layers: Vec<Graph>,
+    pub scenarios: Vec<Graph>,
+    pub steps: Vec<Graph>,
+
     // Parent graph reference (for nested boards)
     pub parent: Option<Box<Graph>>,
 }
@@ -1376,6 +1381,9 @@ impl Default for Graph {
             edges: Vec::new(),
             theme: None,
             legend: None,
+            layers: Vec::new(),
+            scenarios: Vec::new(),
+            steps: Vec::new(),
             parent: None,
         }
     }

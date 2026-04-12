@@ -249,6 +249,88 @@ impl Compiler {
         let root = g.root;
         self.compile_map(g, root, ir);
         self.set_default_shapes(g);
+
+        // Compile nested boards (layers, scenarios, steps).
+        // Mirrors Go d2compiler.compileBoard.
+        self.compile_boards_field(g, ir, "layers");
+        self.compile_boards_field(g, ir, "scenarios");
+        self.compile_boards_field(g, ir, "steps");
+
+        // Mark as folder-only when the graph has boards but no objects of its
+        // own (i.e. only the implicit root exists).
+        if !g.layers.is_empty() || !g.scenarios.is_empty() || !g.steps.is_empty() {
+            if g.objects.len() <= 1 && g.edges.is_empty() {
+                g.is_folder_only = true;
+            }
+        }
+    }
+
+    /// Extract sub-boards from the IR and compile each one into a child graph.
+    /// Mirrors Go d2compiler.compileBoardsField.
+    fn compile_boards_field(&mut self, g: &mut Graph, ir: &ir::Map, field_name: &str) {
+        let boards_field = match ir.get_field(field_name) {
+            Some(f) => f,
+            None => return,
+        };
+        let boards_map = match boards_field.map() {
+            Some(m) => m,
+            None => return,
+        };
+
+        // For scenarios/steps, compute the parent board's base (without
+        // layers/scenarios/steps) for overlay.
+        let parent_base = if field_name == "scenarios" || field_name == "steps" {
+            Some(ir.copy_base())
+        } else {
+            None
+        };
+
+        let mut prev_step_map: Option<ir::Map> = None;
+
+        for f in &boards_map.fields {
+            let child_map = f.map().cloned().unwrap_or_default();
+
+            // Apply overlay: scenarios inherit parent board, steps inherit
+            // previous step (or parent board for the first step).
+            let effective_map = match field_name {
+                "scenarios" => {
+                    let mut base = parent_base.as_ref().unwrap().clone();
+                    ir::overlay_map(&mut base, &child_map);
+                    base
+                }
+                "steps" => {
+                    let mut base = if let Some(ref prev) = prev_step_map {
+                        let mut b = prev.clone();
+                        // Remove label from prev step so it doesn't carry forward.
+                        b.delete_field("label");
+                        b
+                    } else {
+                        parent_base.as_ref().unwrap().clone()
+                    };
+                    ir::overlay_map(&mut base, &child_map);
+                    // Save for next step
+                    prev_step_map = Some(base.clone());
+                    base
+                }
+                _ => child_map,
+            };
+
+            let mut g2 = Graph::new();
+            self.compile_board(&mut g2, &effective_map);
+            g2.name = f.name.clone();
+            // Mark folder-only if the sub-board itself has no user objects.
+            if g2.objects.len() <= 1 && g2.edges.is_empty() {
+                g2.is_folder_only = true;
+            }
+            g2.sort_objects_by_ast();
+            g2.sort_edges_by_ast();
+            match field_name {
+                "layers" => g.layers.push(g2),
+                "scenarios" => g.scenarios.push(g2),
+                "steps" => g.steps.push(g2),
+                _ => {}
+            }
+        }
     }
 
     fn compile_map(&mut self, g: &mut Graph, obj: ObjId, m: &ir::Map) {
