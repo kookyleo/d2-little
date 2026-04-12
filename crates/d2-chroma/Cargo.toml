@@ -1,0 +1,9 @@
+[package]
+name = "d2-chroma"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+fancy-regex = "0.14"
+log = "0.4"
