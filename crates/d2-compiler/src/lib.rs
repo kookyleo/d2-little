@@ -414,7 +414,8 @@ impl Compiler {
         let children: Vec<ObjId> = g.objects[obj].children_array.clone();
         let mut table = d2_target::SQLTable::default();
         for &child in &children {
-            let id_val = g.objects[child].id.clone();
+            // Use id_val() (unquoted) to match Go's col.IDVal.
+            let id_val = g.objects[child].id_val().to_owned();
             let label_val = g.objects[child].label.value.clone();
             // If label matches id, type is empty (the user didn't specify
             // a type).
@@ -453,7 +454,12 @@ impl Compiler {
         let children: Vec<ObjId> = g.objects[obj].children_array.clone();
         let mut class = d2_target::Class::default();
         for &child in &children {
-            let id_val = g.objects[child].id.clone();
+            // Use id_val() (the unquoted form) to match Go's f.IDVal.
+            // The .id field may carry surrounding quotes for keys with
+            // special characters (spaces, parens, etc.) — those quotes
+            // must be stripped before comparing to the label value and
+            // before extracting the visibility prefix.
+            let id_val = g.objects[child].id_val().to_owned();
             let label_val = g.objects[child].label.value.clone();
             let underline = g.objects[child]
                 .style
