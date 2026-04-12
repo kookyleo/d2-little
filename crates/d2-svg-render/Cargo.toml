@@ -17,3 +17,4 @@ d2-fonts = { path = "../d2-fonts" }
 d2-font = { path = "../d2-font" }
 d2-textmeasure = { path = "../d2-textmeasure" }
 d2-ast = { path = "../d2-ast" }
+d2-chroma = { path = "../d2-chroma" }

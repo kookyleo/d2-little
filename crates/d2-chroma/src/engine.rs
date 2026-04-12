@@ -197,15 +197,25 @@ impl StateMachineLexer {
 impl Lexer for StateMachineLexer {
     fn tokenize(&self, source: &str) -> Vec<Token> {
         let mut input = source.to_string();
+        let mut newline_added = false;
         if self.ensure_nl && !input.ends_with('\n') {
             input.push('\n');
+            newline_added = true;
         }
+        // When EnsureNL adds a newline, the iterator stops one char before the
+        // end so the added newline is never tokenized. This matches chroma's
+        // LexerState.Iterator which uses `end := len(l.Text); if l.newlineAdded { end-- }`.
+        let end = if newline_added {
+            input.len() - 1
+        } else {
+            input.len()
+        };
 
         let mut tokens = Vec::new();
         let mut pos = 0;
         let mut state_stack: Vec<usize> = vec![self.find_state("root").unwrap_or(0)];
 
-        while pos < input.len() {
+        while pos < end {
             let current_state = *state_stack.last().unwrap();
             let rules = self.collect_rules(current_state);
 

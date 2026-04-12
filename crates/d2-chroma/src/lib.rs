@@ -87,7 +87,8 @@ pub fn svg_escape(s: &str) -> String {
 
 /// Get the SVG style attribute for a token type from a theme.
 /// Returns the fill/font-weight/font-style + class attributes, or empty string
-/// if no style applies. Matches Go's styleAttr function.
+/// if no style applies. Matches Go's styleAttr function exactly, including
+/// the internal double-space artifact from string replacement.
 pub fn style_attr(theme: &Theme, tt: TokenType) -> String {
     // Look up style: try exact type, then subcategory, then category
     let entry = theme.get(tt)
@@ -99,27 +100,40 @@ pub fn style_attr(theme: &Theme, tt: TokenType) -> String {
         _ => return String::new(),
     };
 
+    // Reconstruct the SVG style string the same way chroma does, then
+    // apply the same string-replace logic as Go's styleAttr:
+    // 1. Build the full SVG attribute string (fill, font-weight, font-style)
+    // 2. Remove font-weight="bold" (leaving a gap), add class
+    // 3. Remove font-style="italic" (leaving a gap), add class
+    // 4. TrimSpace (trims leading/trailing, preserves internal double spaces)
     let mut parts = Vec::new();
-    let mut classes = Vec::new();
-
     if let Some(ref color) = entry.color {
         parts.push(format!(r#"fill="{}""#, color));
     }
     if entry.bold {
-        classes.push("text-mono-bold");
+        parts.push(r#"font-weight="bold""#.to_string());
     }
     if entry.italic {
+        parts.push(r#"font-style="italic""#.to_string());
+    }
+    let mut out = parts.join(" ");
+
+    // Now apply Go's replacement logic
+    let mut classes = Vec::new();
+    if out.contains(r#"font-weight="bold""#) {
+        out = out.replacen(r#"font-weight="bold""#, "", 1);
+        classes.push("text-mono-bold");
+    }
+    if out.contains(r#"font-style="italic""#) {
+        out = out.replacen(r#"font-style="italic""#, "", 1);
         classes.push("text-mono-italic");
     }
 
-    let mut out = parts.join(" ");
     if !classes.is_empty() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
         out.push_str(&format!(r#"class="{}""#, classes.join(" ")));
     }
-    out
+
+    out.trim().to_string()
 }
 
 #[cfg(test)]

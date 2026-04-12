@@ -1837,6 +1837,114 @@ fn draw_shape(
             md_el.style = styles.join(";");
             buf.push_str(&md_el.render());
             buf.push_str("</foreignObject></g>");
+        } else if !target_shape.text.language.is_empty()
+            && target_shape.text.language != "latex"
+        {
+            // Code block rendering with syntax highlighting.
+            if let Some(tokens) = d2_chroma::tokenize(
+                &target_shape.text.language,
+                &target_shape.text.label,
+            ) {
+                let line_height: f64 = 1.3; // CODE_LINE_HEIGHT
+                let lines = d2_chroma::split_into_lines(&tokens);
+
+                for is_light in [true, false] {
+                    let theme_name = if is_light {
+                        "github"
+                    } else {
+                        "catppuccin-mocha"
+                    };
+                    let theme = d2_chroma::get_theme(theme_name).unwrap();
+                    let class = if is_light { "light-code" } else { "dark-code" };
+
+                    let mut font_size_attr = String::new();
+                    if target_shape.text.font_size != 16 {
+                        font_size_attr =
+                            format!(" style=\"font-size:{}\"", target_shape.text.font_size);
+                    }
+
+                    write!(
+                        buf,
+                        "<g transform=\"translate({:.6} {:.6})\" class=\"{}\"{}>",
+                        the_box.top_left.x,
+                        the_box.top_left.y,
+                        class,
+                        font_size_attr,
+                    )
+                    .unwrap();
+
+                    // Background rect
+                    let mut rect_el =
+                        d2_themes::ThemableElement::new("rect", inline_theme);
+                    rect_el.width = Some(target_shape.width as f64);
+                    rect_el.height = Some(target_shape.height as f64);
+                    rect_el.stroke = target_shape.stroke.clone();
+                    rect_el.class_name = "shape".to_owned();
+                    rect_el.style = format!(
+                        "fill:{};stroke-width:{};",
+                        theme.background, target_shape.stroke_width
+                    );
+                    buf.push_str(&rect_el.render());
+
+                    // Inner group with padding
+                    let padding = target_shape.text.font_size as f64 / 2.0;
+                    write!(
+                        buf,
+                        "<g transform=\"translate({:.6} {:.6})\">",
+                        padding, padding,
+                    )
+                    .unwrap();
+
+                    for (index, line_tokens) in lines.iter().enumerate() {
+                        write!(
+                            buf,
+                            "<text class=\"text-mono\" x=\"0\" y=\"{:.6}em\">",
+                            1.0 + index as f64 * line_height,
+                        )
+                        .unwrap();
+
+                        for tok in line_tokens {
+                            let escaped = d2_chroma::svg_escape(&tok.value);
+                            let attr =
+                                d2_chroma::style_attr(&theme, tok.token_type);
+                            if attr.is_empty() {
+                                buf.push_str(&escaped);
+                            } else {
+                                write!(
+                                    buf,
+                                    "<tspan {}>{}</tspan>",
+                                    attr, escaped,
+                                )
+                                .unwrap();
+                            }
+                        }
+
+                        buf.push_str("</text>");
+                    }
+
+                    buf.push_str("</g></g>");
+                }
+            } else {
+                // Unsupported language: fall back to plain text rendering
+                let mut text_el =
+                    d2_themes::ThemableElement::new("text", inline_theme);
+                text_el.x =
+                    Some(label_tl.x + target_shape.text.label_width as f64 / 2.0);
+                text_el.y =
+                    Some(label_tl.y + target_shape.text.font_size as f64);
+                text_el.fill = target_shape.get_font_color().to_owned();
+                text_el.class_name = "text-mono".to_owned();
+                text_el.style = format!(
+                    "text-anchor:middle;font-size:{}px",
+                    target_shape.text.font_size
+                );
+                text_el.content = render_text(
+                    &target_shape.text.label,
+                    text_el.x.unwrap(),
+                    target_shape.text.label_height as f64,
+                );
+                buf.push_str(&text_el.render());
+            }
         } else {
             if !target_shape.text.label_fill.is_empty() {
                 let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
