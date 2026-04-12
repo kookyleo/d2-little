@@ -9,6 +9,118 @@ use d2_label;
 use d2_target;
 use d2_themes;
 
+// ---------------------------------------------------------------------------
+// Key ID formatting — mirrors Go's d2format.Format(RawString(s, inKey=true))
+// ---------------------------------------------------------------------------
+
+/// Characters that force quoting of a key segment.  Matches Go
+/// `d2ast.UnquotedKeySpecials`.
+const UNQUOTED_KEY_SPECIALS: &str = "#;\n\\{}[]'\"|:.-<>*&()@&";
+
+/// Format a key segment for use as an object ID, matching Go's
+/// `d2format.Format(RawString(name, true))`.
+///
+/// If `name` contains characters from `UNQUOTED_KEY_SPECIALS`, the
+/// result is a double-quoted (or single-quoted) string.  Otherwise
+/// the name is returned unchanged.
+///
+/// Inside double-quoted output, `"` and `\` are backslash-escaped
+/// and literal newlines become `\n`.
+pub fn format_key_segment(name: &str) -> String {
+    if name.is_empty() {
+        return "\"\"".to_owned();
+    }
+    let needs_quoting = name.chars().any(|ch| {
+        if ch == '-' {
+            // A lone '-' does NOT require quoting; only '--' does.
+            // However, the simple char-level check here matches Go
+            // RawString which checks for '-' only when next char is
+            // also '-'. For correctness we just check the set (Go
+            // itself iterates runes and only skips single '-').
+            // We'll handle the dash special-case below.
+            return false;
+        }
+        UNQUOTED_KEY_SPECIALS.contains(ch)
+    }) || name.contains("--");
+
+    if !needs_quoting {
+        // Check surrounding whitespace
+        let has_surrounding_ws = name.starts_with(char::is_whitespace)
+            || name.ends_with(char::is_whitespace);
+        if !has_surrounding_ws {
+            return name.to_owned();
+        }
+    }
+
+    // Prefer double quotes unless the string contains '"'
+    if !name.contains('"') {
+        let mut out = String::with_capacity(name.len() + 2);
+        out.push('"');
+        for ch in name.chars() {
+            match ch {
+                '\\' => {
+                    out.push('\\');
+                    out.push('\\');
+                }
+                '\n' => {
+                    out.push('\\');
+                    out.push('n');
+                }
+                _ => out.push(ch),
+            }
+        }
+        out.push('"');
+        return out;
+    }
+
+    // Fallback to single quotes
+    if !name.contains('\n') {
+        let mut out = String::with_capacity(name.len() + 2);
+        out.push('\'');
+        for ch in name.chars() {
+            if ch == '\'' {
+                out.push('\''); // escape ' by doubling
+            }
+            out.push(ch);
+        }
+        out.push('\'');
+        return out;
+    }
+
+    // Both " and \n — use double quotes and escape "
+    let mut out = String::with_capacity(name.len() + 4);
+    out.push('"');
+    for ch in name.chars() {
+        match ch {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => {
+                out.push('\\');
+                out.push('n');
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Strip surrounding quotes from a formatted key segment, returning
+/// the unquoted (IDVal) form.  If the string is not quoted, it is
+/// returned unchanged.
+pub fn unformat_key_segment(formatted: &str) -> &str {
+    if formatted.len() >= 2 {
+        if (formatted.starts_with('"') && formatted.ends_with('"'))
+            || (formatted.starts_with('\'') && formatted.ends_with('\''))
+        {
+            return &formatted[1..formatted.len() - 1];
+        }
+    }
+    formatted
+}
+
 /// Compare two AST source ranges by start position. Mirrors Go's
 /// `Range.Before` ordering used in `SortObjectsByAST`.
 fn range_cmp(a: &ast::Range, b: &ast::Range) -> std::cmp::Ordering {
@@ -529,9 +641,10 @@ impl Object {
         &self.abs_id
     }
 
-    /// The short ID value (without dotted path).
+    /// The short ID value (without dotted path), unquoted.
+    /// Mirrors Go `Object.IDVal`.
     pub fn id_val(&self) -> &str {
-        &self.id
+        unformat_key_segment(&self.id)
     }
 
     /// True if this object has children.
@@ -1396,7 +1509,8 @@ impl Graph {
     pub fn ensure_child_of(&mut self, parent: ObjId, ida: &[String]) -> ObjId {
         let mut cur = parent;
         for name in ida {
-            // Look for existing child
+            // Look for existing child — match on the unquoted value
+            // (id_val), same as the incoming IR field name.
             let existing = self.objects[cur]
                 .children_array
                 .iter()
@@ -1405,15 +1519,19 @@ impl Graph {
             if let Some(cid) = existing {
                 cur = cid;
             } else {
+                // Format the key segment: adds quotes when the name
+                // contains special characters, matching Go's
+                // newObject → d2format.Format(RawString(name, true)).
+                let formatted = format_key_segment(name);
                 let parent_abs = self.objects[cur].abs_id.clone();
                 let abs = if parent_abs.is_empty() {
-                    name.clone()
+                    formatted.clone()
                 } else {
-                    format!("{}.{}", parent_abs, name)
+                    format!("{}.{}", parent_abs, formatted)
                 };
                 let idx = self.objects.len();
                 let obj = Object {
-                    id: name.clone(),
+                    id: formatted,
                     abs_id: abs,
                     label: Label {
                         value: name.clone(),
