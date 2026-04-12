@@ -15,3 +15,4 @@ d2-themes = { path = "../d2-themes" }
 d2-color = { path = "../d2-color" }
 d2-geo = { path = "../d2-geo" }
 d2-textmeasure = { path = "../d2-textmeasure" }
+roxmltree = "0.20"

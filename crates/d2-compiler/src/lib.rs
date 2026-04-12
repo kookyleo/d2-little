@@ -7,6 +7,27 @@ use d2_ast::{self as ast};
 use d2_graph::{self as graph, Graph, ObjId, ScalarValue};
 use d2_ir::{self as ir};
 use d2_target;
+use roxmltree::Document;
+
+fn block_string_language(scalar: &ir::Scalar) -> Option<String> {
+    match &scalar.value {
+        ast::ScalarBox::BlockString(block) => Some(
+            short_to_full_language(&block.tag)
+                .unwrap_or(block.tag.as_str())
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+fn validate_markdown_xml(markdown: &str) -> Result<(), String> {
+    let rendered =
+        d2_textmeasure::render_markdown(markdown).map_err(|_| "malformed Markdown".to_owned())?;
+    let wrapped = format!("<div>{}</div>", rendered);
+    Document::parse(&wrapped)
+        .map(|_| ())
+        .map_err(|e| format!("malformed Markdown: {e}"))
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -303,7 +324,11 @@ impl Compiler {
             let label_val = g.objects[child].label.value.clone();
             // If label matches id, type is empty (the user didn't specify
             // a type).
-            let type_ = if label_val == id_val { String::new() } else { label_val };
+            let type_ = if label_val == id_val {
+                String::new()
+            } else {
+                label_val
+            };
             let constraint = g.objects[child].constraint.clone();
             table.columns.push(d2_target::SQLColumn {
                 name: d2_target::Text {
@@ -336,8 +361,7 @@ impl Compiler {
         for &child in &children {
             let id_val = g.objects[child].id.clone();
             let label_val = g.objects[child].label.value.clone();
-            let underline = g
-                .objects[child]
+            let underline = g.objects[child]
                 .style
                 .underline
                 .as_ref()
@@ -363,7 +387,11 @@ impl Compiler {
                 });
             } else {
                 // Field
-                let type_ = if label_val == id_val { String::new() } else { label_val };
+                let type_ = if label_val == id_val {
+                    String::new()
+                } else {
+                    label_val
+                };
                 class.fields.push(d2_target::ClassField {
                     name,
                     type_,
@@ -448,6 +476,14 @@ impl Compiler {
         if let Some(ref primary) = f.primary {
             let label_val = primary.scalar_string();
             g.objects[child].label.value = label_val;
+            if let Some(language) = block_string_language(primary) {
+                if language == "markdown"
+                    && let Err(err) = validate_markdown_xml(&primary.scalar_string())
+                {
+                    self.errorf(primary.value.get_range(), err);
+                }
+                g.objects[child].language = language;
+            }
         }
 
         // Recurse into map
@@ -464,6 +500,16 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.objects[obj].label.value = val;
                 }
+                if let Some(ref primary) = f.primary
+                    && let Some(language) = block_string_language(primary)
+                {
+                    if language == "markdown"
+                        && let Err(err) = validate_markdown_xml(&primary.scalar_string())
+                    {
+                        self.errorf(primary.value.get_range(), err);
+                    }
+                    g.objects[obj].language = language;
+                }
                 self.compile_position(g, obj, "label", f);
             }
             "shape" => {
@@ -474,6 +520,13 @@ impl Compiler {
                         return;
                     }
                     g.objects[obj].shape.value = lower;
+                    if g.objects[obj]
+                        .shape
+                        .value
+                        .eq_ignore_ascii_case(d2_target::SHAPE_CODE)
+                    {
+                        g.objects[obj].language = d2_target::SHAPE_TEXT.to_owned();
+                    }
                 }
             }
             "icon" => {
@@ -493,6 +546,11 @@ impl Compiler {
             }
             "tooltip" => {
                 if let Some(val) = primary_str {
+                    if let Err(err) = validate_markdown_xml(&val)
+                        && let Some(ref primary) = f.primary
+                    {
+                        self.errorf(primary.value.get_range(), err);
+                    }
                     g.objects[obj].tooltip = Some(ScalarValue { value: val });
                 }
                 self.compile_position(g, obj, "tooltip", f);
@@ -706,6 +764,14 @@ impl Compiler {
         // Set label from primary
         if let Some(ref primary) = e.primary {
             g.edges[edge_idx].label.value = primary.scalar_string();
+            if let Some(language) = block_string_language(primary) {
+                if language == "markdown"
+                    && let Err(err) = validate_markdown_xml(&primary.scalar_string())
+                {
+                    self.errorf(primary.value.get_range(), err);
+                }
+                g.edges[edge_idx].language = language;
+            }
         }
 
         // Process edge map
@@ -772,6 +838,16 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.edges[edge_idx].label.value = val;
                 }
+                if let Some(ref primary) = f.primary
+                    && let Some(language) = block_string_language(primary)
+                {
+                    if language == "markdown"
+                        && let Err(err) = validate_markdown_xml(&primary.scalar_string())
+                    {
+                        self.errorf(primary.value.get_range(), err);
+                    }
+                    g.edges[edge_idx].language = language;
+                }
             }
             "icon" => {
                 if let Some(val) = primary_str {
@@ -780,6 +856,11 @@ impl Compiler {
             }
             "tooltip" => {
                 if let Some(val) = primary_str {
+                    if let Err(err) = validate_markdown_xml(&val)
+                        && let Some(ref primary) = f.primary
+                    {
+                        self.errorf(primary.value.get_range(), err);
+                    }
                     g.edges[edge_idx].tooltip = Some(ScalarValue { value: val });
                 }
             }
@@ -855,13 +936,10 @@ impl Compiler {
                                 if let Some(val) = sf.primary_string() {
                                     let b = val == "true";
                                     if is_src {
-                                        if let Some(ref mut ah) =
-                                            g.edges[edge_idx].src_arrowhead
-                                        {
+                                        if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                                             ah.filled = Some(b);
                                         }
-                                    } else if let Some(ref mut ah) =
-                                        g.edges[edge_idx].dst_arrowhead
+                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead
                                     {
                                         ah.filled = Some(b);
                                     }
@@ -878,7 +956,25 @@ impl Compiler {
         let count = g.objects.len();
         for i in 0..count {
             if g.objects[i].shape.value.is_empty() {
-                g.objects[i].shape.value = d2_target::SHAPE_RECTANGLE.to_string();
+                let mut outer_sequence_diagram = false;
+                let mut parent = g.objects[i].parent;
+                while let Some(pid) = parent {
+                    if g.objects[pid].is_sequence_diagram() {
+                        outer_sequence_diagram = true;
+                        break;
+                    }
+                    parent = g.objects[pid].parent;
+                }
+
+                g.objects[i].shape.value = if outer_sequence_diagram {
+                    d2_target::SHAPE_RECTANGLE.to_owned()
+                } else if g.objects[i].language == "latex" || g.objects[i].language == "markdown" {
+                    d2_target::SHAPE_TEXT.to_owned()
+                } else if !g.objects[i].language.is_empty() {
+                    d2_target::SHAPE_CODE.to_owned()
+                } else {
+                    d2_target::SHAPE_RECTANGLE.to_owned()
+                };
             }
         }
     }
@@ -1133,9 +1229,8 @@ mod tests {
 
     #[test]
     fn test_multiple_edge_styles_stay_on_their_own_edges() {
-        let g = compile_ok(
-            "x -> y: {\n  style.stroke: green\n}\ny -> z: {\n  style.stroke: red\n}",
-        );
+        let g =
+            compile_ok("x -> y: {\n  style.stroke: green\n}\ny -> z: {\n  style.stroke: red\n}");
         assert_eq!(g.edges.len(), 2);
         assert_eq!(g.edges[0].style.stroke.as_ref().unwrap().value, "green");
         assert_eq!(g.edges[1].style.stroke.as_ref().unwrap().value, "red");
