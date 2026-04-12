@@ -17,6 +17,7 @@ members = [
     "crates/d2-compiler",
     "crates/d2-graph",
     "crates/d2-dagre-layout",
+    "crates/d2-sequence",
     "crates/d2-exporter",
     "crates/d2-svg-render",
     "crates/d2-lib",

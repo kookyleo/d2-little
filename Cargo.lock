@@ -163,6 +163,7 @@ dependencies = [
  "d2-graph",
  "d2-ir",
  "d2-parser",
+ "d2-sequence",
  "d2-shape",
  "d2-svg-render",
  "d2-target",
@@ -176,6 +177,17 @@ name = "d2-parser"
 version = "0.7.1"
 dependencies = [
  "d2-ast",
+]
+
+[[package]]
+name = "d2-sequence"
+version = "0.7.1"
+dependencies = [
+ "d2-geo",
+ "d2-graph",
+ "d2-label",
+ "d2-target",
+ "log",
 ]
 
 [[package]]

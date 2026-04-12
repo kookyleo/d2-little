@@ -102,7 +102,11 @@ pub fn compile(
     set_dimensions(&mut g, ruler_ref)?;
 
     // Step 4: layout
-    d2_dagre_layout::layout(&mut g, None)?;
+    if g.root_obj().is_sequence_diagram() {
+        d2_sequence::layout(&mut g)?;
+    } else {
+        d2_dagre_layout::layout(&mut g, None)?;
+    }
 
     // Step 5: export
     let mut diagram = d2_exporter::export(&g, None, None)?;
@@ -588,14 +592,13 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             width: tw,
             height: th,
         };
-
         // Compute "default dimensions" — the content box the shape needs to
         // wrap. Mirrors Go d2graph.GetDefaultSize: labelDims plus
         // INNER_LABEL_PADDING (5) on each axis when there's no explicit
         // width/height and the shape isn't `text`. Code shapes instead get
         // 0.5em padding per side (fontSize on each axis). Width/height are
         // then floored to MIN_SHAPE_SIZE.
-        let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text";
+        let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text" && !label.is_empty();
         let (label_pad_x, label_pad_y) = if shape == "code" {
             (f64::from(font_size), f64::from(font_size))
         } else if with_label_padding {
