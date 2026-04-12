@@ -1628,6 +1628,13 @@ fn get_ranks(
         if obj.is_container() {
             continue;
         }
+        // Skip objects removed from layout (e.g. sequence diagram internals
+        // marked with a sentinel shape).
+        if obj.shape.value == "__d2_seq_nested_removed__"
+            || obj.shape.value == "__d2_class_field_removed__"
+        {
+            continue;
+        }
         let key = if is_horizontal {
             (obj.top_left.x + obj.width / 2.0).ceil()
         } else {
@@ -1651,7 +1658,11 @@ fn get_ranks(
         if i == g.root || obj.is_container() {
             continue;
         }
-        let r = object_ranks[&i];
+        // Skip sentinel-shaped objects (same filter as rank assignment above).
+        let r = match object_ranks.get(&i) {
+            Some(&r) => r,
+            None => continue,
+        };
         let mut p = obj.parent;
         while let Some(pid) = p {
             if pid == g.root {
@@ -2468,7 +2479,13 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
     let mut prev_left: HashMap<ObjId, f64> = HashMap::new();
     let mut prev_right: HashMap<ObjId, f64> = HashMap::new();
 
-    let obj_ids: Vec<ObjId> = (0..g.objects.len()).filter(|&i| i != g.root).collect();
+    let obj_ids: Vec<ObjId> = (0..g.objects.len())
+        .filter(|&i| {
+            i != g.root
+                && g.objects[i].shape.value != "__d2_seq_nested_removed__"
+                && g.objects[i].shape.value != "__d2_class_field_removed__"
+        })
+        .collect();
     for obj in obj_ids {
         if g.objects[obj].is_grid_diagram() {
             continue;
