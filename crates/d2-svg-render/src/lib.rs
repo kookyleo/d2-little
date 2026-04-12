@@ -1426,11 +1426,23 @@ fn draw_shape(
         _ => {
             // Generic path-based shapes (diamond, cloud, cylinder, etc.)
             let bbox = d2_geo::Box2D::new(tl, width, height);
-            let s = d2_shape::Shape::new(shape_type, bbox);
+            let mut s = d2_shape::Shape::new(shape_type, bbox);
+            // Match Go d2svg.go: cloud picks one of three inner boxes based
+            // on content aspect ratio, so propagate it before sizing.
+            if shape_type == d2_shape::CLOUD_TYPE {
+                if let Some(ar) = target_shape.content_aspect_ratio {
+                    s.set_inner_box_aspect_ratio(ar);
+                }
+            }
 
             if let Some(ref mtl) = multiple_tl {
                 let m_bbox = d2_geo::Box2D::new(*mtl, width, height);
-                let ms = d2_shape::Shape::new(shape_type, m_bbox);
+                let mut ms = d2_shape::Shape::new(shape_type, m_bbox);
+                if shape_type == d2_shape::CLOUD_TYPE {
+                    if let Some(ar) = target_shape.content_aspect_ratio {
+                        ms.set_inner_box_aspect_ratio(ar);
+                    }
+                }
                 let mut el = d2_themes::ThemableElement::new("path", inline_theme);
                 el.fill = fill.clone();
                 el.stroke = stroke.clone();
@@ -1471,7 +1483,12 @@ fn draw_shape(
     {
         let icon_position = d2_label::Position::from_string(&target_shape.icon_position);
         let bbox = d2_geo::Box2D::new(tl, width, height);
-        let s = d2_shape::Shape::new(shape_type, bbox);
+        let mut s = d2_shape::Shape::new(shape_type, bbox);
+        if shape_type == d2_shape::CLOUD_TYPE {
+            if let Some(ar) = target_shape.content_aspect_ratio {
+                s.set_inner_box_aspect_ratio(ar);
+            }
+        }
         let the_box = if icon_position.is_outside() {
             s.get_box().clone()
         } else {
@@ -1515,7 +1532,12 @@ fn draw_shape(
     if !target_shape.text.label.is_empty() && target_shape.opacity != 0.0 {
         let label_position = d2_label::Position::from_string(&target_shape.label_position);
         let bbox = d2_geo::Box2D::new(tl, width, height);
-        let s = d2_shape::Shape::new(shape_type, bbox);
+        let mut s = d2_shape::Shape::new(shape_type, bbox);
+        if shape_type == d2_shape::CLOUD_TYPE {
+            if let Some(ar) = target_shape.content_aspect_ratio {
+                s.set_inner_box_aspect_ratio(ar);
+            }
+        }
 
         let the_box = if label_position.is_outside() || label_position.is_border() {
             let mut b = s.get_box().clone();
