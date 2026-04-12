@@ -990,7 +990,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         // of snapping to the shape's own rectangle. Non-rectangular shape
         // border tracing is still TODO — for rectangles the box
         // intersection is what Go's `TraceToShapeBorder` returns.
-        if src_id != dst_id && points.len() >= 2 {
+        if points.len() >= 2 {
             let last = points.len() - 1;
             // `shape.TraceToShapeBorder` in Go rounds the final point to
             // the nearest integer for any non-rectangular shape (after
