@@ -741,6 +741,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
             i != g.root
                 && !excluded_objects.contains(&i)
                 && g.objects[i].shape.value != "__d2_class_field_removed__"
+                && g.objects[i].shape.value != "__d2_seq_nested_removed__"
         })
         .collect();
     for &obj_id in &obj_ids {
