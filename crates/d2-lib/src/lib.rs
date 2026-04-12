@@ -572,7 +572,9 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 .ceil() as i32;
             return Ok((w, h));
         }
-        if language == "markdown" {
+        if language == "latex" {
+            d2_latex::measure(label).map_err(|e| format!("latex measure: {}", e))
+        } else if language == "markdown" {
             d2_textmeasure::measure_markdown(
                 label,
                 ruler,
@@ -1167,8 +1169,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             // - Otherwise: regular text measurement with font style
             let edge_language = &g.edges[i].language;
             let (tw, th) = if edge_language == "latex" {
-                // Latex: not implemented, fallback to ruler
-                ruler.measure(font, &label)
+                d2_latex::measure(&label).unwrap_or_else(|_| ruler.measure(font, &label))
             } else if edge_language == "markdown" {
                 d2_textmeasure::measure_markdown(
                     &label,

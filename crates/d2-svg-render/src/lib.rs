@@ -1063,9 +1063,42 @@ fn draw_connection(
 
                 buf.push_str(&md_el.render());
                 buf.push_str("</foreignObject></g>");
-            } else if !connection.text.language.is_empty()
-                && connection.text.language != "latex"
-            {
+            } else if connection.text.language == "latex" {
+                // LaTeX rendering via MathJax SVG (connections).
+                if let Ok(mut latex_svg) = d2_latex::render(&connection.text.label) {
+                    latex_svg = latex_svg
+                        .replace(r#"<?xml version="1.0" encoding="UTF-8"?>"#, "")
+                        .replace(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">"#, "");
+
+                    let stroke_color = if connection.stroke.is_empty() {
+                        "#0A0F25"
+                    } else {
+                        &connection.stroke
+                    };
+                    let route = &connection.route;
+                    if !route.is_empty() {
+                        let label_pos_str = if connection.label_position.is_empty() {
+                            "InsideMiddleCenter"
+                        } else {
+                            &connection.label_position
+                        };
+                        let label_pos = d2_label::Position::from_string(label_pos_str);
+                        let r = d2_geo::Route(route.clone());
+                        if let Some((pt, _)) = label_pos.get_point_on_route(
+                            &r,
+                            d2_label::PADDING,
+                            0.0,
+                            connection.text.label_width as f64,
+                            connection.text.label_height as f64,
+                        ) {
+                            buf.push_str(&format!(
+                                r#"<g transform="translate({} {})" style="color:{}">{}</g>"#,
+                                pt.x, pt.y, stroke_color, latex_svg
+                            ));
+                        }
+                    }
+                }
+            } else if !connection.text.language.is_empty() {
                 // Code block rendering with syntax highlighting.
                 // Mirrors Go drawConnection lines 1207-1252.
                 if let Some(tokens) = d2_chroma::tokenize(
@@ -1906,9 +1939,40 @@ fn draw_shape(
             md_el.style = styles.join(";");
             buf.push_str(&md_el.render());
             buf.push_str("</foreignObject></g>");
-        } else if !target_shape.text.language.is_empty()
-            && target_shape.text.language != "latex"
-        {
+        } else if target_shape.text.language == "latex" {
+            // LaTeX rendering via MathJax SVG.
+            if let Ok(mut latex_svg) = d2_latex::render(&target_shape.text.label) {
+                // Strip XML declaration and DOCTYPE (same as Go).
+                latex_svg = latex_svg
+                    .replace(r#"<?xml version="1.0" encoding="UTF-8"?>"#, "")
+                    .replace(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">"#, "");
+
+                let label_pos_str = if target_shape.label_position.is_empty() {
+                    "InsideMiddleCenter"
+                } else {
+                    &target_shape.label_position
+                };
+                let label_position = d2_label::Position::from_string(label_pos_str);
+                let box_ = if label_position.is_outside() {
+                    the_box
+                } else {
+                    let inner_s = d2_shape::Shape::new(shape_type, the_box);
+                    d2_shape::ShapeOps::get_inner_box(&inner_s)
+                };
+                let label_tl = label_position.get_point_on_box(
+                    &box_,
+                    d2_label::PADDING,
+                    target_shape.text.label_width as f64,
+                    target_shape.text.label_height as f64,
+                );
+
+                let mut g_el = d2_themes::ThemableElement::new("g", inline_theme);
+                g_el.set_translate(label_tl.x, label_tl.y);
+                g_el.color = target_shape.stroke.clone();
+                g_el.content = latex_svg;
+                buf.push_str(&g_el.render());
+            }
+        } else if !target_shape.text.language.is_empty() {
             // Code block rendering with syntax highlighting.
             if let Some(tokens) = d2_chroma::tokenize(
                 &target_shape.text.language,

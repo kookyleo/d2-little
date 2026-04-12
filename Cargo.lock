@@ -174,6 +174,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2-latex"
+version = "0.7.1"
+
+[[package]]
 name = "d2-lib"
 version = "0.7.1"
 dependencies = [
@@ -185,6 +189,7 @@ dependencies = [
  "d2-geo",
  "d2-graph",
  "d2-ir",
+ "d2-latex",
  "d2-parser",
  "d2-sequence",
  "d2-shape",
@@ -242,6 +247,7 @@ dependencies = [
  "d2-fonts",
  "d2-geo",
  "d2-label",
+ "d2-latex",
  "d2-shape",
  "d2-svg-path",
  "d2-target",

@@ -398,7 +398,7 @@ impl ThemableElement {
     }
 
     pub fn set_translate(&mut self, x: f64, y: f64) {
-        self.transform = format!("translate({x} {y})");
+        self.transform = format!("translate({x:.6} {y:.6})");
     }
 
     pub fn set_mask_url(&mut self, url: &str) {

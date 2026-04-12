@@ -21,6 +21,7 @@ d2-textmeasure = { path = "../d2-textmeasure" }
 d2-fonts = { path = "../d2-fonts" }
 d2-shape = { path = "../d2-shape" }
 d2-geo = { path = "../d2-geo" }
+d2-latex = { path = "../d2-latex" }
 
 [dev-dependencies]
 serde_json = "1"
