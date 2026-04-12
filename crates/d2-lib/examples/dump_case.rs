@@ -30,6 +30,10 @@ fn main() {
     );
     let exp = fs::read_to_string(&exp_path).expect("read fixture");
 
+    // Dump both SVGs to /tmp for external diffing tools.
+    let _ = fs::write("/tmp/ours.svg", &svg_str);
+    let _ = fs::write("/tmp/exp.svg", &exp);
+
     let pos = svg_str
         .chars()
         .zip(exp.chars())
