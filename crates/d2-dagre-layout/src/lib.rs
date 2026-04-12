@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use d2_geo::{Ellipse, Point, Segment, Vector};
+use d2_geo::{Point, Segment};
 use d2_graph::{Graph, ObjId};
 
 // ---------------------------------------------------------------------------
@@ -1388,71 +1388,37 @@ fn precision_eq(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1.0
 }
 
-/// Port of Go `shape.TraceToShapeBorder` for circle and oval shapes.
-/// Given the (possibly fractional) box-intersect point and the previous
-/// route point, compute the exact perimeter intersection for the shape
-/// and round to the nearest integer — matching Go's two-step flow.
+/// Thin wrapper around `d2_shape::trace_to_shape_border`. Constructs a
+/// transient `d2_shape::Shape` from the object's current box and shape
+/// type, then delegates the perimeter-intersection math there.
 ///
-/// For shapes we don't yet model exactly, we fall back to rounding the
-/// provided box-intersect point (which is what Go's rectangular fast
-/// path would do plus a round that the caller wants).
+/// Important: `d2_shape::Shape::new` expects the *internal* shape type
+/// (capitalized, e.g. `"Document"`), not the DSL name stored on
+/// `Object.shape.value` (lowercase, e.g. `"document"`). Without the
+/// translation `Shape::new` silently falls through to `Rectangle` and
+/// `perimeter()` returns an empty `Vec`, so `trace_to_shape_border`
+/// returns `rect_border_point` unchanged and every non-rectangular
+/// shape endpoint looked like it was still at the bounding-box edge.
+/// Route the name through `d2_target::dsl_shape_to_shape_type` the same
+/// way `d2-svg-render` does when it builds shapes for rendering.
+///
+/// Cloud shapes additionally need their inner-box aspect ratio so the
+/// dashed cloud outline matches Go; forward it if the object already
+/// computed one via `Object::content_aspect_ratio`.
 fn trace_to_shape_border(
     obj: &d2_graph::Object,
     rect_border_point: Point,
     prev_point: Point,
 ) -> Point {
-    let shape_val = obj.shape.value.as_str();
-    let is_ellipse = matches!(shape_val, d2_target::SHAPE_CIRCLE | d2_target::SHAPE_OVAL);
-    if !is_ellipse {
-        // Not yet modelled — fall back to rounding the box intersect.
-        return Point::new(rect_border_point.x.round(), rect_border_point.y.round());
+    let bbox = d2_geo::Box2D::new(obj.top_left, obj.width, obj.height);
+    let shape_type = d2_target::dsl_shape_to_shape_type(obj.shape.value.as_str());
+    let mut shape = d2_shape::Shape::new(shape_type, bbox);
+    if obj.shape.value == d2_target::SHAPE_CLOUD
+        && let Some(ratio) = obj.content_aspect_ratio
+    {
+        shape.set_inner_box_aspect_ratio(ratio);
     }
-
-    // Circle / oval: inscribed ellipse inside the shape box.
-    let cx = obj.top_left.x + obj.width / 2.0;
-    let cy = obj.top_left.y + obj.height / 2.0;
-    let rx = obj.width / 2.0;
-    let ry = obj.height / 2.0;
-    let ellipse = Ellipse::new(Point::new(cx, cy), rx, ry);
-
-    // Extend the segment past the shape so we're sure to hit both
-    // perimeter intersections. Go adds `scaleSize` (shape width or
-    // height depending on axis) to the segment length.
-    let scale = if prev_point.x == rect_border_point.x {
-        obj.height
-    } else {
-        obj.width
-    };
-    let mut v = Vector::new(&[
-        rect_border_point.x - prev_point.x,
-        rect_border_point.y - prev_point.y,
-    ]);
-    let cur_len = v.length();
-    if cur_len > 0.0 {
-        let scale_factor = (cur_len + scale) / cur_len;
-        v = v.multiply(scale_factor);
-    }
-    let extended_end = Point::new(prev_point.x + v.0[0], prev_point.y + v.0[1]);
-    let extended = Segment::new(prev_point, extended_end);
-
-    let ints = ellipse.intersections(&extended);
-    let mut closest = rect_border_point;
-    let mut closest_d = f64::INFINITY;
-    for p in &ints {
-        let dx = rect_border_point.x - p.x;
-        let dy = rect_border_point.y - p.y;
-        let d = (dx * dx + dy * dy).sqrt();
-        if d < closest_d {
-            closest_d = d;
-            closest = *p;
-        }
-    }
-
-    // Truncate to float32 precision + round to integer (mirrors Go's
-    // `TruncateFloat32` + `math.Round`).
-    let tx = (closest.x as f32) as f64;
-    let ty = (closest.y as f32) as f64;
-    Point::new(tx.round(), ty.round())
+    d2_shape::trace_to_shape_border(&shape, &rect_border_point, &prev_point)
 }
 
 /// Compute the outside-label `Box2D` and its position for an object — the
