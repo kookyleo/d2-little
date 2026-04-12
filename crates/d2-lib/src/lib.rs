@@ -224,7 +224,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         container_id: ObjId,
         // Positions relative to container's (0,0)
         obj_positions: HashMap<ObjId, (f64, f64, f64, f64)>, // obj -> (x, y, w, h)
-        edge_routes: HashMap<usize, Vec<Point>>,
+        edge_routes: HashMap<usize, (Vec<Point>, Option<String>)>, // (route, label_position)
         container_width: f64,
         container_height: f64,
     }
@@ -315,9 +315,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             obj_positions.insert(main_id, (obj.top_left.x, obj.top_left.y, obj.width, obj.height));
         }
 
-        let mut edge_routes = HashMap::new();
+        let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>)> = HashMap::new();
         for (&main_ei, &sub_ei) in &edge_map {
-            edge_routes.insert(main_ei, sub_g.edges[sub_ei].route.clone());
+            let sub_edge = &sub_g.edges[sub_ei];
+            edge_routes.insert(main_ei, (sub_edge.route.clone(), sub_edge.label_position.clone()));
         }
 
         // Compute bounding box of the laid-out subgraph.
@@ -401,9 +402,12 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             obj.update_box();
         }
 
-        for (&ei, route) in &result.edge_routes {
+        for (&ei, (route, label_pos)) in &result.edge_routes {
             let edge = &mut g.edges[ei];
             edge.route = route.iter().map(|p| Point::new(p.x + dx, p.y + dy)).collect();
+            if let Some(pos) = label_pos {
+                edge.label_position = Some(pos.clone());
+            }
         }
     }
 
