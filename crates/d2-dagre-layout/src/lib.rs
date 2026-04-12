@@ -1914,7 +1914,8 @@ fn shift_reachable_down(
     // after "grow containers" widens objects and brings new neighbours into
     // range.
     let mut grown: HashSet<ObjId> = HashSet::new();
-    // Initial pass
+    // Inner-then-outer work loop. `'outer` is now only used to re-enter the
+    // BFS after new neighbours are queued by checkBelow during a grow.
     'outer: loop {
         while let Some(curr) = (!q.is_empty()).then(|| q.remove(0)) {
             if seen.contains(&curr) {
@@ -2110,8 +2111,21 @@ fn shift_reachable_down(
         //
         // Whenever a parent is grown we immediately re-run the BFS (continue
         // 'outer) so the newly widened container can pull in its neighbours.
+        // Grow ancestor containers that weren't themselves shifted but whose
+        // descendants moved across `start`. Mirrors Go's post-BFS
+        // container-grow walk: for each `o` in seen, walk the parent chain
+        // upward, growing every ancestor that still sits behind `start`.
+        // After each grow Go calls `processQueue()` to drain any newly
+        // queued neighbours (via `checkBelow`) before continuing the parent
+        // walk at the next ancestor; it does NOT restart from the current
+        // `o`. We replicate that by:
+        //   1. draining the queue inline via the BFS helper
+        //   2. continuing the parent loop with `parent := parent.Parent`
+        //   3. jumping back to `'outer` only if the BFS added brand-new
+        //      work that needs another pass.
         let seen_snapshot: Vec<ObjId> = seen.iter().copied().collect();
-        for o in seen_snapshot {
+        let mut queued_from_grow = false;
+        'grow_outer: for o in seen_snapshot {
             let mut p = g.objects[o].parent;
             while let Some(pid) = p {
                 if pid == g.root {
@@ -2135,14 +2149,19 @@ fn shift_reachable_down(
                     did_grow = true;
                     check_below(g, &mut q, &seen, &shifted, pid);
                 }
-                if did_grow {
-                    // Go calls processQueue() right here, before continuing
-                    // the parent chain walk. Restarting the BFS from here
-                    // achieves the same effect.
-                    continue 'outer;
+                if did_grow && !q.is_empty() {
+                    // Newly queued neighbours need to be processed before we
+                    // continue walking the parent chain. Defer to the outer
+                    // loop so the BFS runs again and we restart `seen`-based
+                    // growth with fresh state.
+                    queued_from_grow = true;
+                    break 'grow_outer;
                 }
                 p = g.objects[pid].parent;
             }
+        }
+        if queued_from_grow {
+            continue 'outer;
         }
         if q.is_empty() {
             // Compute the set of "counted" margin increases, matching Go's
