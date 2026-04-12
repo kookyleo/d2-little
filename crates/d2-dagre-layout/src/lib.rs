@@ -1188,13 +1188,14 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
     }
 
     // Compute inner box from children's positions plus the parent's padding.
-    // We use a simplified Spacing: the parent gets DEFAULT_PADDING on all
-    // sides, and children get their own outside-label margin (e.g. nested
-    // containers with OUTSIDE_TOP_CENTER labels need extra room on top).
-    let pad_top = DEFAULT_PADDING;
-    let pad_bottom = DEFAULT_PADDING;
-    let pad_left = DEFAULT_PADDING;
-    let pad_right = DEFAULT_PADDING;
+    // Use the container's own Spacing (which accounts for outside labels on
+    // the container itself), then clamp to at least DEFAULT_PADDING.
+    // Mirrors Go: `_, padding := obj.Spacing(); padding.Top = math.Max(...)`.
+    let (_, own_pad) = g.objects[obj_id].spacing();
+    let pad_top = own_pad.top.max(DEFAULT_PADDING);
+    let pad_bottom = own_pad.bottom.max(DEFAULT_PADDING);
+    let pad_left = own_pad.left.max(DEFAULT_PADDING);
+    let pad_right = own_pad.right.max(DEFAULT_PADDING);
 
     let current_top = g.objects[obj_id].top_left.y;
     let current_bottom = g.objects[obj_id].top_left.y + g.objects[obj_id].height;
@@ -1219,10 +1220,41 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
         inner_right = inner_right.max(c.top_left.x + c.width + dx + margin.right.max(pad_right));
     }
 
-    // Internal edges: Go also walks all edges that are descendants of this
-    // container and includes their route points (and label boxes). We skip
-    // that for now — most simple cases don't have internal edges that
-    // poke outside the children's bounding box.
+    // Internal edges: walk all edges whose src AND dst are descendants of this
+    // container and include their route points (and label boxes) in the inner
+    // bounding box.  Mirrors Go `fitPadding` edge loop.
+    for edge_idx in 0..g.edges.len() {
+        let src_is_desc = g.objects[g.edges[edge_idx].src].is_descendant_of(obj_id, g);
+        let dst_is_desc = g.objects[g.edges[edge_idx].dst].is_descendant_of(obj_id, g);
+        if !src_is_desc || !dst_is_desc {
+            continue;
+        }
+        // Include edge label box
+        if !g.edges[edge_idx].label.value.is_empty() {
+            let label_width = g.edges[edge_idx].label_dimensions.width as f64;
+            let label_height = g.edges[edge_idx].label_dimensions.height as f64;
+            let route = d2_geo::Route(g.edges[edge_idx].route.clone());
+            let lp_str = g.edges[edge_idx]
+                .label_position
+                .as_deref()
+                .unwrap_or("InsideMiddleCenter");
+            let lp = d2_label::Position::from_string(lp_str);
+            if let Some((pt, _)) = lp.get_point_on_route(&route, 2.0, 0.0, label_width, label_height)
+            {
+                inner_top = inner_top.min(pt.y - pad_top);
+                inner_bottom = inner_bottom.max(pt.y + label_height + pad_bottom);
+                inner_left = inner_left.min(pt.x - pad_left);
+                inner_right = inner_right.max(pt.x + label_width + pad_right);
+            }
+        }
+        // Include route points
+        for pt in &g.edges[edge_idx].route {
+            inner_top = inner_top.min(pt.y - pad_top);
+            inner_bottom = inner_bottom.max(pt.y + pad_bottom);
+            inner_left = inner_left.min(pt.x - pad_left);
+            inner_right = inner_right.max(pt.x + pad_right);
+        }
+    }
 
     let top_delta = inner_top - current_top;
     let bottom_delta = current_bottom - inner_bottom;
