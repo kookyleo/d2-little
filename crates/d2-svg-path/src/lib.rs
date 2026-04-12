@@ -420,8 +420,8 @@ pub fn split_path(path: &str, percentage: f64) -> Result<(String, String), Strin
                 SvgPathCommand::L => {
                     let nx = (x - prev.x) * t + prev.x;
                     let ny = (y - prev.y) * t + prev.y;
-                    path1.push_str(&format!("L {nx} {ny} "));
-                    path2.push_str(&format!("M {nx} {ny} L {x} {y} "));
+                    path1.push_str(&format!("L {:.6} {:.6} ", nx, ny));
+                    path2.push_str(&format!("M {:.6} {:.6} L {:.6} {:.6} ", nx, ny, x, y));
                 }
                 SvgPathCommand::C => {
                     let h1x: f64 = tokens[i + 1].parse().unwrap_or(0.0);
@@ -435,14 +435,14 @@ pub fn split_path(path: &str, percentage: f64) -> Result<(String, String), Strin
                     let (_, q2, q3, q4) =
                         bezier_curve_segment(&prev, &heading1, &heading2, &next_pt, 0.0, 0.5);
                     path1.push_str(&format!(
-                        "C {} {} {} {} {} {} ",
+                        "C {:.6} {:.6} {:.6} {:.6} {:.6} {:.6} ",
                         q2.x, q2.y, q3.x, q3.y, q4.x, q4.y
                     ));
 
                     let (q1, q2, q3, q4) =
                         bezier_curve_segment(&prev, &heading1, &heading2, &next_pt, 0.5, 1.0);
                     path2.push_str(&format!(
-                        "M {} {} C {} {} {} {} {} {} ",
+                        "M {:.6} {:.6} C {:.6} {:.6} {:.6} {:.6} {:.6} {:.6} ",
                         q1.x, q1.y, q2.x, q2.y, q3.x, q3.y, q4.x, q4.y
                     ));
                 }

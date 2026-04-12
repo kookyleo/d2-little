@@ -189,8 +189,8 @@ fn connection_css_style(c: &d2_target::Connection) -> String {
             {
                 dash_offset = 10.0;
             }
-            write!(out, "stroke-dashoffset:{};", dash_offset * (dash + gap)).unwrap();
-            write!(out, "animation: dashdraw {}s linear infinite;", gap * 0.5).unwrap();
+            write!(out, "stroke-dashoffset:{:.6};", dash_offset * (dash + gap)).unwrap();
+            write!(out, "animation: dashdraw {:.6}s linear infinite;", gap * 0.5).unwrap();
         }
     }
     out
@@ -955,14 +955,56 @@ fn draw_connection(
         ""
     };
 
-    let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
-    path_el.d = path;
-    path_el.fill = "none".to_owned();
-    path_el.stroke = connection.stroke.clone();
-    path_el.class_name = format!("connection{}", animated_class);
-    path_el.style = connection_css_style(connection);
-    path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
-    buf.push_str(&path_el.render());
+    // If connection is animated and bidirectional (both arrows or no arrows),
+    // split the path at 50% and render two separate paths animating in
+    // opposite directions.  Mirrors Go d2svg.go.
+    let is_bidirectional_animated = connection.animated
+        && ((connection.dst_arrow == d2_target::Arrowhead::None
+            && connection.src_arrow == d2_target::Arrowhead::None)
+            || (connection.dst_arrow != d2_target::Arrowhead::None
+                && connection.src_arrow != d2_target::Arrowhead::None));
+
+    if is_bidirectional_animated {
+        if let Ok((path1, path2)) = d2_svg_path::split_path(&path, 0.5) {
+            let mut el1 = d2_themes::ThemableElement::new("path", inline_theme);
+            el1.d = path1;
+            el1.fill = "none".to_owned();
+            el1.stroke = connection.stroke.clone();
+            el1.class_name = format!("connection{}", animated_class);
+            el1.style = connection_css_style(connection);
+            el1.style.push_str("animation-direction: reverse;");
+            el1.attributes = format!("{}{}", marker_start, mask);
+            buf.push_str(&el1.render());
+
+            let mut el2 = d2_themes::ThemableElement::new("path", inline_theme);
+            el2.d = path2;
+            el2.fill = "none".to_owned();
+            el2.stroke = connection.stroke.clone();
+            el2.class_name = format!("connection{}", animated_class);
+            el2.style = connection_css_style(connection);
+            el2.attributes = format!("{}{}", marker_end, mask);
+            buf.push_str(&el2.render());
+        } else {
+            // Fallback to single path if split fails
+            let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
+            path_el.d = path;
+            path_el.fill = "none".to_owned();
+            path_el.stroke = connection.stroke.clone();
+            path_el.class_name = format!("connection{}", animated_class);
+            path_el.style = connection_css_style(connection);
+            path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
+            buf.push_str(&path_el.render());
+        }
+    } else {
+        let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
+        path_el.d = path;
+        path_el.fill = "none".to_owned();
+        path_el.stroke = connection.stroke.clone();
+        path_el.class_name = format!("connection{}", animated_class);
+        path_el.style = connection_css_style(connection);
+        path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
+        buf.push_str(&path_el.render());
+    }
 
     // Connection label
     if !connection.text.label.is_empty() {
