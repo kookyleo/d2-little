@@ -189,6 +189,75 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         FontFamily::SourceSansPro
     };
 
+    let measure_label = |ruler: &mut d2_textmeasure::Ruler,
+                         shape: &str,
+                         language: &str,
+                         font_family: FontFamily,
+                         font: d2_fonts::Font,
+                         font_size: i32,
+                         label: &str|
+     -> Result<(i32, i32), String> {
+        // Code shapes with an explicit language go through the mono
+        // ruler path in Go `GetTextDimensionsWithMono`. The label is
+        // measured in SourceCodePro at CODE_LINE_HEIGHT, then Go adds
+        // a vertical fudge for leading/trailing blank lines that the
+        // ruler cannot account for on its own.
+        if !language.is_empty() && shape == d2_target::SHAPE_CODE {
+            let original_lh = ruler.line_height_factor;
+            ruler.line_height_factor = d2_textmeasure::CODE_LINE_HEIGHT;
+            let mono_font = d2_fonts::Font::new(
+                FontFamily::SourceCodePro,
+                d2_fonts::FontStyle::Regular,
+                font_size,
+            );
+            let (w, mut h) = ruler.measure_mono(mono_font, label);
+            ruler.line_height_factor = original_lh;
+
+            // Leading / trailing empty lines: Go counts them separately
+            // because `MeasureMono` strips them from the bounds. A leading
+            // blank line adds one font-size tall row, and each trailing
+            // blank line adds `CODE_LINE_HEIGHT * font_size` rounded up.
+            let lines: Vec<&str> = label.split('\n').collect();
+            let has_leading =
+                !lines.is_empty() && lines.first().map(|l| l.trim().is_empty()).unwrap_or(false);
+            let mut num_trailing = 0usize;
+            for l in lines.iter().rev() {
+                if l.trim().is_empty() {
+                    num_trailing += 1;
+                } else {
+                    break;
+                }
+            }
+            if has_leading && num_trailing < lines.len() {
+                h += font_size;
+            }
+            h += (d2_textmeasure::CODE_LINE_HEIGHT * f64::from(font_size * num_trailing as i32))
+                .ceil() as i32;
+            return Ok((w, h));
+        }
+        if language == "markdown" {
+            d2_textmeasure::measure_markdown(
+                label,
+                ruler,
+                Some(font_family),
+                Some(FontFamily::SourceCodePro),
+                font_size,
+            )
+        } else if !language.is_empty() {
+            // Non-code shapes with a non-markdown language are still
+            // treated as markdown by Go (see GetLabelSize).
+            d2_textmeasure::measure_markdown(
+                label,
+                ruler,
+                Some(font_family),
+                Some(FontFamily::SourceCodePro),
+                font_size,
+            )
+        } else {
+            Ok(ruler.measure(font, label))
+        }
+    };
+
     // Process objects (skip root at index 0)
     let count = g.objects.len();
     for i in 1..count {
@@ -355,8 +424,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             // Header label is measured in the regular (non-mono) font
             // for sql_table — Go uses `GetTextDimensions` in that branch.
             let header_font_size = table_font_size + d2_target::HEADER_FONT_ADD;
-            let header_font =
-                d2_fonts::Font::new(font_family, FontStyle::Bold, header_font_size);
+            let header_font = d2_fonts::Font::new(font_family, FontStyle::Bold, header_font_size);
             // Empty-label fallback uses placeholder text "Table" (mirrors
             // Go `GetLabelSize` special case).
             let header_text: &str = if label.is_empty() { "Table" } else { &label };
@@ -424,8 +492,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             let w = 12.max(header_width.max(rows_width));
 
             // Height = max(12, paddedHeaderH * (nCols + 1))
-            let row_count = g
-                .objects[i]
+            let row_count = g.objects[i]
                 .sql_table
                 .as_ref()
                 .map(|t| t.columns.len())
@@ -462,7 +529,15 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             };
             // Still measure the label so SVG can render it next to the icon.
             if !label.is_empty() {
-                let (tw, th) = ruler.measure(font, &label);
+                let (tw, th) = measure_label(
+                    ruler,
+                    &shape,
+                    &g.objects[i].language,
+                    font_family,
+                    font,
+                    font_size,
+                    &label,
+                )?;
                 g.objects[i].label_dimensions = d2_graph::Dimensions {
                     width: tw,
                     height: th,
@@ -501,7 +576,15 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         }
 
         // Measure the label text
-        let (tw, th) = ruler.measure(font, &label);
+        let (tw, th) = measure_label(
+            ruler,
+            &shape,
+            &g.objects[i].language,
+            font_family,
+            font,
+            font_size,
+            &label,
+        )?;
         g.objects[i].label_dimensions = d2_graph::Dimensions {
             width: tw,
             height: th,
@@ -510,16 +593,19 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         // Compute "default dimensions" — the content box the shape needs to
         // wrap. Mirrors Go d2graph.GetDefaultSize: labelDims plus
         // INNER_LABEL_PADDING (5) on each axis when there's no explicit
-        // width/height and the shape isn't `text`. Width/height are then
-        // floored to MIN_SHAPE_SIZE.
+        // width/height and the shape isn't `text`. Code shapes instead get
+        // 0.5em padding per side (fontSize on each axis). Width/height are
+        // then floored to MIN_SHAPE_SIZE.
         let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text";
-        let label_pad = if with_label_padding {
-            INNER_LABEL_PADDING
+        let (label_pad_x, label_pad_y) = if shape == "code" {
+            (f64::from(font_size), f64::from(font_size))
+        } else if with_label_padding {
+            (INNER_LABEL_PADDING, INNER_LABEL_PADDING)
         } else {
-            0.0
+            (0.0, 0.0)
         };
-        let mut content_w = (tw as f64 + label_pad).max(MIN_SHAPE_SIZE);
-        let mut content_h = (th as f64 + label_pad).max(MIN_SHAPE_SIZE);
+        let mut content_w = (tw as f64 + label_pad_x).max(MIN_SHAPE_SIZE);
+        let mut content_h = (th as f64 + label_pad_y).max(MIN_SHAPE_SIZE);
         // For `text` shape the content box can fall below MIN_SHAPE_SIZE in
         // Go (it's bumped back up only when needed); we keep that branch
         // simple by always lifting.
@@ -565,10 +651,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         }
 
         // Go reserves extra horizontal room for the link/tooltip affordances.
-        if desired_width == 0
-            && g.objects[i].link.is_some()
-            && g.objects[i].tooltip.is_some()
-        {
+        if desired_width == 0 && g.objects[i].link.is_some() && g.objects[i].tooltip.is_some() {
             match shape.as_str() {
                 "sql_table" | "class" | "code" => {}
                 _ => {
@@ -701,7 +784,17 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
 
         let font = d2_fonts::Font::new(edge_font_family, font_style, font_size);
         if !label.is_empty() {
-            let (tw, th) = ruler.measure(font, &label);
+            // Edges aren't shapes — pass a non-code marker so the
+            // `shape == code` branch in `measure_label` never fires.
+            let (tw, th) = measure_label(
+                ruler,
+                "",
+                &g.edges[i].language,
+                edge_font_family,
+                font,
+                font_size,
+                &label,
+            )?;
             g.edges[i].label_dimensions = d2_graph::Dimensions {
                 width: tw,
                 height: th,
