@@ -1224,8 +1224,10 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
     // container and include their route points (and label boxes) in the inner
     // bounding box.  Mirrors Go `fitPadding` edge loop.
     for edge_idx in 0..g.edges.len() {
-        let src_is_desc = g.objects[g.edges[edge_idx].src].is_descendant_of(obj_id, g);
-        let dst_is_desc = g.objects[g.edges[edge_idx].dst].is_descendant_of(obj_id, g);
+        let src_id = g.edges[edge_idx].src;
+        let dst_id = g.edges[edge_idx].dst;
+        let src_is_desc = g.objects[src_id].is_descendant_of(src_id, obj_id, g);
+        let dst_is_desc = g.objects[dst_id].is_descendant_of(dst_id, obj_id, g);
         if !src_is_desc || !dst_is_desc {
             continue;
         }
@@ -1907,7 +1909,7 @@ fn shift_reachable_down(
                 if oi == g.root || oi == curr {
                     continue;
                 }
-                if g.objects[curr].is_descendant_of(oi, g) {
+                if g.objects[curr].is_descendant_of(curr, oi, g) {
                     continue;
                 }
                 let o = &g.objects[oi];
@@ -1930,7 +1932,7 @@ fn shift_reachable_down(
                 if oi == g.root || oi == curr {
                     continue;
                 }
-                if g.objects[curr].is_descendant_of(oi, g) {
+                if g.objects[curr].is_descendant_of(curr, oi, g) {
                     continue;
                 }
                 let o = &g.objects[oi];
@@ -1996,7 +1998,7 @@ fn shift_reachable_down(
             // Walk up the parent chain (unless curr is a descendant of the
             // original obj), to revisit ancestors that may need growing.
             if let Some(p) = g.objects[curr].parent {
-                if p != g.root && !g.objects[curr].is_descendant_of(obj, g) && !seen.contains(&p) {
+                if p != g.root && !g.objects[curr].is_descendant_of(curr, obj, g) && !seen.contains(&p) {
                     q.push(p);
                 }
             }

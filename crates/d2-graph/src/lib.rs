@@ -640,8 +640,7 @@ impl Object {
     pub fn is_rectangular_shape(&self) -> bool {
         matches!(
             self.shape.value.as_str(),
-            ""
-                | d2_target::SHAPE_RECTANGLE
+            "" | d2_target::SHAPE_RECTANGLE
                 | d2_target::SHAPE_SQUARE
                 | d2_target::SHAPE_IMAGE
                 | d2_target::SHAPE_CLASS
@@ -657,7 +656,11 @@ impl Object {
     }
 
     /// Check if `self` is a descendant of `ancestor_id` in the graph.
-    pub fn is_descendant_of(&self, ancestor_id: ObjId, graph: &Graph) -> bool {
+    /// Mirrors Go `Object.IsDescendantOf`: returns true when self IS the ancestor.
+    pub fn is_descendant_of(&self, self_id: ObjId, ancestor_id: ObjId, graph: &Graph) -> bool {
+        if self_id == ancestor_id {
+            return true;
+        }
         let mut p = self.parent;
         while let Some(pid) = p {
             if pid == ancestor_id {
@@ -755,8 +758,12 @@ impl Object {
         {
             return d2_color::N1;
         }
-        if self.shape.value.eq_ignore_ascii_case(d2_target::SHAPE_CLASS)
-            || self.shape
+        if self
+            .shape
+            .value
+            .eq_ignore_ascii_case(d2_target::SHAPE_CLASS)
+            || self
+                .shape
                 .value
                 .eq_ignore_ascii_case(d2_target::SHAPE_SQL_TABLE)
         {
@@ -1339,6 +1346,9 @@ impl Graph {
                     label: Label {
                         value: name.clone(),
                         ..Default::default()
+                    },
+                    shape: ScalarValue {
+                        value: String::new(),
                     },
                     parent: Some(cur),
                     ..Default::default()
