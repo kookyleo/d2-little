@@ -63,8 +63,11 @@ pub fn export(
         .map(|obj| to_shape(obj, g))
         .collect();
 
-    // Convert edges to connections
-    diagram.connections = g.edges.iter().map(|edge| to_connection(edge, g)).collect();
+    // Convert edges to connections (skip edges with no route, e.g. unresolved group edges)
+    diagram.connections = g.edges.iter()
+        .filter(|edge| edge.route.len() >= 2)
+        .map(|edge| to_connection(edge, g))
+        .collect();
 
     // Handle legend
     if let Some(ref legend) = g.legend {

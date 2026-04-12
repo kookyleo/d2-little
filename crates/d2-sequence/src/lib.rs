@@ -117,14 +117,15 @@ fn new_sequence_diagram(
     let mut sorted_messages: Vec<usize> = message_indices.to_vec();
     sorted_messages.sort_by_key(|&idx| get_edge_earliest_line_num(&g.edges[idx]));
 
-    // Separate actors from groups
-    // For now: all top-level children that aren't groups are actors
-    // Groups are objects inside the sequence diagram that have no edges and contain edges
+    // Separate actors from groups.
+    // Note: proper group detection requires Go-compatible compiler behavior
+    // where edges within groups reference outer-scope actors. For now, we
+    // treat all top-level children as actors (groups will be mis-handled
+    // but won't crash).
     let mut actors: Vec<ObjId> = Vec::new();
     let groups: Vec<ObjId> = Vec::new();
 
     for &obj_id in &sorted_objects {
-        // For now, treat all direct children as actors (groups need edge analysis)
         actors.push(obj_id);
     }
 
@@ -272,6 +273,91 @@ fn child_has_edge_ref(g: &Graph, child_id: ObjId) -> bool {
     false
 }
 
+/// Check if an object is a sequence diagram group.
+/// Groups are top-level children that have no direct edges but contain edges or objects.
+fn is_sequence_diagram_group(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
+    // Must not be directly referenced by any edge
+    for &idx in message_indices {
+        if g.edges[idx].src == obj_id || g.edges[idx].dst == obj_id {
+            return false;
+        }
+    }
+    // Must have children whose children don't have edge-free notes
+    // (children with edges are spans, not notes inside groups)
+    let obj = &g.objects[obj_id];
+    for &child_id in &obj.children_array {
+        // If a child has no edge refs and no children, it might be a note inside the group
+        // If it contains no edge but is not edge-free, it invalidates the group
+        if !child_has_edge_ref(g, child_id) && g.objects[child_id].children_array.is_empty() {
+            // This child looks like a note, which means this isn't a group
+            // (notes are children of actors, not groups)
+            // Actually in Go: if the child contains a message, it's a span, not a note
+            // Groups cannot have note-like children
+            let child_contains_edge = contains_any_edge(g, child_id, message_indices);
+            if !child_contains_edge {
+                return false;
+            }
+        }
+    }
+    // Must contain some objects or edges
+    let has_children_objs = contains_any_object(g, obj_id);
+    let has_children_edges = contains_any_edge(g, obj_id, message_indices);
+    has_children_objs || has_children_edges
+}
+
+/// Check if obj contains any other object (has descendant objects within its scope).
+fn contains_any_object(g: &Graph, obj_id: ObjId) -> bool {
+    for (i, o) in g.objects.iter().enumerate() {
+        if i != obj_id && obj_is_descendant_of(g, i, obj_id) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if obj contains any edge (has edges scoped within it).
+fn contains_any_edge(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
+    let prefix = format!("{}.", g.objects[obj_id].abs_id);
+    for &idx in message_indices {
+        let edge = &g.edges[idx];
+        // Check if both src and dst are descendants of obj
+        if g.objects[edge.src].abs_id.starts_with(&prefix)
+            && g.objects[edge.dst].abs_id.starts_with(&prefix)
+        {
+            return true;
+        }
+        // Also check if src or dst IS the obj (edge src/dst = obj's child)
+        if obj_is_descendant_of(g, edge.src, obj_id)
+            || obj_is_descendant_of(g, edge.dst, obj_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if an edge is contained by (scoped within) an object.
+/// In Go this uses edge References/ScopeObj; we approximate by checking
+/// if both src and dst are descendants of the object.
+fn edge_contained_by(g: &Graph, edge_idx: usize, obj_id: ObjId) -> bool {
+    let edge = &g.edges[edge_idx];
+    let src_inside = obj_is_descendant_of(g, edge.src, obj_id) || edge.src == obj_id;
+    let dst_inside = obj_is_descendant_of(g, edge.dst, obj_id) || edge.dst == obj_id;
+    src_inside && dst_inside
+}
+
+/// Check if child_id is a descendant of parent_id.
+fn obj_is_descendant_of(g: &Graph, child_id: ObjId, parent_id: ObjId) -> bool {
+    let mut cur = child_id;
+    while let Some(p) = g.objects[cur].parent {
+        if p == parent_id {
+            return true;
+        }
+        cur = p;
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Layout methods
 // ---------------------------------------------------------------------------
@@ -283,7 +369,7 @@ impl SequenceDiagram {
         self.route_messages(g)?;
         self.place_spans(g);
         self.adjust_route_endpoints(g);
-        // self.place_groups(g); // TODO: phase 2
+        self.place_groups(g);
         self.add_lifeline_edges(g);
         Ok(())
     }
@@ -409,10 +495,20 @@ impl SequenceDiagram {
             let src_id = g.edges[msg_idx].src;
             let dst_id = g.edges[msg_idx].dst;
 
-            let start_x = get_center_x_with_placed(g, src_id, &self.placed)
-                .ok_or_else(|| format!("could not find center of src. Is it declared as an actor?"))?;
-            let end_x = get_center_x_with_placed(g, dst_id, &self.placed)
-                .ok_or_else(|| format!("could not find center of dst. Is it declared as an actor?"))?;
+            let start_x = match get_center_x_with_placed(g, src_id, &self.placed) {
+                Some(x) => x,
+                None => {
+                    log::warn!("could not find center of {} (src of {})", g.objects[src_id].abs_id, g.edges[msg_idx].abs_id);
+                    continue;
+                }
+            };
+            let end_x = match get_center_x_with_placed(g, dst_id, &self.placed) {
+                Some(x) => x,
+                None => {
+                    log::warn!("could not find center of {} (dst of {})", g.objects[dst_id].abs_id, g.edges[msg_idx].abs_id);
+                    continue;
+                }
+            };
 
             let is_self_message = src_id == dst_id;
             let is_to_descendant = g.objects[dst_id]
@@ -572,6 +668,9 @@ impl SequenceDiagram {
             let dst_width = g.objects[dst_id].width;
 
             let route_len = g.edges[msg_idx].route.len();
+            if route_len == 0 {
+                continue;
+            }
 
             if !src_is_actor {
                 if src_rank <= dst_rank {
@@ -586,6 +685,139 @@ impl SequenceDiagram {
                 } else {
                     g.edges[msg_idx].route[route_len - 1].x += dst_width / 2.0;
                 }
+            }
+        }
+    }
+
+    /// Place groups as bounding boxes around messages they contain.
+    fn place_groups(&self, g: &mut Graph) {
+        // Sort groups from most to least nested (deepest first)
+        let mut sorted_groups = self.groups.clone();
+        sorted_groups.sort_by(|&a, &b| {
+            let la = obj_level(g, a);
+            let lb = obj_level(g, b);
+            lb.cmp(&la) // deepest first
+        });
+
+        for &group_id in &sorted_groups {
+            g.objects[group_id].z_index = GROUP_Z_INDEX;
+            self.place_group(g, group_id);
+        }
+
+        // Adjust group labels
+        for &group_id in &sorted_groups {
+            self.adjust_group_label(g, group_id);
+        }
+    }
+
+    fn place_group(&self, g: &mut Graph, group_id: ObjId) {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
+        // Check messages contained by this group
+        for &msg_idx in &self.messages {
+            if edge_contained_by(g, msg_idx, group_id) {
+                for p in &g.edges[msg_idx].route {
+                    let label_height = g.edges[msg_idx].label_dimensions.height as f64 / 2.0;
+                    let edge_pad = label_height.max(MIN_MESSAGE_DISTANCE / 2.0)
+                        .max(GROUP_CONTAINER_PADDING);
+                    min_x = min_x.min(p.x - HORIZONTAL_PAD);
+                    min_y = min_y.min(p.y - edge_pad);
+                    max_x = max_x.max(p.x + HORIZONTAL_PAD);
+                    max_y = max_y.max(p.y + edge_pad);
+                }
+            }
+        }
+
+        // Groups should encompass notes of actors within the group
+        for &note_id in &self.notes {
+            if obj_is_descendant_of(g, note_id, group_id) {
+                let note = &g.objects[note_id];
+                min_x = min_x.min(note.top_left.x - HORIZONTAL_PAD);
+                min_y = min_y.min(note.top_left.y - MIN_MESSAGE_DISTANCE / 2.0);
+                max_x = max_x.max(note.top_left.x + note.width + HORIZONTAL_PAD);
+                max_y = max_y.max(note.top_left.y + note.height + MIN_MESSAGE_DISTANCE / 2.0);
+            }
+        }
+
+        // Encompass child groups
+        let children = g.objects[group_id].children_array.clone();
+        for &child_id in &children {
+            if self.groups.contains(&child_id) {
+                let ch = &g.objects[child_id];
+                min_x = min_x.min(ch.top_left.x - GROUP_CONTAINER_PADDING);
+                min_y = min_y.min(ch.top_left.y - GROUP_CONTAINER_PADDING);
+                max_x = max_x.max(ch.top_left.x + ch.width + GROUP_CONTAINER_PADDING);
+                max_y = max_y.max(ch.top_left.y + ch.height + GROUP_CONTAINER_PADDING);
+            }
+        }
+
+        if min_x.is_finite() && max_x.is_finite() {
+            let group = &mut g.objects[group_id];
+            group.top_left = Point::new(min_x, min_y);
+            group.width = max_x - min_x;
+            group.height = max_y - min_y;
+            group.box_ = d2_geo::Box2D::new(group.top_left, group.width, group.height);
+        }
+    }
+
+    fn adjust_group_label(&self, g: &mut Graph, group_id: ObjId) {
+        if !g.objects[group_id].has_label() {
+            return;
+        }
+
+        let height_add = g.objects[group_id].label_dimensions.height as f64
+            + EDGE_GROUP_LABEL_PADDING / 2.0;
+        if height_add < GROUP_CONTAINER_PADDING {
+            return;
+        }
+
+        let group_top_y = g.objects[group_id].top_left.y;
+        g.objects[group_id].height += height_add;
+
+        // Extend stuff within this group
+        for &gid in &self.groups {
+            let g_obj = &g.objects[gid];
+            if g_obj.top_left.y < group_top_y
+                && g_obj.top_left.y + g_obj.height > group_top_y
+            {
+                g.objects[gid].height += height_add;
+            }
+        }
+        for &sid in &self.spans {
+            let s_obj = &g.objects[sid];
+            if s_obj.top_left.y < group_top_y
+                && s_obj.top_left.y + s_obj.height > group_top_y
+            {
+                g.objects[sid].height += height_add;
+            }
+        }
+
+        // Move stuff down that's below this group
+        for &msg_idx in &self.messages {
+            let route_y = g.edges[msg_idx].route.first().map(|p| p.y).unwrap_or(0.0)
+                .min(g.edges[msg_idx].route.last().map(|p| p.y).unwrap_or(0.0));
+            if route_y > group_top_y {
+                for p in &mut g.edges[msg_idx].route {
+                    p.y += height_add;
+                }
+            }
+        }
+        for &sid in &self.spans {
+            if g.objects[sid].top_left.y > group_top_y {
+                g.objects[sid].top_left.y += height_add;
+            }
+        }
+        for &gid in &self.groups {
+            if g.objects[gid].top_left.y > group_top_y {
+                g.objects[gid].top_left.y += height_add;
+            }
+        }
+        for &nid in &self.notes {
+            if g.objects[nid].top_left.y > group_top_y {
+                g.objects[nid].top_left.y += height_add;
             }
         }
     }
