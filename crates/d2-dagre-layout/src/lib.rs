@@ -360,7 +360,9 @@ fn collect_subtree_ids(g: &Graph, root: ObjId, out: &mut HashSet<ObjId>) {
     }
 }
 
-fn build_constant_near_subgraphs(g: &Graph) -> (Vec<ConstantNearSubgraph>, HashSet<ObjId>, HashSet<usize>) {
+fn build_constant_near_subgraphs(
+    g: &Graph,
+) -> (Vec<ConstantNearSubgraph>, HashSet<ObjId>, HashSet<usize>) {
     let mut subgraphs = Vec::new();
     let mut excluded_objects = HashSet::new();
     let mut excluded_edges = HashSet::new();
@@ -532,12 +534,27 @@ fn place_constant_near(
     let h = br.y - tl.y;
 
     let (mut x, mut y) = match near_key {
-        "top-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, tl.y - obj.height - CONSTANT_NEAR_PAD),
-        "top-center" => (tl.x + w / 2.0 - obj.width / 2.0, tl.y - obj.height - CONSTANT_NEAR_PAD),
-        "top-right" => (br.x + CONSTANT_NEAR_PAD, tl.y - obj.height - CONSTANT_NEAR_PAD),
-        "center-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, tl.y + h / 2.0 - obj.height / 2.0),
+        "top-left" => (
+            tl.x - obj.width - CONSTANT_NEAR_PAD,
+            tl.y - obj.height - CONSTANT_NEAR_PAD,
+        ),
+        "top-center" => (
+            tl.x + w / 2.0 - obj.width / 2.0,
+            tl.y - obj.height - CONSTANT_NEAR_PAD,
+        ),
+        "top-right" => (
+            br.x + CONSTANT_NEAR_PAD,
+            tl.y - obj.height - CONSTANT_NEAR_PAD,
+        ),
+        "center-left" => (
+            tl.x - obj.width - CONSTANT_NEAR_PAD,
+            tl.y + h / 2.0 - obj.height / 2.0,
+        ),
         "center-right" => (br.x + CONSTANT_NEAR_PAD, tl.y + h / 2.0 - obj.height / 2.0),
-        "bottom-left" => (tl.x - obj.width - CONSTANT_NEAR_PAD, br.y + CONSTANT_NEAR_PAD),
+        "bottom-left" => (
+            tl.x - obj.width - CONSTANT_NEAR_PAD,
+            br.y + CONSTANT_NEAR_PAD,
+        ),
         "bottom-center" => (br.x - w / 2.0 - obj.width / 2.0, br.y + CONSTANT_NEAR_PAD),
         "bottom-right" => (br.x + CONSTANT_NEAR_PAD, br.y + CONSTANT_NEAR_PAD),
         _ => (obj.top_left.x, obj.top_left.y),
@@ -836,19 +853,42 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
         }
     }
 
-    // Read back edge routes. Mirror Go's flow carefully: store the raw
-    // dagre route on each edge (reversed for reverse arrows), perform a
-    // preliminary clip at src/dst boxes, and defer curve building until
-    // after `adjust_*_spacing` and `fit_container_padding` have had a
-    // chance to shift nodes and route points around.
-    let dagre_edges = dagre_g.edges();
-    for (route_idx, edge_desc) in dagre_edges.iter().enumerate() {
-        if route_idx >= edge_data.len() {
-            break;
-        }
-        let ei = edge_data[route_idx].0;
-
-        if let Some(edge_label) = dagre_g.edge_by_obj(edge_desc) {
+    // Read back edge routes.
+    //
+    // CRITICAL: do not iterate `dagre_g.edges()` by position index here.
+    // dagre.js's `layout(g)` operates on an internal *copy* of the graph
+    // (`buildLayoutGraph(g)` → `runLayout(layoutGraph)` →
+    // `updateInputGraph(g, layoutGraph)`), so its caller queries
+    // `g.edges()[i]` on the untouched input and gets edges back in the
+    // original insertion order. dagre-rs, however, runs the full
+    // pipeline on the caller's graph directly. The `acyclic::run` /
+    // `acyclic::undo` pair reverses back-edges via `remove_edge` +
+    // `set_edge`, which drops the edge's slot in the internal
+    // `edge_order` vector and re-appends the restored edge at the end
+    // of the list. After layout, position-based indexing therefore maps
+    // route[i] to edge_data[i] for the forward edges but drifts for any
+    // back-edge: the route slot that used to belong to edge_data[k] is
+    // now occupied by a later edge, and the back-edge lands at the end.
+    //
+    // This showed up in `constant_near_title`: `unfavorable -> poll the
+    // people` is a back edge, so its route was shuffled onto
+    // `results -> favorable`, and the true route of that edge rotated
+    // onto `favorable -> will of the people`, etc. The diagram_bytes
+    // hash then diverged even though every node coordinate matched.
+    //
+    // Fix: iterate our own `edge_data` in insertion order and look up
+    // each dagre edge by (src_dagre_id, dst_dagre_id, abs_id). After
+    // `reverse_points_for_reversed_edges` + `acyclic::undo`, back-edges
+    // are keyed by their ORIGINAL (v, w, name) again, so the label is
+    // still reachable via the hashmap — only the `edge_order` vector
+    // that drives `g.edges()` is out of sync with insertion order.
+    for (ei, src_obj, dst_obj, _, _, abs_id) in &edge_data {
+        let ei = *ei;
+        let src_dagre = mapper.to_dagre_id(*src_obj).to_owned();
+        let dst_dagre = mapper.to_dagre_id(*dst_obj).to_owned();
+        if let Some(edge_label) =
+            dagre_g.edge(&src_dagre, &dst_dagre, Some(abs_id.as_str()))
+        {
             let raw_points: Vec<Point> = edge_label
                 .points
                 .iter()
@@ -998,11 +1038,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 }
             }
             if !src_is_rect {
-                let traced = trace_to_shape_border(
-                    &g.objects[src_id],
-                    points[0],
-                    points[1],
-                );
+                let traced = trace_to_shape_border(&g.objects[src_id], points[0], points[1]);
                 points[0] = traced;
             }
 
@@ -1037,11 +1073,8 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 }
             }
             if !dst_is_rect {
-                let traced = trace_to_shape_border(
-                    &g.objects[dst_id],
-                    points[last],
-                    points[last - 1],
-                );
+                let traced =
+                    trace_to_shape_border(&g.objects[dst_id], points[last], points[last - 1]);
                 points[last] = traced;
             }
         }
@@ -1208,13 +1241,7 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
 /// collapsing side of `obj` (`obj_position` on the given axis) by `delta`.
 /// Also moves points that lie strictly between `obj_position` and the new
 /// edge if they happen to be on the perpendicular sides of the box.
-fn adjust_edges(
-    g: &mut Graph,
-    obj_id: ObjId,
-    obj_position: f64,
-    delta: f64,
-    is_horizontal: bool,
-) {
+fn adjust_edges(g: &mut Graph, obj_id: ObjId, obj_position: f64, delta: f64, is_horizontal: bool) {
     // Capture the object's rectangle before mutating so the side check
     // uses a consistent snapshot.
     let tl_x = g.objects[obj_id].top_left.x;
@@ -1433,9 +1460,7 @@ fn trace_to_shape_border(
 /// border. Returns `None` when the object has no outside label (no label,
 /// no position, or the position is not `OUTSIDE_*`). Mirrors the label box
 /// construction at the top of Go `Edge.TraceToShape`.
-fn outside_label_box(
-    obj: &d2_graph::Object,
-) -> Option<(d2_geo::Box2D, d2_label::Position)> {
+fn outside_label_box(obj: &d2_graph::Object) -> Option<(d2_geo::Box2D, d2_label::Position)> {
     if !obj.has_label() {
         return None;
     }
@@ -1603,7 +1628,12 @@ fn get_ranks(
         }
     }
 
-    (ranks, object_ranks, starting_parent_ranks, ending_parent_ranks)
+    (
+        ranks,
+        object_ranks,
+        starting_parent_ranks,
+        ending_parent_ranks,
+    )
 }
 
 /// Shift everything at-or-below `start` down by `distance` (mirrors Go
@@ -1822,7 +1852,11 @@ fn shift_reachable_down(
 
     // Local helper: check whether any object `other` sits just below/right of
     // `curr` (within `threshold`) and should therefore also be shifted.
-    let check_below = |g: &Graph, q: &mut Vec<ObjId>, seen: &HashSet<ObjId>, shifted: &HashSet<ObjId>, curr: ObjId| {
+    let check_below = |g: &Graph,
+                       q: &mut Vec<ObjId>,
+                       seen: &HashSet<ObjId>,
+                       shifted: &HashSet<ObjId>,
+                       curr: ObjId| {
         let curr_obj = &g.objects[curr];
         let curr_bottom = curr_obj.top_left.y + curr_obj.height;
         let curr_right = curr_obj.top_left.x + curr_obj.width;
@@ -2306,7 +2340,9 @@ fn adjust_rank_spacing(g: &mut Graph, rank_sep: f64, is_horizontal: bool) {
                     let end = ending_parent_ranks.get(&oi).copied();
                     if let (Some(s), Some(e)) = (start, end) {
                         if s <= rank && rank <= e {
-                            if is_horizontal && pos <= g.objects[oi].top_left.x + g.objects[oi].width {
+                            if is_horizontal
+                                && pos <= g.objects[oi].top_left.x + g.objects[oi].width
+                            {
                                 g.objects[oi].width += end_delta;
                             } else if !is_horizontal
                                 && pos <= g.objects[oi].top_left.y + g.objects[oi].height
@@ -2384,7 +2420,8 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
             }
             if margin.bottom > 0.0 {
                 let start = g.objects[obj].top_left.y + g.objects[obj].height;
-                let increased = shift_reachable_down(g, obj, start, margin.bottom, is_horizontal, true);
+                let increased =
+                    shift_reachable_down(g, obj, start, margin.bottom, is_horizontal, true);
                 for o in increased {
                     let e = prev_bottom.entry(o).or_insert(0.0);
                     if margin.bottom > *e {
@@ -2402,7 +2439,8 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
             }
             if margin.top > 0.0 {
                 let start = g.objects[obj].top_left.y;
-                let increased = shift_reachable_down(g, obj, start, margin.top, is_horizontal, true);
+                let increased =
+                    shift_reachable_down(g, obj, start, margin.top, is_horizontal, true);
                 for o in increased {
                     let e = prev_top.entry(o).or_insert(0.0);
                     if margin.top > *e {
@@ -2421,7 +2459,8 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
             }
             if margin.right > 0.0 {
                 let start = g.objects[obj].top_left.x + g.objects[obj].width;
-                let increased = shift_reachable_down(g, obj, start, margin.right, is_horizontal, true);
+                let increased =
+                    shift_reachable_down(g, obj, start, margin.right, is_horizontal, true);
                 for o in increased {
                     let e = prev_right.entry(o).or_insert(0.0);
                     if margin.right > *e {
@@ -2439,7 +2478,8 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
             }
             if margin.left > 0.0 {
                 let start = g.objects[obj].top_left.x;
-                let increased = shift_reachable_down(g, obj, start, margin.left, is_horizontal, true);
+                let increased =
+                    shift_reachable_down(g, obj, start, margin.left, is_horizontal, true);
                 for o in increased {
                     let e = prev_left.entry(o).or_insert(0.0);
                     if margin.left > *e {
