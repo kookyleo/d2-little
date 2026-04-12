@@ -1151,24 +1151,21 @@ impl Diagram {
                 && !s.icon_position.is_empty()
                 && s.icon_position.contains("OUTSIDE")
             {
-                // Go passes `iconPosition.IsInsideCenter()` to GetIconSize;
-                // this block only runs for OUTSIDE_* positions so we pass
-                // `false`.
-                let icon_side = icon_size(s.width as f64, s.height as f64, false) as f64;
-                let icon_tl = label_top_left(
-                    &s.icon_position,
-                    s.pos.x as f64,
-                    s.pos.y as f64,
-                    s.width as f64,
-                    s.height as f64,
-                    5.0,
-                    icon_side,
-                    icon_side,
-                );
-                x1 = x1.min(icon_tl.0 as i32);
-                y1 = y1.min(icon_tl.1 as i32);
-                x2 = x2.max(icon_tl.0 as i32 + icon_side as i32);
-                y2 = y2.max(icon_tl.1 as i32 + icon_side as i32);
+                // Go uses `strings.HasPrefix(IconPosition, "OUTSIDE_TOP")`
+                // style checks here and only extends the bbox along the axis
+                // the label/icon sits on. OUTSIDE_TOP_LEFT contributes solely
+                // to y1 (not x1), etc.
+                let icon_side = icon_size(s.width as f64, s.height as f64, false) as i32;
+                const LABEL_PADDING: i32 = 5;
+                if s.icon_position.starts_with("OUTSIDE_TOP") {
+                    y1 = y1.min(s.pos.y - LABEL_PADDING - icon_side);
+                } else if s.icon_position.starts_with("OUTSIDE_BOTTOM") {
+                    y2 = y2.max(s.pos.y + s.height + LABEL_PADDING + icon_side);
+                } else if s.icon_position.starts_with("OUTSIDE_LEFT") {
+                    x1 = x1.min(s.pos.x - LABEL_PADDING - icon_side);
+                } else if s.icon_position.starts_with("OUTSIDE_RIGHT") {
+                    x2 = x2.max(s.pos.x + s.width + LABEL_PADDING + icon_side);
+                }
             }
         }
 

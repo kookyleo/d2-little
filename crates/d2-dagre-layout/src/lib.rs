@@ -1207,8 +1207,11 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId) {
     let mut inner_right = f64::NEG_INFINITY;
 
     for &child in &children {
+        // Use `Object::spacing()` so outside icons (MAX_ICON_SIZE) contribute
+        // to the child's margin on the same axis as its outside label.
+        // Mirrors Go `fitPadding` which calls `child.Spacing()`.
         let c = &g.objects[child];
-        let (margin, _) = child_outside_margin(c);
+        let (margin, _) = c.spacing();
         let (dx, dy) = c.get_modifier_element_adjustments();
         inner_top = inner_top.min(c.top_left.y - dy - margin.top.max(pad_top));
         inner_bottom = inner_bottom.max(c.top_left.y + c.height + margin.bottom.max(pad_bottom));
@@ -1513,8 +1516,10 @@ fn find_outer_intersection(pos: d2_label::Position, intersections: &[Point]) -> 
 }
 
 /// Outside-label margin for a child object — mirrors the margin half of
-/// Go's `Object.Spacing()`. Used by `fit_padding` to leave enough room
-/// above/below/beside a child for its outside label.
+/// Go's `Object.Spacing()` but ignoring icons. Kept around for callers that
+/// explicitly want label-only semantics; `fit_padding` now uses the full
+/// `Object::spacing()` so outside icons contribute too.
+#[allow(dead_code)]
 fn child_outside_margin(obj: &d2_graph::Object) -> (d2_geo::Spacing, d2_geo::Spacing) {
     let zero = d2_geo::Spacing {
         top: 0.0,

@@ -16,6 +16,17 @@ fn main() {
 
     let bytes = d2_target::go_json::diagram_bytes(&diagram);
     let h = diagram.hash_id(None);
-    eprintln!("len={} hash={}", bytes.len(), h);
+    let (tl, br) = diagram.bounding_box();
+    eprintln!(
+        "len={} hash={} bbox=(({},{}),({},{})) w={} h={}",
+        bytes.len(),
+        h,
+        tl.x,
+        tl.y,
+        br.x,
+        br.y,
+        br.x - tl.x,
+        br.y - tl.y
+    );
     std::io::stdout().write_all(&bytes).unwrap();
 }
