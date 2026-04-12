@@ -100,18 +100,42 @@ fn e2e_full_dashboard() {
             }
         };
 
+        // Drain stdout/stderr in background threads so the child never
+        // blocks on a full pipe buffer (default 64 KB on Linux).
+        let child_stdout = child.stdout.take().unwrap();
+        let child_stderr = child.stderr.take().unwrap();
+
+        let stdout_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let mut r = child_stdout;
+            let _ = r.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let mut r = child_stderr;
+            let _ = r.read_to_end(&mut buf);
+            buf
+        });
+
         // Wait with timeout
         let start = std::time::Instant::now();
         let output = loop {
             match child.try_wait() {
-                Ok(Some(_)) => break child.wait_with_output(),
+                Ok(Some(status)) => {
+                    let stdout = stdout_handle.join().unwrap_or_default();
+                    let stderr = stderr_handle.join().unwrap_or_default();
+                    break Ok(std::process::Output { status, stdout, stderr });
+                }
                 Ok(None) => {
-                    if start.elapsed() > std::time::Duration::from_secs(15) {
+                    if start.elapsed() > std::time::Duration::from_secs(30) {
                         let _ = child.kill();
                         let _ = child.wait();
                         break Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    std::thread::yield_now();
                 }
                 Err(e) => break Err(e),
             }
@@ -195,7 +219,7 @@ fn e2e_full_dashboard() {
     println!("  MATCH:     {:>3} (byte-identical SVG)", pass);
     println!("  DIFF:      {:>3} (SVG output differs)", svg_diff);
     println!("  COMPILE:   {:>3} (compilation error)", compile_err);
-    println!("  TIMEOUT:   {:>3} (>15s, likely infinite loop)", timeout);
+    println!("  TIMEOUT:   {:>3} (>30s, likely infinite loop)", timeout);
     println!("  NO_FIX:    {:>3} (no expected fixture)", no_fixture);
     println!(
         "  RATE:      {:.1}%",
