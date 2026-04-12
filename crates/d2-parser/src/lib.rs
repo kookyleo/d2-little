@@ -1915,7 +1915,42 @@ fn trim_space_after_last_newline(s: &str) -> String {
     }
 }
 
+/// Port of Go's `d2parser.splitLeadingIndent`. Walks whitespace at the
+/// start of `s`, treating each `'\t'` as two space columns, until either
+/// the first non-whitespace rune or `max_spaces` worth of columns have
+/// been consumed. Returns the indent (measured in space columns) and the
+/// byte offset at which the trailing text begins.
+fn split_leading_indent(s: &str, max_spaces: Option<usize>) -> (usize, usize) {
+    let mut indent_cols: usize = 0;
+    let mut byte_off: usize = 0;
+    for (idx, ch) in s.char_indices() {
+        if !ch.is_whitespace() {
+            byte_off = idx;
+            return (indent_cols, byte_off);
+        }
+        byte_off = idx + ch.len_utf8();
+        if ch == '\t' {
+            indent_cols += 2;
+        } else {
+            indent_cols += 1;
+        }
+        if let Some(ms) = max_spaces
+            && indent_cols == ms
+        {
+            return (indent_cols, byte_off);
+        }
+    }
+    (indent_cols, byte_off)
+}
+
 fn trim_common_indent(s: &str) -> String {
+    // Mirror Go `d2parser.trimCommonIndent`: find the minimum indent
+    // across all non-empty, non-whitespace-only lines (measured in
+    // space columns with tabs counting as 2), then strip that many
+    // columns from every line. Critical for byte-identical markdown
+    // block content — e.g. a `|md` block that mixes one tab-indented
+    // line with two-space-indented lines must have the leading space
+    // removed from the 2-space lines, not just one byte.
     let lines: Vec<&str> = s.split('\n').collect();
     let mut common_indent: Option<usize> = None;
 
@@ -1923,14 +1958,18 @@ fn trim_common_indent(s: &str) -> String {
         if line.is_empty() {
             continue;
         }
-        let indent = line.len() - line.trim_start().len();
-        if line.trim_start().is_empty() {
-            // Whitespace-only line
+        let (indent_cols, indent_bytes) = split_leading_indent(line, None);
+        if line[indent_bytes..].is_empty() {
+            // Whitespace-only line — Go skips these.
             continue;
         }
+        if indent_cols == 0 {
+            // Go's `lineIndent == ""` shortcut: no common indent, bail.
+            return s.to_string();
+        }
         common_indent = Some(match common_indent {
-            Some(ci) => ci.min(indent),
-            None => indent,
+            Some(ci) => ci.min(indent_cols),
+            None => indent_cols,
         });
     }
 
@@ -1941,7 +1980,13 @@ fn trim_common_indent(s: &str) -> String {
 
     lines
         .iter()
-        .map(|line| if line.len() >= ci { &line[ci..] } else { line })
+        .map(|line| {
+            if line.is_empty() {
+                return String::new();
+            }
+            let (_, byte_off) = split_leading_indent(line, Some(ci));
+            line[byte_off..].to_string()
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
