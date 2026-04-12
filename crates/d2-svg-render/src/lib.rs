@@ -797,7 +797,7 @@ fn path_data(
             let units = border_radius.min(dist / 2.0);
 
             // prev unit vector
-            let prev_len = (prev_vx * prev_vx + prev_vy * vy_squared(prev_vy)).sqrt();
+            let prev_len = (prev_vx * prev_vx + prev_vy * prev_vy).sqrt();
             let (pux, puy) = if prev_len > 0.0 {
                 (prev_vx / prev_len, prev_vy / prev_len)
             } else {
@@ -865,11 +865,6 @@ fn path_data(
     }
 
     path.join(" ")
-}
-
-// Helper to avoid naming collision
-fn vy_squared(v: f64) -> f64 {
-    v * v
 }
 
 // ---------------------------------------------------------------------------
