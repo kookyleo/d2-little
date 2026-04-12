@@ -699,6 +699,19 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 height: header_h,
             };
 
+            // Go's GetDefaultSize adds INNER_LABEL_PADDING to labelDims
+            // when withLabelPadding is true (no explicit dims and non-empty
+            // label). Apply the same adjustment to header_w/header_h.
+            let with_label_padding =
+                desired_width == 0 && desired_height == 0 && !label.is_empty();
+            let label_pad = if with_label_padding {
+                INNER_LABEL_PADDING as i32
+            } else {
+                0
+            };
+            let padded_header_w = header_w + label_pad;
+            let padded_header_h = header_h + label_pad;
+
             // Row measurements use mono font at `class_font_size`, and Go
             // measures the full row text `Name + Type` concatenated (not
             // the pieces individually).
@@ -707,7 +720,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 FontStyle::Regular,
                 class_font_size,
             );
-            let mut max_width = 12i32.max(header_w);
+            let mut max_width = 12i32.max(padded_header_w);
             let mut row_h = 0i32;
 
             let class_ref_opt = g.objects[i].class.clone();
@@ -735,10 +748,18 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 .as_ref()
                 .map(|c| c.fields.len() + c.methods.len())
                 .unwrap_or(0) as i32;
-            let row_height = row_h + d2_target::VERTICAL_PADDING;
-            // label::PADDING = 5 (d2-label crate).
-            let header_reserve = (2 * row_height).max(header_h + 2 * 5);
-            let h = row_height * row_count + header_reserve;
+            // Go has two separate height formulas depending on whether there
+            // are any row texts to measure.
+            let h = if row_h > 0 {
+                let row_height = row_h + d2_target::VERTICAL_PADDING;
+                // label::PADDING = 5 (d2-label crate).
+                let header_reserve =
+                    (2 * row_height).max(padded_header_h + 2 * 5);
+                row_height * row_count + header_reserve
+            } else {
+                // No fields/methods — Go: `2*max(12, labelDims.Height) + VerticalPadding`
+                2 * 12i32.max(padded_header_h) + d2_target::VERTICAL_PADDING
+            };
 
             g.objects[i].width = if desired_width > 0 {
                 desired_width as f64

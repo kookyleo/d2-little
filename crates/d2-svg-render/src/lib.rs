@@ -1366,6 +1366,14 @@ fn draw_shape(
         String::new()
     };
 
+    // this clipPath must be defined outside `g` element
+    if target_shape.border_radius != 0
+        && (target_shape.type_ == d2_target::SHAPE_CLASS
+            || target_shape.type_ == d2_target::SHAPE_SQL_TABLE)
+    {
+        buf.push_str(&clip_path_for_border_radius(diagram_hash, target_shape));
+    }
+
     let id_encoded = base64_url_encode(&d2_svg_path::escape_text(&target_shape.id));
     let mut classes = vec![id_encoded];
     if target_shape.animated {
@@ -2629,6 +2637,109 @@ fn class_row(
     text_el.content = d2_svg_path::escape_text(type_text);
     out.push_str(&text_el.render());
 
+    out
+}
+
+// ---------------------------------------------------------------------------
+// clipPath for border-radius (class / sql_table shapes)
+// ---------------------------------------------------------------------------
+
+/// Generate a `<clipPath>` element that clips the shape content to the rounded
+/// border.  Port of Go `d2renderers/d2svg/table.go clipPathForBorderRadius`.
+fn clip_path_for_border_radius(diagram_hash: &str, shape: &d2_target::Shape) -> String {
+    let x = shape.pos.x as f64;
+    let y = shape.pos.y as f64;
+    let w = shape.width as f64;
+    let h = shape.height as f64;
+    let r = shape.border_radius as f64;
+    let top_x = x + w;
+    let top_y = y;
+
+    let svg_id = d2_svg_path::svg_id(&shape.id);
+    let mut out = format!(r#"<clipPath id="{}-{}">"#, diagram_hash, svg_id);
+
+    // Top-left corner
+    write!(
+        out,
+        r#"<path d="M {:.6} {:.6} L {:.6} {:.6} S {:.6} {:.6} {:.6} {:.6} "#,
+        x,
+        y + r,
+        x,
+        y + r,
+        x,
+        y,
+        x + r,
+        y,
+    )
+    .unwrap();
+
+    // Top-right corner
+    write!(
+        out,
+        "L {:.6} {:.6} L {:.6} {:.6} ",
+        x + w - r,
+        y,
+        top_x - r,
+        top_y,
+    )
+    .unwrap();
+    write!(
+        out,
+        "S {:.6} {:.6} {:.6} {:.6} ",
+        top_x,
+        top_y,
+        top_x,
+        top_y + r,
+    )
+    .unwrap();
+    write!(out, "L {:.6} {:.6} ", top_x, top_y + h - r).unwrap();
+
+    if !shape.sql_table.columns.is_empty() {
+        // sql_table: no bottom rounding
+        write!(
+            out,
+            "L {:.6} {:.6} L {:.6} {:.6}",
+            top_x,
+            top_y + h,
+            x,
+            y + h,
+        )
+        .unwrap();
+    } else {
+        // class: round all four corners
+        // Go uses `% f` (space flag) for the second value, which prepends a
+        // space before non-negative numbers, producing a double-space in the
+        // output (one from the literal separator, one from the flag).
+        let v = top_y + h;
+        let space_v = if v >= 0.0 {
+            format!(" {:.6}", v)
+        } else {
+            format!("{:.6}", v)
+        };
+        write!(
+            out,
+            "S {:.6} {} {:.6} {:.6} ",
+            top_x,
+            space_v,
+            top_x - r,
+            top_y + h,
+        )
+        .unwrap();
+        write!(out, "L {:.6} {:.6} ", x + r, y + h).unwrap();
+        write!(
+            out,
+            "S {:.6} {:.6} {:.6} {:.6}",
+            x,
+            y + h,
+            x,
+            y + h - r,
+        )
+        .unwrap();
+        write!(out, "L {:.6} {:.6}", x, y + r).unwrap();
+    }
+
+    write!(out, r#"Z {:.6} {:.6}" "#, x, y).unwrap();
+    out.push_str(r#"fill="none" /> </clipPath>"#);
     out
 }
 
