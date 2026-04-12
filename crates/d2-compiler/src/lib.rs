@@ -434,6 +434,7 @@ impl Compiler {
         }
     }
 
+    #[allow(dead_code)]
     fn compile_field(&mut self, g: &mut Graph, obj: ObjId, f: &ir::Field) {
         self.compile_field_scoped(g, obj, obj, f);
     }
@@ -764,6 +765,7 @@ impl Compiler {
         }
     }
 
+    #[allow(dead_code)]
     fn compile_edge(&mut self, g: &mut Graph, obj: ObjId, e: &ir::IREdge) {
         self.compile_edge_scoped(g, obj, obj, e);
     }

@@ -388,6 +388,7 @@ fn obj_contained_by_scope(g: &Graph, obj_id: ObjId, container_id: ObjId) -> bool
 }
 
 /// Check if child_id is a descendant of parent_id.
+#[allow(dead_code)]
 fn obj_is_descendant_of(g: &Graph, child_id: ObjId, parent_id: ObjId) -> bool {
     let mut cur = child_id;
     while let Some(p) = g.objects[cur].parent {
