@@ -227,6 +227,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         edge_routes: HashMap<usize, (Vec<Point>, Option<String>)>, // (route, label_position)
         container_width: f64,
         container_height: f64,
+        container_label_position: Option<String>,
     }
 
     let mut nested_results: Vec<NestedResult> = Vec::new();
@@ -325,6 +326,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         let root = &sub_g.objects[sub_g.root];
         let container_width = root.width;
         let container_height = root.height;
+        let container_label_position = root.label_position.clone();
 
         nested_results.push(NestedResult {
             container_id,
@@ -332,13 +334,17 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             edge_routes,
             container_width,
             container_height,
+            container_label_position,
         });
     }
 
-    // Apply nested layout results: set container sizes and child positions.
+    // Apply nested layout results: set container sizes, label positions, and child positions.
     for result in &nested_results {
         g.objects[result.container_id].width = result.container_width;
         g.objects[result.container_id].height = result.container_height;
+        if let Some(ref pos) = result.container_label_position {
+            g.objects[result.container_id].label_position = Some(pos.clone());
+        }
     }
 
     // Run dagre layout on the main graph, excluding sequence diagram internals.
