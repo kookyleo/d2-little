@@ -367,6 +367,26 @@ fn edge_contained_by(g: &Graph, edge_idx: usize, obj_id: ObjId) -> bool {
     false
 }
 
+/// Check if an object is "contained by" another via Reference.scope_obj.
+/// Mirrors Go `Object.ContainedBy(obj)` which walks ScopeObj up the parent chain.
+fn obj_contained_by_scope(g: &Graph, obj_id: ObjId, container_id: ObjId) -> bool {
+    for r in &g.objects[obj_id].references {
+        if let Some(scope) = r.scope_obj {
+            let mut cur = scope;
+            loop {
+                if cur == container_id {
+                    return true;
+                }
+                match g.objects[cur].parent {
+                    Some(p) => cur = p,
+                    None => break,
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Check if child_id is a descendant of parent_id.
 fn obj_is_descendant_of(g: &Graph, child_id: ObjId, parent_id: ObjId) -> bool {
     let mut cur = child_id;
@@ -746,8 +766,8 @@ impl SequenceDiagram {
             if edge_contained_by(g, msg_idx, group_id) {
                 for p in &g.edges[msg_idx].route {
                     let label_height = g.edges[msg_idx].label_dimensions.height as f64 / 2.0;
-                    let edge_pad = label_height.max(MIN_MESSAGE_DISTANCE / 2.0)
-                        .max(GROUP_CONTAINER_PADDING);
+                    let edge_pad = (label_height + GROUP_CONTAINER_PADDING)
+                        .max(MIN_MESSAGE_DISTANCE / 2.0);
                     min_x = min_x.min(p.x - HORIZONTAL_PAD);
                     min_y = min_y.min(p.y - edge_pad);
                     max_x = max_x.max(p.x + HORIZONTAL_PAD);
@@ -756,9 +776,10 @@ impl SequenceDiagram {
             }
         }
 
-        // Groups should encompass notes of actors within the group
+        // Groups should encompass notes of actors within the group.
+        // In Go, this checks n.References[].ScopeObj walks up to group.
         for &note_id in &self.notes {
-            if obj_is_descendant_of(g, note_id, group_id) {
+            if obj_contained_by_scope(g, note_id, group_id) {
                 let note = &g.objects[note_id];
                 min_x = min_x.min(note.top_left.x - HORIZONTAL_PAD);
                 min_y = min_y.min(note.top_left.y - MIN_MESSAGE_DISTANCE / 2.0);
