@@ -252,6 +252,15 @@ impl Compiler {
     }
 
     fn compile_map(&mut self, g: &mut Graph, obj: ObjId, m: &ir::Map) {
+        self.compile_map_scoped(g, obj, obj, m);
+    }
+
+    /// Internal compile_map with explicit `scope` for reference tracking.
+    /// `scope` is the object whose IR map declared the keys being compiled.
+    /// Normally `scope == obj`, but when a sequence diagram redirect
+    /// occurred, `obj` is the redirected graph parent while `scope` is the
+    /// original declaring container (the group).
+    fn compile_map_scoped(&mut self, g: &mut Graph, obj: ObjId, scope: ObjId, m: &ir::Map) {
         // Apply referenced classes *first* so the object's own fields
         // override any class defaults. Mirrors Go d2compiler.compileMap's
         // top-of-function class-expansion step.
@@ -283,7 +292,7 @@ impl Compiler {
             if shape_field.composite.is_some() {
                 // "reserved field shape does not accept composite"
             } else {
-                self.compile_field(g, obj, shape_field);
+                self.compile_field_scoped(g, obj, scope, shape_field);
             }
         }
 
@@ -295,7 +304,7 @@ impl Compiler {
             if ast::BOARD_KEYWORDS.contains(f.name.as_str()) && f.name_is_unquoted {
                 continue;
             }
-            self.compile_field(g, obj, f);
+            self.compile_field_scoped(g, obj, scope, f);
         }
 
         // For class / sql_table shapes, reinterpret the object's children
@@ -307,9 +316,12 @@ impl Compiler {
             self.compile_sql_table_shape(g, obj);
         }
 
-        // Process edges
+        // Process edges. Edge scope_obj is always `obj` — the object whose
+        // map directly contains the edge declaration. This matches Go's
+        // behavior where edge.Reference.ScopeObj comes from the IR map
+        // that declared the edge (not a parent scope).
         for e in &m.edges {
-            self.compile_edge(g, obj, e);
+            self.compile_edge_scoped(g, obj, obj, e);
         }
     }
 
@@ -423,6 +435,14 @@ impl Compiler {
     }
 
     fn compile_field(&mut self, g: &mut Graph, obj: ObjId, f: &ir::Field) {
+        self.compile_field_scoped(g, obj, obj, f);
+    }
+
+    /// Compile a field with explicit scope tracking.
+    /// `scope` is the object whose IR map declared this field. When inside
+    /// a sequence diagram, edges/fields may be redirected to different graph
+    /// parents, but the scope still refers to the original declaring container.
+    fn compile_field_scoped(&mut self, g: &mut Graph, obj: ObjId, scope: ObjId, f: &ir::Field) {
         let keyword = f.name.to_lowercase();
         let is_style_reserved =
             ast::STYLE_KEYWORDS.contains(keyword.as_str()) && f.name_is_unquoted;
@@ -461,13 +481,16 @@ impl Compiler {
         let child = g.ensure_child_of(obj, &[f.name.clone()]);
 
         // Mirror Go d2compiler.compileField: copy the IR field's references
-        // into d2graph.Object.References. The sort_objects_by_ast pass uses
-        // the first reference to put objects in source order.
+        // into d2graph.Object.References. Reference scope_obj tracks which
+        // graph object's IR map declared this field. In Go, this comes from
+        // BoardIDA(fr.Context_.ScopeMap). `scope` represents the graph
+        // object owning the IR map where this key was declared.
         for fr in &f.references {
             if let Some(ref kp) = fr.key_path {
                 g.objects[child].references.push(d2_graph::Reference {
                     key: kp.clone(),
                     key_path_index: fr.key_path_index,
+                    scope_obj: Some(scope),
                 });
             }
         }
@@ -486,9 +509,19 @@ impl Compiler {
             }
         }
 
-        // Recurse into map
+        // Recurse into map. Determine the scope for the sub-map:
+        // - If a sequence diagram redirect happened (child is not a direct
+        //   child of obj), keep the current scope: `obj` is the declaring
+        //   group/container whose map contained this key.
+        // - Otherwise (normal case), the sub-map's scope is the newly
+        //   created child itself (it owns the sub-map).
         if let Some(fmap) = f.map() {
-            self.compile_map(g, child, fmap);
+            let child_scope = if g.objects[child].parent == Some(obj) {
+                child  // Normal: child owns the sub-map
+            } else {
+                obj    // Redirect: declaring scope is obj
+            };
+            self.compile_map_scoped(g, child, child_scope, fmap);
         }
     }
 
@@ -732,6 +765,10 @@ impl Compiler {
     }
 
     fn compile_edge(&mut self, g: &mut Graph, obj: ObjId, e: &ir::IREdge) {
+        self.compile_edge_scoped(g, obj, obj, e);
+    }
+
+    fn compile_edge_scoped(&mut self, g: &mut Graph, obj: ObjId, scope: ObjId, e: &ir::IREdge) {
         let src_path: Vec<String> = e.id.src_path.clone();
         let dst_path: Vec<String> = e.id.dst_path.clone();
 
@@ -749,6 +786,11 @@ impl Compiler {
                 return;
             }
         };
+
+        // Record the scope object — the object in whose map scope this
+        // edge was declared. Used by sequence diagram layout to determine
+        // group containment. Mirrors Go Edge.References[].ScopeObj.
+        g.edges[edge_idx].scope_obj = Some(scope);
 
         // Record the earliest AST reference for this edge so the graph
         // can later be stable-sorted by source position (matches Go

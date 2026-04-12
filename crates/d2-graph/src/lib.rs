@@ -584,6 +584,10 @@ pub struct Reference {
     pub key: ast::KeyPath,
     /// Index into `key.path` for the segment this reference represents.
     pub key_path_index: usize,
+    /// The object in whose map scope this reference was declared. Mirrors
+    /// Go `Reference.ScopeObj`. Used by sequence diagram layout to determine
+    /// which objects are contained by a group.
+    pub scope_obj: Option<ObjId>,
 }
 
 impl Default for Object {
@@ -1117,14 +1121,20 @@ impl Object {
     /// Walk up the parent chain and return `true` if any ancestor is a
     /// sequence diagram. Mirrors Go `Object.OuterSequenceDiagram() != nil`.
     pub fn is_inside_sequence_diagram(&self, graph: &Graph) -> bool {
+        self.outer_sequence_diagram(graph).is_some()
+    }
+
+    /// Walk up the parent chain and return the nearest ancestor that is a
+    /// sequence diagram. Mirrors Go `Object.OuterSequenceDiagram()`.
+    pub fn outer_sequence_diagram(&self, graph: &Graph) -> Option<ObjId> {
         let mut cur = self.parent;
         while let Some(pid) = cur {
             if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
-                return true;
+                return Some(pid);
             }
             cur = graph.objects[pid].parent;
         }
-        false
+        None
     }
 
     /// Is this a sequence diagram group?
@@ -1212,6 +1222,11 @@ pub struct Edge {
     /// Overrides the normal `g.objects[dst].abs_id()` for exporter output.
     /// Used for synthetic lifeline-end objects in sequence diagrams.
     pub dst_id_override: Option<String>,
+
+    /// The object in whose scope this edge was declared. Mirrors Go
+    /// `Edge.References[].ScopeObj`. Used by sequence diagram layout to
+    /// determine if an edge is contained by a group.
+    pub scope_obj: Option<ObjId>,
 }
 
 impl Default for Edge {
@@ -1243,6 +1258,7 @@ impl Default for Edge {
             src_table_column_index: None,
             dst_table_column_index: None,
             dst_id_override: None,
+            scope_obj: None,
         }
     }
 }
@@ -1433,10 +1449,22 @@ impl Graph {
         // Rewrite root.
         self.root = old_to_new[self.root];
 
-        // Rewrite edge endpoints.
+        // Rewrite edge endpoints and scope_obj.
         for e in self.edges.iter_mut() {
             e.src = old_to_new[e.src];
             e.dst = old_to_new[e.dst];
+            if let Some(ref mut s) = e.scope_obj {
+                *s = old_to_new[*s];
+            }
+        }
+
+        // Rewrite scope_obj in object references.
+        for obj in self.objects.iter_mut() {
+            for r in obj.references.iter_mut() {
+                if let Some(ref mut s) = r.scope_obj {
+                    *s = old_to_new[*s];
+                }
+            }
         }
     }
 
@@ -1506,8 +1534,35 @@ impl Graph {
 
     /// Ensure a child object exists at the given path (relative to `parent`).
     /// Creates intermediate objects as needed. Returns the ObjId.
+    ///
+    /// Mirrors Go `Object.EnsureChild`: when inside a sequence diagram, if the
+    /// first path segment matches a top-level child of the sequence diagram, the
+    /// walk redirects to that child (i.e. edges inside groups resolve to the
+    /// existing top-level actors).
     pub fn ensure_child_of(&mut self, parent: ObjId, ida: &[String]) -> ObjId {
         let mut cur = parent;
+
+        // Sequence-diagram redirect: if cur is inside a sequence diagram and
+        // the first segment of ida matches a top-level child of that diagram,
+        // redirect to the diagram root so the walk creates/finds the child
+        // there instead of under the current (group) scope.
+        if let Some(first_name) = ida.first() {
+            if let Some(seq_id) = self.objects[cur].outer_sequence_diagram(self) {
+                let seq_has_child = self.objects[seq_id]
+                    .children_array
+                    .iter()
+                    .any(|&cid| self.objects[cid].id_val() == first_name);
+                if seq_has_child {
+                    // Edge case from Go: if cur.id == first_name (a.a pattern),
+                    // the second a should be created as a child of a, not
+                    // redirected. Skip the redirect in that case.
+                    if self.objects[cur].id_val() != first_name {
+                        cur = seq_id;
+                    }
+                }
+            }
+        }
+
         for name in ida {
             // Look for existing child — match on the unquoted value
             // (id_val), same as the incoming IR field name.

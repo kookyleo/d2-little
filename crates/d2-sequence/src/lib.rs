@@ -117,16 +117,27 @@ fn new_sequence_diagram(
     let mut sorted_messages: Vec<usize> = message_indices.to_vec();
     sorted_messages.sort_by_key(|&idx| get_edge_earliest_line_num(&g.edges[idx]));
 
-    // Separate actors from groups.
-    // Note: proper group detection requires Go-compatible compiler behavior
-    // where edges within groups reference outer-scope actors. For now, we
-    // treat all top-level children as actors (groups will be mis-handled
-    // but won't crash).
+    // Separate actors from groups. Mirrors Go newSequenceDiagram:
+    // groups are objects not connected by any edge, whose children all
+    // contain edges (are not notes).
     let mut actors: Vec<ObjId> = Vec::new();
-    let groups: Vec<ObjId> = Vec::new();
+    let mut groups: Vec<ObjId> = Vec::new();
 
     for &obj_id in &sorted_objects {
-        actors.push(obj_id);
+        if is_sequence_diagram_group(g, obj_id, &sorted_messages) {
+            // Groups may contain nested groups — flatten them all
+            let mut queue = vec![obj_id];
+            while let Some(curr) = queue.first().copied() {
+                queue.remove(0);
+                g.objects[curr].label_position =
+                    Some(d2_label::Position::InsideTopLeft.to_string());
+                groups.push(curr);
+                let children = g.objects[curr].children_array.clone();
+                queue.extend(children);
+            }
+        } else {
+            actors.push(obj_id);
+        }
     }
 
     if actors.is_empty() {
@@ -274,62 +285,62 @@ fn child_has_edge_ref(g: &Graph, child_id: ObjId) -> bool {
 }
 
 /// Check if an object is a sequence diagram group.
-/// Groups are top-level children that have no direct edges but contain edges or objects.
+/// Groups are objects inside a sequence diagram that:
+/// 1. Have no edges directly connecting to them (not an actor endpoint)
+/// 2. All children either contain edges or are sub-groups (no note-like children)
+/// 3. Contain objects or edges within their scope
+///
+/// Mirrors Go `Object.IsSequenceDiagramGroup()`.
 fn is_sequence_diagram_group(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
-    // Must not be directly referenced by any edge
+    // Must not be directly referenced by any edge as src or dst
     for &idx in message_indices {
         if g.edges[idx].src == obj_id || g.edges[idx].dst == obj_id {
             return false;
         }
     }
-    // Must have children whose children don't have edge-free notes
-    // (children with edges are spans, not notes inside groups)
+    // All children must contain edges (not be note-like)
     let obj = &g.objects[obj_id];
     for &child_id in &obj.children_array {
-        // If a child has no edge refs and no children, it might be a note inside the group
-        // If it contains no edge but is not edge-free, it invalidates the group
-        if !child_has_edge_ref(g, child_id) && g.objects[child_id].children_array.is_empty() {
-            // This child looks like a note, which means this isn't a group
-            // (notes are children of actors, not groups)
-            // Actually in Go: if the child contains a message, it's a span, not a note
-            // Groups cannot have note-like children
-            let child_contains_edge = contains_any_edge(g, child_id, message_indices);
-            if !child_contains_edge {
-                return false;
-            }
+        if !obj_contains_any_edge(g, child_id, message_indices) {
+            return false;
         }
     }
     // Must contain some objects or edges
-    let has_children_objs = contains_any_object(g, obj_id);
-    let has_children_edges = contains_any_edge(g, obj_id, message_indices);
-    has_children_objs || has_children_edges
+    obj_contains_any_object(g, obj_id) || obj_contains_any_edge(g, obj_id, message_indices)
 }
 
 /// Check if obj contains any other object (has descendant objects within its scope).
-fn contains_any_object(g: &Graph, obj_id: ObjId) -> bool {
+/// Mirrors Go `Object.ContainsAnyObject` which uses `Object.ContainedBy` →
+/// walks Reference.ScopeObj up the parent chain.
+fn obj_contains_any_object(g: &Graph, obj_id: ObjId) -> bool {
     for (i, o) in g.objects.iter().enumerate() {
-        if i != obj_id && obj_is_descendant_of(g, i, obj_id) {
-            return true;
+        if i == obj_id {
+            continue;
+        }
+        // Check references: if any reference's scope_obj walks up to obj_id
+        for r in &o.references {
+            if let Some(scope) = r.scope_obj {
+                let mut cur = scope;
+                loop {
+                    if cur == obj_id {
+                        return true;
+                    }
+                    match g.objects[cur].parent {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+            }
         }
     }
     false
 }
 
 /// Check if obj contains any edge (has edges scoped within it).
-fn contains_any_edge(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
-    let prefix = format!("{}.", g.objects[obj_id].abs_id);
+/// Uses edge.scope_obj to match Go's Reference-based containment.
+fn obj_contains_any_edge(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
     for &idx in message_indices {
-        let edge = &g.edges[idx];
-        // Check if both src and dst are descendants of obj
-        if g.objects[edge.src].abs_id.starts_with(&prefix)
-            && g.objects[edge.dst].abs_id.starts_with(&prefix)
-        {
-            return true;
-        }
-        // Also check if src or dst IS the obj (edge src/dst = obj's child)
-        if obj_is_descendant_of(g, edge.src, obj_id)
-            || obj_is_descendant_of(g, edge.dst, obj_id)
-        {
+        if edge_contained_by(g, idx, obj_id) {
             return true;
         }
     }
@@ -337,13 +348,23 @@ fn contains_any_edge(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> boo
 }
 
 /// Check if an edge is contained by (scoped within) an object.
-/// In Go this uses edge References/ScopeObj; we approximate by checking
-/// if both src and dst are descendants of the object.
+/// Mirrors Go `Edge.ContainedBy(obj)` which walks Reference.ScopeObj up
+/// the parent chain. We use edge.scope_obj for the same purpose.
 fn edge_contained_by(g: &Graph, edge_idx: usize, obj_id: ObjId) -> bool {
     let edge = &g.edges[edge_idx];
-    let src_inside = obj_is_descendant_of(g, edge.src, obj_id) || edge.src == obj_id;
-    let dst_inside = obj_is_descendant_of(g, edge.dst, obj_id) || edge.dst == obj_id;
-    src_inside && dst_inside
+    if let Some(scope) = edge.scope_obj {
+        let mut cur = scope;
+        loop {
+            if cur == obj_id {
+                return true;
+            }
+            match g.objects[cur].parent {
+                Some(p) => cur = p,
+                None => return false,
+            }
+        }
+    }
+    false
 }
 
 /// Check if child_id is a descendant of parent_id.
