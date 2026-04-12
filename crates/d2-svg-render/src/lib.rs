@@ -20,6 +20,19 @@ use d2_themes;
 pub const DEFAULT_PADDING: i32 = 100;
 pub const APPENDIX_ICON_RADIUS: i32 = 16;
 
+/// Raw SVG template used when a shape has a tooltip. Contains two positional
+/// placeholders for diagram hash and shape SVG-ID (Go uses `%[1]s`/`%[2]s`).
+const TOOLTIP_ICON_TEMPLATE: &str = include_str!("tooltip.svg");
+/// Raw SVG template used when a shape has a link. Contains two positional
+/// placeholders for diagram hash and shape SVG-ID (Go uses `%[1]s`/`%[2]s`).
+const LINK_ICON_TEMPLATE: &str = include_str!("link.svg");
+
+fn format_appendix_icon(template: &str, diagram_hash: &str, svg_id: &str) -> String {
+    template
+        .replace("%[1]s", diagram_hash)
+        .replace("%[2]s", svg_id)
+}
+
 // ---------------------------------------------------------------------------
 // Base CSS stylesheet (embedded inline for simplicity)
 // ---------------------------------------------------------------------------
@@ -29,6 +42,7 @@ pub const APPENDIX_ICON_RADIUS: i32 = 16;
 /// Matches the contents of `d2/d2renderers/d2svg/style.css` byte-for-byte
 /// (no leading newline, trailing newline preserved).
 const BASE_STYLESHEET: &str = ".shape {\n  shape-rendering: geometricPrecision;\n  stroke-linejoin: round;\n}\n.connection {\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.blend {\n  mix-blend-mode: multiply;\n  opacity: 0.5;\n}\n";
+const MARKDOWN_CSS: &str = include_str!("github-markdown.css");
 
 // ---------------------------------------------------------------------------
 // RenderOpts
@@ -623,8 +637,7 @@ fn arrowhead_marker(
                 // Go renders these with `%f` which is six-decimal
                 // formatting; keeping the same format avoids a byte diff
                 // for every crow-foot/cf-many/cf-one connection.
-                g_el.transform =
-                    format!("scale(-1) translate(-{:.6}, -{:.6})", width, height);
+                g_el.transform = format!("scale(-1) translate(-{:.6}, -{:.6})", width, height);
             }
             g_el.fill = d2_target::BG_COLOR.to_owned();
             g_el.stroke = connection.stroke.clone();
@@ -980,53 +993,88 @@ fn draw_connection(
                 );
             }
 
-            // Background rect for labels with an explicit fill.
-            // Mirrors Go `drawConnection` — the rect has `rx=10`, sits 4px
-            // left / 3px top of the label, and is 8px wider / 6px taller.
-            if !connection.fill.is_empty() && connection.fill != "transparent" {
-                let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
-                rect_el.rx = Some(10.0);
-                rect_el.x = Some(label_tl.x - 4.0);
-                rect_el.y = Some(label_tl.y - 3.0);
-                rect_el.width = Some(connection.text.label_width as f64 + 8.0);
-                rect_el.height = Some(connection.text.label_height as f64 + 6.0);
-                rect_el.fill = connection.fill.clone();
-                buf.push_str(&rect_el.render());
-            }
+            if connection.text.language == "markdown" {
+                let mut render = d2_textmeasure::render_markdown(&connection.text.label)?;
+                write!(
+                    buf,
+                    r#"<g><foreignObject requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility" x="{:.6}" y="{:.6}" width="{}" height="{}">"#,
+                    label_tl.x,
+                    label_tl.y,
+                    connection.text.label_width,
+                    connection.text.label_height,
+                )
+                .unwrap();
 
-            // Render label text. Mirror Go `drawConnection`'s font-class
-            // construction: start from `text`/`text-mono` based on
-            // fontFamily, then suffix with `-bold`/`-italic`, and append
-            // a ` text-underline` token when needed.
-            let mut font_class = if connection.text.font_family == "mono" {
-                "text-mono".to_owned()
+                render = render.replace("<hr>", "<hr />");
+
+                let mut md_el = d2_themes::ThemableElement::new("div", inline_theme);
+                md_el.class_name = "md".to_owned();
+                md_el.content = render;
+
+                let mut styles = Vec::new();
+                if connection.text.font_size != d2_textmeasure::MARKDOWN_FONT_SIZE {
+                    styles.push(format!("font-size:{}px", connection.text.font_size));
+                }
+                if !connection.fill.is_empty() && connection.fill != "transparent" {
+                    styles.push(format!("background-color:{}", connection.fill));
+                }
+                let font_color = connection.get_font_color();
+                if !d2_color::is_theme_color(font_color) {
+                    styles.push(format!("color:{}", font_color));
+                }
+                md_el.style = styles.join(";");
+
+                buf.push_str(&md_el.render());
+                buf.push_str("</foreignObject></g>");
             } else {
-                "text".to_owned()
-            };
-            if connection.text.bold {
-                font_class.push_str("-bold");
-            } else if connection.text.italic {
-                font_class.push_str("-italic");
-            }
-            if connection.text.underline {
-                font_class.push_str(" text-underline");
-            }
+                // Background rect for labels with an explicit fill.
+                // Mirrors Go `drawConnection` — the rect has `rx=10`, sits 4px
+                // left / 3px top of the label, and is 8px wider / 6px taller.
+                if !connection.fill.is_empty() && connection.fill != "transparent" {
+                    let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
+                    rect_el.rx = Some(10.0);
+                    rect_el.x = Some(label_tl.x - 4.0);
+                    rect_el.y = Some(label_tl.y - 3.0);
+                    rect_el.width = Some(connection.text.label_width as f64 + 8.0);
+                    rect_el.height = Some(connection.text.label_height as f64 + 6.0);
+                    rect_el.fill = connection.fill.clone();
+                    buf.push_str(&rect_el.render());
+                }
 
-            let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-            text_el.x = Some(label_tl.x + connection.text.label_width as f64 / 2.0);
-            text_el.y = Some(label_tl.y + connection.text.font_size as f64);
-            text_el.class_name = font_class.to_owned();
-            text_el.style = format!(
-                "text-anchor:middle;font-size:{}px",
-                connection.text.font_size
-            );
-            text_el.content = render_text(
-                &connection.text.label,
-                text_el.x.unwrap(),
-                connection.text.label_height as f64,
-            );
-            text_el.fill = connection.get_font_color().to_owned();
-            buf.push_str(&text_el.render());
+                // Render label text. Mirror Go `drawConnection`'s font-class
+                // construction: start from `text`/`text-mono` based on
+                // fontFamily, then suffix with `-bold`/`-italic`, and append
+                // a ` text-underline` token when needed.
+                let mut font_class = if connection.text.font_family == "mono" {
+                    "text-mono".to_owned()
+                } else {
+                    "text".to_owned()
+                };
+                if connection.text.bold {
+                    font_class.push_str("-bold");
+                } else if connection.text.italic {
+                    font_class.push_str("-italic");
+                }
+                if connection.text.underline {
+                    font_class.push_str(" text-underline");
+                }
+
+                let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+                text_el.x = Some(label_tl.x + connection.text.label_width as f64 / 2.0);
+                text_el.y = Some(label_tl.y + connection.text.font_size as f64);
+                text_el.class_name = font_class.to_owned();
+                text_el.style = format!(
+                    "text-anchor:middle;font-size:{}px",
+                    connection.text.font_size
+                );
+                text_el.content = render_text(
+                    &connection.text.label,
+                    text_el.x.unwrap(),
+                    connection.text.label_height as f64,
+                );
+                text_el.fill = connection.get_font_color().to_owned();
+                buf.push_str(&text_el.render());
+            }
         }
     }
 
@@ -1145,11 +1193,119 @@ fn arrowhead_label_position(connection: &d2_target::Connection, is_dst: bool) ->
 }
 
 // ---------------------------------------------------------------------------
+// Appendix items (tooltip/link icons) — ported from Go's addAppendixItems
+// ---------------------------------------------------------------------------
+
+fn add_appendix_items(
+    appendix_buf: &mut String,
+    diagram_hash: &str,
+    target_shape: &d2_target::Shape,
+    s: &d2_shape::Shape,
+) {
+    if target_shape.tooltip.is_empty() && target_shape.link.is_empty() {
+        return;
+    }
+
+    // Positioned tooltips are rendered elsewhere (not yet implemented here).
+    // For the non-positioned path we compute the icon anchor by tracing from
+    // the shape's center to the top-right corner out to the shape border.
+    let (p1, p2) = {
+        let both_icons = !target_shape.tooltip.is_empty() && !target_shape.link.is_empty();
+        let mut corner = d2_geo::Point::new(
+            (target_shape.pos.x + target_shape.width) as f64,
+            target_shape.pos.y as f64,
+        );
+        let mut center = d2_geo::Point::new(
+            target_shape.pos.x as f64 + target_shape.width as f64 / 2.0,
+            target_shape.pos.y as f64 + target_shape.height as f64 / 2.0,
+        );
+        let offset = d2_geo::Vector(vec![-2.0 * APPENDIX_ICON_RADIUS as f64, 0.0]);
+
+        let mut left_on_shape = false;
+        match s.get_type() {
+            d2_shape::STEP_TYPE
+            | d2_shape::HEXAGON_TYPE
+            | d2_shape::QUEUE_TYPE
+            | d2_shape::PAGE_TYPE => {
+                center.y = target_shape.pos.y as f64;
+            }
+            d2_shape::PACKAGE_TYPE => {
+                center.x = (target_shape.pos.x + target_shape.width) as f64;
+            }
+            d2_shape::CIRCLE_TYPE
+            | d2_shape::OVAL_TYPE
+            | d2_shape::DIAMOND_TYPE
+            | d2_shape::PERSON_TYPE
+            | d2_shape::CLOUD_TYPE
+            | d2_shape::CYLINDER_TYPE => {
+                if both_icons {
+                    left_on_shape = true;
+                    corner = corner.add_vector(&offset);
+                }
+            }
+            _ => {}
+        }
+
+        let v1 = center.vector_to(&corner);
+        let end = corner.add_vector(&v1);
+        let p1 = d2_shape::trace_to_shape_border(s, &corner, &end);
+        let p2 = if both_icons {
+            if left_on_shape {
+                let p2_tmp = p1.add_vector(&offset.reverse());
+                Some(p2_tmp)
+            } else {
+                Some(p1.add_vector(&offset))
+            }
+        } else {
+            None
+        };
+        if both_icons && left_on_shape {
+            // Go swaps p1 and p2 in the left-on-shape branch.
+            (p2.unwrap(), Some(p1))
+        } else {
+            (p1, p2)
+        }
+    };
+
+    if !target_shape.tooltip.is_empty() && target_shape.tooltip_position.is_empty() {
+        let x = p1.x.ceil() as i32;
+        let y = p1.y.ceil() as i32;
+        let svg_id = d2_svg_path::svg_id(&target_shape.id);
+        let icon = format_appendix_icon(TOOLTIP_ICON_TEMPLATE, diagram_hash, &svg_id);
+        write!(
+            appendix_buf,
+            r#"<g transform="translate({} {})" class="appendix-icon"><title>{}</title>{}</g>"#,
+            x - APPENDIX_ICON_RADIUS,
+            y - APPENDIX_ICON_RADIUS,
+            d2_svg_path::escape_text(&target_shape.tooltip),
+            icon,
+        )
+        .unwrap();
+    }
+    if !target_shape.link.is_empty() {
+        let p2 = p2.unwrap_or(p1);
+        let x = p2.x.ceil() as i32;
+        let y = p2.y.ceil() as i32;
+        let svg_id = d2_svg_path::svg_id(&target_shape.id);
+        let icon = format_appendix_icon(LINK_ICON_TEMPLATE, diagram_hash, &svg_id);
+        write!(
+            appendix_buf,
+            r#"<g transform="translate({} {})" class="appendix-icon">{}</g>"#,
+            x - APPENDIX_ICON_RADIUS,
+            y - APPENDIX_ICON_RADIUS,
+            icon,
+        )
+        .unwrap();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Draw shape
 // ---------------------------------------------------------------------------
 
 fn draw_shape(
     buf: &mut String,
+    appendix_buf: &mut String,
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
     inline_theme: Option<&d2_themes::Theme>,
@@ -1413,12 +1569,18 @@ fn draw_shape(
         }
         d2_target::SHAPE_CLASS => {
             draw_class(buf, diagram_hash, target_shape, inline_theme);
+            let bbox = d2_geo::Box2D::new(tl, width, height);
+            let s = d2_shape::Shape::new(shape_type, bbox);
+            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
             buf.push_str("</g>");
             buf.push_str(&closing_tag);
             return Ok(label_mask);
         }
         d2_target::SHAPE_SQL_TABLE => {
             draw_table(buf, diagram_hash, target_shape, inline_theme);
+            let bbox = d2_geo::Box2D::new(tl, width, height);
+            let s = d2_shape::Shape::new(shape_type, bbox);
+            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
             buf.push_str("</g>");
             buf.push_str(&closing_tag);
             return Ok(label_mask);
@@ -1596,32 +1758,75 @@ fn draw_shape(
             fc
         };
 
-        // Render as simple text (not markdown/latex/code for this initial port)
-        if !target_shape.text.label_fill.is_empty() {
-            let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
-            rect_el.x = Some(label_tl.x);
-            rect_el.y = Some(label_tl.y);
-            rect_el.width = Some(target_shape.text.label_width as f64);
-            rect_el.height = Some(target_shape.text.label_height as f64);
-            rect_el.fill = target_shape.text.label_fill.clone();
-            buf.push_str(&rect_el.render());
-        }
+        if target_shape.text.language == "markdown" {
+            let mut render = d2_textmeasure::render_markdown(&target_shape.text.label)?;
+            write!(
+                buf,
+                r#"<g><foreignObject requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility" x="{:.6}" y="{:.6}" width="{}" height="{}">"#,
+                label_tl.x,
+                label_tl.y,
+                target_shape.text.label_width,
+                target_shape.text.label_height,
+            )
+            .unwrap();
 
-        let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
-        text_el.x = Some(label_tl.x + target_shape.text.label_width as f64 / 2.0);
-        text_el.y = Some(label_tl.y + target_shape.text.font_size as f64);
-        text_el.fill = target_shape.get_font_color().to_owned();
-        text_el.class_name = font_class;
-        text_el.style = format!(
-            "text-anchor:middle;font-size:{}px",
-            target_shape.text.font_size
-        );
-        text_el.content = render_text(
-            &target_shape.text.label,
-            text_el.x.unwrap(),
-            target_shape.text.label_height as f64,
-        );
-        buf.push_str(&text_el.render());
+            render = render.replace("<hr>", "<hr />");
+
+            let mut md_el = d2_themes::ThemableElement::new("div", inline_theme);
+            md_el.content = render;
+
+            let mut styles = Vec::new();
+            let mut classes = vec!["md".to_owned()];
+            if target_shape.text.font_size != d2_textmeasure::MARKDOWN_FONT_SIZE {
+                styles.push(format!("font-size:{}px", target_shape.text.font_size));
+            }
+
+            if !target_shape.fill.is_empty() && target_shape.fill != "transparent" {
+                if d2_color::is_theme_color(&target_shape.fill) {
+                    classes.push(format!("fill-{}", target_shape.fill));
+                } else {
+                    styles.push(format!("background-color:{}", target_shape.fill));
+                }
+            }
+
+            let font_color = target_shape.get_font_color();
+            if d2_color::is_theme_color(font_color) {
+                classes.push(format!("color-{}", font_color));
+            } else {
+                styles.push(format!("color:{}", font_color));
+            }
+
+            md_el.class_name = classes.join(" ");
+            md_el.style = styles.join(";");
+            buf.push_str(&md_el.render());
+            buf.push_str("</foreignObject></g>");
+        } else {
+            if !target_shape.text.label_fill.is_empty() {
+                let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
+                rect_el.x = Some(label_tl.x);
+                rect_el.y = Some(label_tl.y);
+                rect_el.width = Some(target_shape.text.label_width as f64);
+                rect_el.height = Some(target_shape.text.label_height as f64);
+                rect_el.fill = target_shape.text.label_fill.clone();
+                buf.push_str(&rect_el.render());
+            }
+
+            let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+            text_el.x = Some(label_tl.x + target_shape.text.label_width as f64 / 2.0);
+            text_el.y = Some(label_tl.y + target_shape.text.font_size as f64);
+            text_el.fill = target_shape.get_font_color().to_owned();
+            text_el.class_name = font_class;
+            text_el.style = format!(
+                "text-anchor:middle;font-size:{}px",
+                target_shape.text.font_size
+            );
+            text_el.content = render_text(
+                &target_shape.text.label,
+                text_el.x.unwrap(),
+                target_shape.text.label_height as f64,
+            );
+            buf.push_str(&text_el.render());
+        }
     }
 
     // Tooltip as <title>
@@ -1632,6 +1837,20 @@ fn draw_shape(
             d2_svg_path::escape_text(&target_shape.tooltip)
         )
         .unwrap();
+    }
+
+    // Write tooltip/link icons to the appendix buffer (flushed after all
+    // shapes so they render on top). Go's addAppendixItems uses the shape
+    // computed during main rendering; we rebuild an equivalent one here.
+    {
+        let bbox = d2_geo::Box2D::new(tl, width, height);
+        let mut s = d2_shape::Shape::new(shape_type, bbox);
+        if shape_type == d2_shape::CLOUD_TYPE {
+            if let Some(ar) = target_shape.content_aspect_ratio {
+                s.set_inner_box_aspect_ratio(ar);
+            }
+        }
+        add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
     }
 
     buf.push_str(&closing_tag);
@@ -1925,34 +2144,134 @@ fn render_3d_rect(
 }
 
 // ---------------------------------------------------------------------------
-// 3D hexagon rendering (simplified)
+// 3D hexagon rendering
 // ---------------------------------------------------------------------------
 
 fn render_3d_hexagon(
-    _diagram_hash: &str,
+    diagram_hash: &str,
     target_shape: &d2_target::Shape,
     inline_theme: Option<&d2_themes::Theme>,
 ) -> String {
-    // Simplified 3D hexagon – renders the flat hexagon shape with 3D offset indication
-    let tl = d2_geo::Point::new(target_shape.pos.x as f64, target_shape.pos.y as f64);
-    let width = target_shape.width as f64;
-    let height = target_shape.height as f64;
-    let shape_type = d2_target::dsl_shape_to_shape_type(&target_shape.type_);
-    let bbox = d2_geo::Box2D::new(tl, width, height);
-    let s = d2_shape::Shape::new(shape_type, bbox);
-    let (fill, stroke) = shape_theme(target_shape);
-    let style = shape_css_style(target_shape);
+    // Mirror Go `d2renderers/d2svg/d2svg.go render3DHexagon`.
+    let px = target_shape.pos.x;
+    let py = target_shape.pos.y;
+    let w = target_shape.width;
+    let h = target_shape.height;
+    let off = d2_target::THREE_DEE_OFFSET;
+    let y_off = off / 2;
+    let half_y_factor = 43.6f64 / 87.3f64;
+    let scale = |n: i32, f: f64| -> i32 { (n as f64 * f) as i32 };
+    let move_to = |x: i32, y: i32| -> String { format!("M{},{}", x + px, y + py) };
+    let line_to = |x: i32, y: i32| -> String { format!("L{},{}", x + px, y + py) };
+
+    let mut border_segments = vec![move_to(scale(w, 0.25), 0)];
+    for (x, y) in [
+        (scale(w, 0.25) + off, -y_off),
+        (scale(w, 0.75) + off, -y_off),
+        (w + off, scale(h, half_y_factor) - y_off),
+        (scale(w, 0.75) + off, h - y_off),
+        (scale(w, 0.75), h),
+        (scale(w, 0.25), h),
+        (0, scale(h, half_y_factor)),
+        (scale(w, 0.25), 0),
+        (scale(w, 0.75), 0),
+        (w, scale(h, half_y_factor)),
+        (scale(w, 0.75), h),
+    ] {
+        border_segments.push(line_to(x, y));
+    }
+    for (x, y) in [
+        (scale(w, 0.75), 0),
+        (w, scale(h, half_y_factor)),
+        (scale(w, 0.75), h),
+    ] {
+        border_segments.push(move_to(x, y));
+        border_segments.push(line_to(x + off, y - y_off));
+    }
+
+    let (_, border_stroke) = shape_theme(target_shape);
+    let border_style = shape_css_style(target_shape);
+    let border_d = border_segments.join(" ");
 
     let mut result = String::new();
-    let mut el = d2_themes::ThemableElement::new("path", inline_theme);
-    el.fill = fill;
-    el.fill_pattern = target_shape.fill_pattern.clone();
-    el.stroke = stroke;
-    el.style = style;
-    for pd in s.get_svg_path_data() {
-        el.d = pd;
-        result.push_str(&el.render());
-    }
+
+    let mask_id = format!(
+        "border-mask-{}-{}",
+        diagram_hash,
+        d2_svg_path::escape_text(&target_shape.id)
+    );
+    let mask_border_d = border_segments.join("");
+    write!(
+        result,
+        "<defs><mask id=\"{}\" maskUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\">\n<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"white\"></rect>\n<path d=\"{}\" style=\"{};stroke:#000;fill:none;opacity:1;\"/></mask></defs>",
+        mask_id,
+        px,
+        py - off,
+        w + off,
+        h + off,
+        px,
+        py - off,
+        w + off,
+        h + off,
+        mask_border_d,
+        border_style,
+    )
+    .unwrap();
+
+    let main_points = [
+        (scale(w, 0.25), 0),
+        (scale(w, 0.75), 0),
+        (w, scale(h, half_y_factor)),
+        (scale(w, 0.75), h),
+        (scale(w, 0.25), h),
+        (0, scale(h, half_y_factor)),
+    ]
+    .into_iter()
+    .map(|(x, y)| format!("{},{}", x + px, y + py))
+    .collect::<Vec<_>>()
+    .join(" ");
+    let (main_fill, _) = shape_theme(target_shape);
+    let mut main_el = d2_themes::ThemableElement::new("polygon", inline_theme);
+    main_el.x = Some(px as f64);
+    main_el.y = Some(py as f64);
+    main_el.points = main_points;
+    main_el.set_mask_url(&mask_id);
+    main_el.fill = main_fill;
+    main_el.fill_pattern = target_shape.fill_pattern.clone();
+    main_el.stroke = "none".to_owned();
+    main_el.style = border_style.clone();
+    result.push_str(&main_el.render());
+
+    let side_points = [
+        (scale(w, 0.25) + off, -y_off),
+        (scale(w, 0.75) + off, -y_off),
+        (w + off, scale(h, half_y_factor) - y_off),
+        (scale(w, 0.75) + off, h - y_off),
+        (scale(w, 0.75), h),
+        (w, scale(h, half_y_factor)),
+        (scale(w, 0.75), 0),
+        (scale(w, 0.25), 0),
+    ]
+    .into_iter()
+    .map(|(x, y)| format!("{},{}", x + px, y + py))
+    .collect::<Vec<_>>()
+    .join(" ");
+    let darker_color =
+        d2_color::darken(&target_shape.fill).unwrap_or_else(|_| target_shape.fill.clone());
+    let mut side_el = d2_themes::ThemableElement::new("polygon", inline_theme);
+    side_el.fill = darker_color;
+    side_el.points = side_points;
+    side_el.set_mask_url(&mask_id);
+    side_el.style = border_style.clone();
+    result.push_str(&side_el.render());
+
+    let mut border_el = d2_themes::ThemableElement::new("path", inline_theme);
+    border_el.d = border_d;
+    border_el.fill = "none".to_owned();
+    border_el.stroke = border_stroke;
+    border_el.style = border_style;
+    result.push_str(&border_el.render());
+
     result
 }
 
@@ -2303,10 +2622,7 @@ fn table_header(
         text_el.y = Some(tl_y + text_height * 3.0 / 4.0);
         text_el.fill = shape.get_font_color().to_owned();
         text_el.class_name = "text".to_owned();
-        text_el.style = format!(
-            "text-anchor:start;font-size:{}px",
-            (font_size as i32) + 4
-        );
+        text_el.style = format!("text-anchor:start;font-size:{}px", (font_size as i32) + 4);
         text_el.content = d2_svg_path::escape_text(&shape.text.label);
         out.push_str(&text_el.render());
     }
@@ -2500,6 +2816,34 @@ impl<W: std::io::Write> std::io::Write for Base64Encoder<W> {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+fn diagram_has_markdown(diagram: &d2_target::Diagram) -> bool {
+    diagram.shapes.iter().any(|s| s.text.language == "markdown")
+        || diagram
+            .connections
+            .iter()
+            .any(|c| c.text.language == "markdown")
+}
+
+fn nested_diagram_has_markdown(diagram: &d2_target::Diagram) -> bool {
+    if diagram_has_markdown(diagram) {
+        return true;
+    }
+    diagram.layers.iter().any(nested_diagram_has_markdown)
+        || diagram.scenarios.iter().any(nested_diagram_has_markdown)
+        || diagram.steps.iter().any(nested_diagram_has_markdown)
+}
+
+fn scoped_markdown_css(diagram_hash: &str) -> String {
+    let mut css = MARKDOWN_CSS.to_owned();
+    css = css.replace(".md", &format!(".{} .md", diagram_hash));
+    css = css.replace("font-italic", &format!("{}-font-italic", diagram_hash));
+    css = css.replace("font-bold", &format!("{}-font-bold", diagram_hash));
+    css = css.replace("font-mono", &format!("{}-font-mono", diagram_hash));
+    css = css.replace("font-regular", &format!("{}-font-regular", diagram_hash));
+    css = css.replace("font-semibold", &format!("{}-font-semibold", diagram_hash));
+    css
 }
 
 // ---------------------------------------------------------------------------
@@ -2978,6 +3322,9 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
 
     let mut label_masks: Vec<String> = Vec::new();
     let mut markers: HashMap<String, ()> = HashMap::new();
+    // Appendix items (tooltip/link icons) are drawn after all shapes so they
+    // stack on top, matching Go d2svg.go's `appendixItemBuf` handling.
+    let mut appendix_buf = String::new();
 
     // Determine inline theme (only when no dark theme)
     let inline_theme: Option<&d2_themes::Theme> = if dark_theme_id.is_none() {
@@ -3003,13 +3350,15 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
                 }
             }
             DiagramObject::Shape(s) => {
-                let lm = draw_shape(&mut buf, &diagram_hash, s, inline_theme)?;
+                let lm = draw_shape(&mut buf, &mut appendix_buf, &diagram_hash, s, inline_theme)?;
                 if !lm.is_empty() {
                     label_masks.push(lm);
                 }
             }
         }
     }
+    // Flush appendix items after all shapes so tooltip/link icons stack on top.
+    buf.push_str(&appendix_buf);
 
     // Compute dimensions
     let (mut left, mut top, mut w, mut h) = dimensions(diagram, pad);
@@ -3068,6 +3417,15 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
             BASE_STYLESHEET, theme_stylesheet
         )
         .unwrap();
+
+        if diagram_has_markdown(diagram) {
+            write!(
+                upper_buf,
+                r#"<style type="text/css">{}</style>"#,
+                scoped_markdown_css(&diagram_hash)
+            )
+            .unwrap();
+        }
     }
 
     // Background element
@@ -3408,11 +3766,14 @@ pub fn wrap(
     )
     .unwrap();
 
-    // TODO: Markdown CSS block. Go's d2animate writes a `<style type="text/css">`
-    // containing the GitHub markdown stylesheet whenever any nested board has a
-    // text shape with a non-empty label. We don't emit it yet — none of the
-    // currently passing fixtures need it, and the embedded asset is large
-    // enough to belong in its own pass.
+    if nested_diagram_has_markdown(root_diagram) {
+        write!(
+            buf,
+            r#"<style type="text/css">{}</style>"#,
+            scoped_markdown_css(&diagram_hash)
+        )
+        .unwrap();
+    }
 
     // Keyframes <style>: one @keyframes per board.
     // For 0 boards (e.g. empty diagram), the block is an empty CDATA, matching Go.

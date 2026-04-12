@@ -1082,6 +1082,25 @@ impl Diagram {
             x2 = x2.max(s.pos.x + s.width + half_stroke);
             y2 = y2.max(s.pos.y + s.height + half_stroke);
 
+            // c4-person has a head circle above the shape top, extend bbox upward.
+            if s.type_ == SHAPE_C4_PERSON {
+                let head_radius = (s.width as f64 * 0.22) as i32;
+                let head_center_y = (s.height as f64 * 0.18) as i32;
+                let head_top = s.pos.y + head_center_y - head_radius;
+                y1 = y1.min(head_top - s.stroke_width);
+            }
+
+            // Reserve space for the top-right appendix icon when a shape has
+            // tooltip or link. Go d2's d2target.Diagram.BoundingBox expands by
+            // -16/+16 when there is no custom tooltipPosition; with a custom
+            // tooltipPosition it uses calculateTooltipBounds (not yet ported).
+            if !s.tooltip.is_empty() || !s.link.is_empty() {
+                if s.tooltip_position.is_empty() {
+                    y1 = y1.min(s.pos.y - s.stroke_width - 16);
+                    x2 = x2.max(s.pos.x + s.stroke_width + s.width + 16);
+                }
+            }
+
             if s.shadow {
                 y2 = y2.max(s.pos.y + s.height + half_stroke + SHADOW_SIZE_Y);
                 x2 = x2.max(s.pos.x + s.width + half_stroke + SHADOW_SIZE_X);
