@@ -64,9 +64,22 @@ fn e2e_full_dashboard() {
     let mut no_fixture = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
+    // Match Go's `#01`, `#02` fixture suffixes when two cases share a
+    // name within a category.
+    let mut seen: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+
     for (i, case) in cases.iter().enumerate() {
-        let name = case["name"].as_str().unwrap();
+        let raw_name = case["name"].as_str().unwrap();
         let category = case["category"].as_str().unwrap();
+        let key = (category.to_string(), raw_name.to_string());
+        let idx = *seen.entry(key).and_modify(|c| *c += 1).or_insert(0);
+        let name: std::borrow::Cow<'_, str> = if idx == 0 {
+            std::borrow::Cow::Borrowed(raw_name)
+        } else {
+            std::borrow::Cow::Owned(format!("{}#{:02}", raw_name, idx))
+        };
+        let name = name.as_ref();
 
         eprint!("[{}/{}] {} ... ", i + 1, cases.len(), name);
 

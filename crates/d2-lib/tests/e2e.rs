@@ -135,6 +135,14 @@ fn e2e_dashboard() {
     let mut compile_fail = 0;
     let mut failures: Vec<String> = Vec::new();
 
+    // Mirror Go's `go test` fixture naming: when two test cases share a
+    // name within a category, the second one lands in `<name>#01`, the
+    // third in `<name>#02`, and so on. Several of the extracted stable
+    // cases duplicate names (e.g. `near_keys_for_container`), so track
+    // occurrence counts and rewrite the fixture name accordingly.
+    let mut seen: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+
     let mut overflow_skip = 0;
     for case in &cases {
         let name = case["name"].as_str().unwrap();
@@ -146,6 +154,15 @@ fn e2e_dashboard() {
             overflow_skip += 1;
             continue;
         }
+
+        let key = (category.to_string(), name.to_string());
+        let idx = *seen.entry(key).and_modify(|c| *c += 1).or_insert(0);
+        let fixture_name: String = if idx == 0 {
+            name.to_string()
+        } else {
+            format!("{}#{:02}", name, idx)
+        };
+        let name = fixture_name.as_str();
 
         let (ok, msg) = run_e2e(category, name, script);
         if msg.starts_with("SKIP") {
