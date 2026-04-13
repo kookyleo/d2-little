@@ -135,6 +135,12 @@ fn probe_case() {
                 c.text.label_height,
                 c.route,
             );
+            if let Some(ref l) = c.src_label {
+                eprintln!("  src_label: {:?} color={:?}", l.label, l.color);
+            }
+            if let Some(ref l) = c.dst_label {
+                eprintln!("  dst_label: {:?} color={:?}", l.label, l.color);
+            }
         }
     }
 

@@ -371,9 +371,7 @@ impl Compiler {
 
         // Process shape first (affects how children are handled)
         if let Some(shape_field) = m.get_field("shape") {
-            if shape_field.composite.is_some() {
-                // "reserved field shape does not accept composite"
-            } else {
+            if shape_field.primary.is_some() {
                 self.compile_field_scoped(g, obj, scope, shape_field);
             }
         }
@@ -1077,6 +1075,19 @@ impl Compiler {
                                     }
                                 }
                             }
+                            // Parse style.font-color for arrowhead labels
+                            if sf.name == "font-color" && sf.name_is_unquoted {
+                                if let Some(val) = sf.primary_string() {
+                                    let sv = graph::ScalarValue { value: val };
+                                    if is_src {
+                                        if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
+                                            ah.style.font_color = Some(sv);
+                                        }
+                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                                        ah.style.font_color = Some(sv);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1339,8 +1350,45 @@ mod tests {
     #[test]
     fn test_constraint() {
         let g = compile_ok("x: {\n  shape: sql_table\n  id: int { constraint: primary_key }\n}");
-        // root + x + id
-        assert!(g.objects.len() >= 3);
+        let table = g.objects.iter().find(|o| o.abs_id == "x").expect("x");
+        assert_eq!(table.shape.value, d2_target::SHAPE_SQL_TABLE);
+        assert!(table.sql_table.is_some());
+        assert!(table.children_array.is_empty());
+    }
+
+    #[test]
+    fn test_sql_table_reserved_columns_keep_shape_and_clear_children() {
+        let g = compile_ok(
+            "my_table: {\n  shape: sql_table\n  icon: https://example.com/icon.svg\n  width: 200\n  height: 200\n  \"shape\": string\n  \"icon\": string\n  \"width\": int\n  \"height\": int\n}\n",
+        );
+
+        let table = g
+            .objects
+            .iter()
+            .find(|o| o.abs_id == "my_table")
+            .expect("my_table");
+        assert_eq!(table.shape.value, d2_target::SHAPE_SQL_TABLE);
+        assert!(table.sql_table.is_some());
+        assert!(table.children_array.is_empty());
+        assert_eq!(table.width_attr.as_ref().unwrap().value, "200");
+        assert_eq!(table.height_attr.as_ref().unwrap().value, "200");
+        let columns = &table.sql_table.as_ref().unwrap().columns;
+        let names: Vec<&str> = columns.iter().map(|c| c.name.label.as_str()).collect();
+        assert_eq!(names, vec!["shape", "icon", "width", "height"]);
+    }
+
+    #[test]
+    fn test_sql_table_column_edge_preserves_shape() {
+        let g = compile_ok(
+            "my_table: {\n  shape: sql_table\n  icon: https://example.com/icon.svg\n  width: 200\n  height: 200\n  \"shape\": string\n  \"icon\": string\n  \"width\": int\n  \"height\": int\n}\n\nx -> my_table.\"shape\"\n",
+        );
+        let table = g
+            .objects
+            .iter()
+            .find(|o| o.abs_id == "my_table")
+            .expect("my_table");
+        assert_eq!(table.shape.value, d2_target::SHAPE_SQL_TABLE);
+        assert!(table.sql_table.is_some());
     }
 
     // --- Test 24: vars and substitution ---
