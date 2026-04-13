@@ -1045,6 +1045,43 @@ fn label_top_left(
 }
 
 /// Port of Go `d2target.GetIconSize`. For outside / non-center icon
+/// Compute arrowhead label top-left position for bounding box.
+/// Mirrors Go `Connection.GetSrcArrowheadLabelPosition` / `GetDstArrowheadLabelPosition`.
+fn arrowhead_label_tl(c: &Connection, is_dst: bool) -> Option<(f64, f64)> {
+    if c.route.len() < 2 {
+        return None;
+    }
+    let (p0, p1, label) = if is_dst {
+        let l = c.dst_label.as_ref()?;
+        let last = c.route.len() - 1;
+        (&c.route[last], &c.route[last - 1], l)
+    } else {
+        let l = c.src_label.as_ref()?;
+        (&c.route[0], &c.route[1], l)
+    };
+
+    let lw = label.label_width as f64;
+    let lh = label.label_height as f64;
+    let gap = 3.0; // arrowhead label gap
+
+    // Direction from endpoint into the edge
+    let dx = p1.x - p0.x;
+    let dy = p1.y - p0.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len == 0.0 {
+        return None;
+    }
+
+    // Place label beside the arrowhead tip
+    let nx = dx / len;
+    let ny = dy / len;
+
+    let x = p0.x + nx * gap - if nx.abs() > ny.abs() { 0.0 } else { lw / 2.0 };
+    let y = p0.y + ny * gap - if ny.abs() > nx.abs() { 0.0 } else { lh / 2.0 };
+
+    Some((x, y))
+}
+
 /// positions the result is `min(minDim, max(DEFAULT_ICON_SIZE, ceil(minDim/2)))`,
 /// clamped to `MAX_ICON_SIZE`. `InsideMiddleCenter` returns `halfMinDimension`
 /// and clamps to the inner box minus label padding; that path isn't hit
@@ -1217,10 +1254,29 @@ impl Diagram {
                 y2 = y2.max(point.y.ceil() as i64 + half_stroke);
             }
 
-            // Include the connection's label in the bounding box. Go does
-            // this in `d2target.Diagram.BoundingBox`, and without it an edge
-            // label like `z -> z: hello` can extend past the auto-fit
-            // viewBox (see e.g. the `self-referencing` e2e case).
+            // Include arrowhead labels (src/dst) in the bounding box.
+            if let Some(ref l) = c.src_label {
+                if !l.label.is_empty() && !c.route.is_empty() {
+                    if let Some(tl) = arrowhead_label_tl(c, false) {
+                        x1 = x1.min(tl.0 as i64);
+                        y1 = y1.min(tl.1 as i64);
+                        x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
+                        y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
+                    }
+                }
+            }
+            if let Some(ref l) = c.dst_label {
+                if !l.label.is_empty() && !c.route.is_empty() {
+                    if let Some(tl) = arrowhead_label_tl(c, true) {
+                        x1 = x1.min(tl.0 as i64);
+                        y1 = y1.min(tl.1 as i64);
+                        x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
+                        y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
+                    }
+                }
+            }
+
+            // Include the connection's label in the bounding box.
             if !c.text.label.is_empty() && !c.label_position.is_empty() && !c.route.is_empty() {
                 let pos = d2_label::Position::from_string(&c.label_position);
                 let route = d2_geo::Route(c.route.clone());
