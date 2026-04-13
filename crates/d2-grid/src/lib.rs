@@ -1199,3 +1199,141 @@ mod tests {
         assert_eq!(gd.height, 40.0 + 40.0 + 50.0);
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    #[test]
+    fn test_3_rows_3_items() {
+        // Mirrors grid_rows_gap_bug: 3 rows, 3 items, h-gap=100, v-gap=0
+        let mut g = Graph::new();
+        let root = g.root;
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "3".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
+            value: "100".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+            ..Default::default()
+        });
+
+        let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)]; // typical measured sizes
+        for (i, &(w, h)) in sizes.iter().enumerate() {
+            let id = g.objects.len();
+            g.objects.push(d2_graph::Object {
+                id: format!("item{}", i),
+                abs_id: format!("item{}", i),
+                parent: Some(root),
+                width: w,
+                height: h,
+                ..Default::default()
+            });
+            g.objects[root].children_array.push(id);
+        }
+
+        let gd = new_grid_diagram(&mut g, root);
+        eprintln!("rows={}, cols={}, row_directed={}", gd.rows, gd.columns, gd.row_directed);
+        assert_eq!(gd.rows, 3);
+        assert_eq!(gd.columns, 0);
+        assert!(gd.row_directed);
+    }
+
+    #[test]
+    fn test_3_rows_layout_dimensions() {
+        let mut g = Graph::new();
+        let root = g.root;
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "3".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
+            value: "100".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+            ..Default::default()
+        });
+
+        let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)];
+        for (i, &(w, h)) in sizes.iter().enumerate() {
+            let id = g.objects.len();
+            g.objects.push(d2_graph::Object {
+                id: format!("item{}", i),
+                abs_id: format!("item{}", i),
+                parent: Some(root),
+                width: w,
+                height: h,
+                ..Default::default()
+            });
+            g.objects[root].children_array.push(id);
+        }
+
+        layout(&mut g).expect("layout");
+
+        eprintln!("root: {}x{}", g.objects[root].width, g.objects[root].height);
+        for i in 1..=3 {
+            eprintln!("  item{}: ({}, {}) {}x{}", i-1,
+                g.objects[i].top_left.x, g.objects[i].top_left.y,
+                g.objects[i].width, g.objects[i].height);
+        }
+        // 3 rows, each with 1 item, v-gap=0.
+        // Items should be stacked vertically, each at y=i*66.
+        assert_eq!(g.objects[1].top_left.y, 0.0, "item0 y");
+        assert_eq!(g.objects[2].top_left.y, 66.0, "item1 y");
+        assert_eq!(g.objects[3].top_left.y, 132.0, "item2 y");
+        // All items should be in the same column (same x)
+        assert_eq!(g.objects[1].top_left.x, g.objects[2].top_left.x, "items same x");
+        // Items should all be expanded to max width (66)
+        assert_eq!(g.objects[1].width, 66.0, "item0 width");
+        assert_eq!(g.objects[2].width, 66.0, "item1 width (was widest)");
+        assert_eq!(g.objects[3].width, 66.0, "item2 width");
+    }
+
+    #[test]
+    fn test_2x2_evenly_layout_full() {
+        let mut g = Graph::new();
+        let root = g.root;
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+            ..Default::default()
+        });
+        g.objects[root].grid_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+            ..Default::default()
+        });
+
+        let sizes = [(100.0, 100.0); 4];
+        for (i, &(w, h)) in sizes.iter().enumerate() {
+            let id = g.objects.len();
+            g.objects.push(d2_graph::Object {
+                id: format!("n{}", i),
+                abs_id: format!("n{}", i),
+                parent: Some(root),
+                width: w,
+                height: h,
+                ..Default::default()
+            });
+            g.objects[root].children_array.push(id);
+        }
+
+        layout(&mut g).expect("layout");
+
+        eprintln!("root: {}x{}", g.objects[root].width, g.objects[root].height);
+        // 2x2 grid of 100x100 items with gap 0 => content 200x200
+        // With padding the root should be bigger
+        assert!(g.objects[root].width >= 200.0,
+            "Root width should be >= 200: {}", g.objects[root].width);
+        assert!(g.objects[root].height >= 200.0,
+            "Root height should be >= 200: {}", g.objects[root].height);
+    }
+}
