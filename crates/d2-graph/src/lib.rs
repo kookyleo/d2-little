@@ -827,8 +827,30 @@ impl Object {
         }
 
         // Sequence diagram special fills (Go: GetFill lines 520-542)
+        // Note: Go computes IsSequenceDiagramNote dynamically — an object in
+        // a sequence diagram that has no edge references, no children, and no
+        // contained objects/edges is considered a "note" and gets fill N7.
         if self.is_sequence_diagram_note {
             return d2_color::N7;
+        }
+        // Dynamically check IsSequenceDiagramNote: a direct child of a
+        // sequence diagram that is NOT a group, has no source-code edges, and
+        // no children. Go checks IsSequenceDiagramGroup BEFORE note.
+        if let Some(sd_id) = self.outer_sequence_diagram(graph) {
+            if self.parent == Some(sd_id)
+                && self.children_array.is_empty()
+                && !self.is_sequence_diagram_group
+            {
+                let my_id = self.abs_id();
+                let has_source_edge = graph.edges.iter().any(|e| {
+                    e.scope_obj.is_some()
+                        && (graph.objects[e.src].abs_id() == my_id
+                            || graph.objects[e.dst].abs_id() == my_id)
+                });
+                if !has_source_edge {
+                    return d2_color::N7;
+                }
+            }
         }
         if self.is_sequence_diagram_group {
             return d2_color::N5;
