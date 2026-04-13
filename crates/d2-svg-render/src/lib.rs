@@ -321,7 +321,7 @@ fn arrowhead_marker(
     is_target: bool,
     id: &str,
     connection: &d2_target::Connection,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let arrowhead = if is_target {
         &connection.dst_arrow
@@ -964,7 +964,7 @@ fn draw_connection(
     connection: &d2_target::Connection,
     markers: &mut HashMap<String, ()>,
     id_to_shape: &HashMap<String, &d2_target::Shape>,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> Result<String, String> {
     let mut label_mask = String::new();
 
@@ -1214,9 +1214,8 @@ fn draw_connection(
                             //   transform="translate(%f %f)" color="resolved" class=" color-CODE"
                             let (color_attr, class_attr) =
                                 if d2_color::is_theme_color(text_color) {
-                                    let resolved = inline_theme
-                                        .map(|t| d2_themes::resolve_theme_color(t, text_color))
-                                        .unwrap_or_default();
+                                    let resolved =
+                                        inline_theme.map(|t| t.resolve_color(text_color)).unwrap_or_default();
                                     let ca = if resolved.is_empty() {
                                         String::new()
                                     } else {
@@ -1375,7 +1374,7 @@ fn render_arrowhead_label(
     connection: &d2_target::Connection,
     text: &d2_target::Text,
     is_dst: bool,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let width = text.label_width as f64;
     let height = text.label_height as f64;
@@ -1583,7 +1582,7 @@ fn draw_shape(
     appendix_buf: &mut String,
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> Result<String, String> {
     let mut label_mask = String::new();
     let mut closing_tag = "</g>".to_owned();
@@ -2340,7 +2339,7 @@ fn render_oval(
     fill_pattern: &str,
     stroke: &str,
     style: &str,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut el = d2_themes::ThemableElement::new("ellipse", inline_theme);
     let rx = width / 2.0;
@@ -2365,7 +2364,7 @@ fn render_double_oval(
     fill_pattern: &str,
     stroke: &str,
     style: &str,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let inner_tl = d2_geo::Point::new(
         tl.x + d2_target::INNER_BORDER_OFFSET as f64,
@@ -2403,7 +2402,7 @@ fn render_double_oval(
 fn render_3d_rect(
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut result = String::new();
 
@@ -2558,7 +2557,7 @@ fn render_3d_rect(
 fn render_3d_hexagon(
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     // Mirror Go `d2renderers/d2svg/d2svg.go render3DHexagon`.
     let px = target_shape.pos.x;
@@ -2691,7 +2690,7 @@ fn draw_class(
     buf: &mut String,
     diagram_hash: &str,
     shape: &d2_target::Shape,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) {
     // Mirror Go `d2renderers/d2svg/class.go drawClass` byte-for-byte.
     let (fill, stroke) = shape_theme(shape);
@@ -2790,6 +2789,30 @@ fn draw_class(
         ));
         row_y += row_height;
     }
+
+    // Shape icon (matches Go class.go drawClass icon rendering)
+    if let Some(ref icon) = shape.icon {
+        if shape.type_ != d2_target::SHAPE_IMAGE {
+            let bbox = d2_geo::Box2D::new(
+                d2_geo::Point::new(box_x, box_y),
+                box_w,
+                box_h,
+            );
+            let icon_pos = d2_label::Position::from_string(&shape.icon_position);
+            let icon_size = get_icon_size(&bbox, &shape.icon_position);
+            let tl = icon_pos.get_point_on_box(
+                &bbox, d2_label::PADDING, icon_size as f64, icon_size as f64,
+            );
+            write!(
+                buf,
+                r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
+                d2_svg_path::escape_text(icon),
+                tl.x, tl.y,
+                icon_size, icon_size,
+            )
+            .unwrap();
+        }
+    }
 }
 
 /// Render the dark header rect + title text for a class shape.
@@ -2804,7 +2827,7 @@ fn class_header(
     text_width: f64,
     text_height: f64,
     font_size: f64,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut out = String::new();
     let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
@@ -2852,7 +2875,7 @@ fn class_row(
     type_text: &str,
     font_size: f64,
     underline: bool,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut out = String::new();
 
@@ -2998,7 +3021,7 @@ fn draw_table(
     buf: &mut String,
     diagram_hash: &str,
     shape: &d2_target::Shape,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) {
     // Mirror Go `d2renderers/d2svg/table.go drawTable`.
     let (fill, stroke) = shape_theme(shape);
@@ -3084,6 +3107,30 @@ fn draw_table(
         line_el.style = "stroke-width:2".to_owned();
         buf.push_str(&line_el.render());
     }
+
+    // Shape icon (matches Go table.go/class.go icon rendering)
+    if let Some(ref icon) = shape.icon {
+        if shape.type_ != d2_target::SHAPE_IMAGE {
+            let bbox = d2_geo::Box2D::new(
+                d2_geo::Point::new(box_x, box_y),
+                box_w,
+                box_h,
+            );
+            let icon_pos = d2_label::Position::from_string(&shape.icon_position);
+            let icon_size = get_icon_size(&bbox, &shape.icon_position);
+            let tl = icon_pos.get_point_on_box(
+                &bbox, d2_label::PADDING, icon_size as f64, icon_size as f64,
+            );
+            write!(
+                buf,
+                r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
+                d2_svg_path::escape_text(icon),
+                tl.x, tl.y,
+                icon_size, icon_size,
+            )
+            .unwrap();
+        }
+    }
 }
 
 /// Render the table header rect + title text (port of Go `tableHeader`).
@@ -3098,7 +3145,7 @@ fn table_header(
     text_width: f64,
     text_height: f64,
     font_size: f64,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut out = String::new();
 
@@ -3147,7 +3194,7 @@ fn table_row(
     constraint: &str,
     font_size: f64,
     longest_name_w: f64,
-    inline_theme: Option<&d2_themes::Theme>,
+    inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut out = String::new();
     // InsideMiddleLeft for name, at `NamePadding` from the left.
@@ -3830,11 +3877,13 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     let mut appendix_buf = String::new();
 
     // Determine inline theme (only when no dark theme)
-    let inline_theme: Option<&d2_themes::Theme> = if dark_theme_id.is_none() {
+    let inline_theme = if dark_theme_id.is_none() {
         d2_themes::catalog::find(theme_id)
+            .map(|theme| d2_themes::ResolvedTheme::from_theme(theme, opts.theme_overrides.as_ref()))
     } else {
         None
     };
+    let inline_theme = inline_theme.as_ref();
 
     // Draw objects
     for obj in &all_objects {
