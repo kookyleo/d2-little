@@ -3,9 +3,10 @@
 //! Handles objects with `grid-rows` / `grid-columns` properties, arranging
 //! children in a 2D grid.
 
-use d2_geo::{Point, Spacing};
+use d2_geo::{self, Point, Spacing};
 use d2_graph::{Graph, ObjId};
 use d2_label::Position;
+use d2_shape::ShapeOps;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -249,10 +250,31 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
 
         g.objects[root].size_to_content(total_w, total_h, 0.0, 0.0);
 
-        // Compute grid placement inside the shape.
-        // Simplified: for rectangles, inner placement is (0, 0) with full size.
-        let dx = -(h_pad as f64) + padding.left;
-        let dy = -(v_pad as f64) + padding.top;
+        // Compute where the grid should be placed inside the shape.
+        // Mirrors Go: s.GetInsidePlacement + innerBox centering.
+        let dsl_shape = g.objects[root].shape.value.to_lowercase();
+        let shape_type = d2_target::dsl_shape_to_shape_type(&dsl_shape);
+        let bbox = d2_geo::Box2D::new(
+            g.objects[root].top_left,
+            g.objects[root].width,
+            g.objects[root].height,
+        );
+        let s = d2_shape::Shape::new(shape_type, bbox);
+        let inner_tl = s.get_inside_placement(total_w, total_h, 0.0, 0.0);
+        let inner_box = s.get_inner_box();
+        let resize_dx = if inner_box.width > total_w {
+            (inner_box.width - total_w) / 2.0
+        } else {
+            0.0
+        };
+        let resize_dy = if inner_box.height > total_h {
+            (inner_box.height - total_h) / 2.0
+        } else {
+            0.0
+        };
+
+        let dx = -(h_pad as f64) + inner_tl.x + padding.left + resize_dx;
+        let dy = -(v_pad as f64) + inner_tl.y + padding.top + resize_dy;
         if dx != 0.0 || dy != 0.0 {
             gd.shift(g, dx, dy);
         }
