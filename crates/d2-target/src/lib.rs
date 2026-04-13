@@ -1696,11 +1696,18 @@ pub mod go_json {
             rest = "";
         }
 
-        // Path
+        // Path — Go `url.Parse` sets RawPath only when
+        // `url.EscapedPath()` would produce a *different* encoding than
+        // the original raw form.  Standard percent-encoding (%20 for
+        // space, etc.) is reproduced exactly by EscapedPath(), so Go
+        // leaves RawPath empty.  We implement the same rule: set
+        // raw_path only when decoding + re-encoding changes the form.
         if !rest.is_empty() {
             let decoded = url_unescape(rest);
             out.path = decoded.clone();
-            if decoded != rest {
+            // Re-encode using Go's path-escaping rules and compare
+            let re_encoded = url_path_escape(&decoded);
+            if re_encoded != rest {
                 out.raw_path = rest.to_owned();
             }
         }
@@ -1727,6 +1734,27 @@ pub mod go_json {
             i += 1;
         }
         String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
+    }
+
+    /// Re-encode a decoded URL path using Go's `url.EscapedPath` rules.
+    /// Go percent-encodes any byte that `shouldEscape(c, encodePath)`
+    /// returns true for. In practice this means: encode everything that
+    /// is not an unreserved character (alpha, digit, `-._~`) or a path
+    /// separator (`/`), plus the sub-delims that Go keeps raw (`!$&'()*+,;=:@`).
+    fn url_path_escape(decoded: &str) -> String {
+        let mut out = String::with_capacity(decoded.len() * 3);
+        for &b in decoded.as_bytes() {
+            if b.is_ascii_alphanumeric()
+                || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/'
+                    | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*'
+                    | b'+' | b',' | b';' | b'=' | b':' | b'@')
+            {
+                out.push(b as char);
+            } else {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+        out
     }
 
     fn write_field_name(out: &mut Vec<u8>, first: &mut bool, name: &str) {
@@ -2129,6 +2157,53 @@ pub mod go_json {
         out.push(b'}');
     }
 
+    fn marshal_theme_overrides(out: &mut Vec<u8>, t: &d2_themes::ThemeOverrides) {
+        out.push(b'{');
+        let mut first = true;
+
+        macro_rules! write_override {
+            ($json:literal, $field:ident) => {
+                if let Some(ref v) = t.$field {
+                    write_field_name(out, &mut first, $json);
+                    write_string(out, v);
+                }
+            };
+        }
+
+        write_override!("n1", n1);
+        write_override!("n2", n2);
+        write_override!("n3", n3);
+        write_override!("n4", n4);
+        write_override!("n5", n5);
+        write_override!("n6", n6);
+        write_override!("n7", n7);
+        write_override!("b1", b1);
+        write_override!("b2", b2);
+        write_override!("b3", b3);
+        write_override!("b4", b4);
+        write_override!("b5", b5);
+        write_override!("b6", b6);
+        write_override!("aa2", aa2);
+        write_override!("aa4", aa4);
+        write_override!("aa5", aa5);
+        write_override!("ab4", ab4);
+        write_override!("ab5", ab5);
+
+        out.push(b'}');
+    }
+
+    fn marshal_string_map(out: &mut Vec<u8>, m: &std::collections::HashMap<String, String>) {
+        out.push(b'{');
+        let mut first = true;
+        let mut entries: Vec<_> = m.iter().collect();
+        entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        for (k, v) in entries {
+            write_field_name(out, &mut first, k);
+            write_string(out, v);
+        }
+        out.push(b'}');
+    }
+
     /// Marshal the diagram Config (matches Go `d2target.Config` json tags).
     pub fn marshal_config(out: &mut Vec<u8>, c: &Config) {
         out.push(b'{');
@@ -2164,8 +2239,18 @@ pub mod go_json {
             Some(ref v) => write_string(out, v),
             None => write_null(out),
         }
-        // themeOverrides, darkThemeOverrides: omitempty when nil — omitted here.
-        // data: omitempty — omitted.
+        if let Some(ref v) = c.theme_overrides {
+            write_field_name(out, &mut first, "themeOverrides");
+            marshal_theme_overrides(out, v);
+        }
+        if let Some(ref v) = c.dark_theme_overrides {
+            write_field_name(out, &mut first, "darkThemeOverrides");
+            marshal_theme_overrides(out, v);
+        }
+        if !c.data.is_empty() {
+            write_field_name(out, &mut first, "data");
+            marshal_string_map(out, &c.data);
+        }
         out.push(b'}');
     }
 

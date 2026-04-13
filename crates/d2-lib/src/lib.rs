@@ -170,15 +170,17 @@ pub fn compile(
     // Match Go d2lib.Compile: copy selected render options back into
     // diagram.Config so the diagram hash (used for CSS scoping) accounts for
     // appearance-affecting fields like themeID and sketch.
+    // Go d2lib.Compile feeds the original parsed config back into
+    // diagram.Config after overwriting ThemeID/DarkThemeID/Sketch with
+    // the resolved render options. The remaining fields (pad, center,
+    // layoutEngine) keep their original parsed values.
     diagram.config = Some(d2_target::Config {
         sketch: Some(sketch),
         theme_id: Some(theme_id),
         dark_theme_id,
-        // Pad / center / layoutEngine are intentionally left unset, matching Go
-        // applyConfigs which only copies ThemeID/DarkThemeID/Sketch back.
-        pad: None,
-        center: None,
-        layout_engine: None,
+        pad: config.as_ref().and_then(|c| c.pad),
+        center: config.as_ref().and_then(|c| c.center),
+        layout_engine: config.as_ref().and_then(|c| c.layout_engine.clone()),
         theme_overrides,
         dark_theme_overrides,
         data: config_data,
