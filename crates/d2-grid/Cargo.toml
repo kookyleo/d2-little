@@ -1,0 +1,11 @@
+[package]
+name = "d2-grid"
+version = "0.7.1"
+edition = "2021"
+
+[dependencies]
+d2-graph = { path = "../d2-graph" }
+d2-geo = { path = "../d2-geo" }
+d2-label = { path = "../d2-label" }
+d2-target = { path = "../d2-target" }
+log = "0.4"
