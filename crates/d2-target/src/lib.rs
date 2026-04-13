@@ -1070,24 +1070,33 @@ impl Diagram {
             return (Point::new(0, 0), Point::new(0, 0));
         }
 
-        let mut x1 = i32::MAX;
-        let mut y1 = i32::MAX;
-        let mut x2 = i32::MIN;
-        let mut y2 = i32::MIN;
+        fn clamp_i64_to_i32(v: i64) -> i32 {
+            v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+        }
+
+        let mut x1 = i64::from(i32::MAX);
+        let mut y1 = i64::from(i32::MAX);
+        let mut x2 = i64::from(i32::MIN);
+        let mut y2 = i64::from(i32::MIN);
 
         for s in &self.shapes {
-            let half_stroke = (s.stroke_width as f64 / 2.0).ceil() as i32;
-            x1 = x1.min(s.pos.x - half_stroke);
-            y1 = y1.min(s.pos.y - half_stroke);
-            x2 = x2.max(s.pos.x + s.width + half_stroke);
-            y2 = y2.max(s.pos.y + s.height + half_stroke);
+            let half_stroke = (s.stroke_width as f64 / 2.0).ceil() as i64;
+            let pos_x = i64::from(s.pos.x);
+            let pos_y = i64::from(s.pos.y);
+            let width = i64::from(s.width);
+            let height = i64::from(s.height);
+            let stroke_width = i64::from(s.stroke_width);
+            x1 = x1.min(pos_x - half_stroke);
+            y1 = y1.min(pos_y - half_stroke);
+            x2 = x2.max(pos_x + width + half_stroke);
+            y2 = y2.max(pos_y + height + half_stroke);
 
             // c4-person has a head circle above the shape top, extend bbox upward.
             if s.type_ == SHAPE_C4_PERSON {
-                let head_radius = (s.width as f64 * 0.22) as i32;
-                let head_center_y = (s.height as f64 * 0.18) as i32;
-                let head_top = s.pos.y + head_center_y - head_radius;
-                y1 = y1.min(head_top - s.stroke_width);
+                let head_radius = (s.width as f64 * 0.22) as i64;
+                let head_center_y = (s.height as f64 * 0.18) as i64;
+                let head_top = pos_y + head_center_y - head_radius;
+                y1 = y1.min(head_top - stroke_width);
             }
 
             // Reserve space for the top-right appendix icon when a shape has
@@ -1096,14 +1105,14 @@ impl Diagram {
             // tooltipPosition it uses calculateTooltipBounds (not yet ported).
             if !s.tooltip.is_empty() || !s.link.is_empty() {
                 if s.tooltip_position.is_empty() {
-                    y1 = y1.min(s.pos.y - s.stroke_width - 16);
-                    x2 = x2.max(s.pos.x + s.stroke_width + s.width + 16);
+                    y1 = y1.min(pos_y - stroke_width - 16);
+                    x2 = x2.max(pos_x + stroke_width + width + 16);
                 }
             }
 
             if s.shadow {
-                y2 = y2.max(s.pos.y + s.height + half_stroke + SHADOW_SIZE_Y);
-                x2 = x2.max(s.pos.x + s.width + half_stroke + SHADOW_SIZE_X);
+                y2 = y2.max(pos_y + height + half_stroke + i64::from(SHADOW_SIZE_Y));
+                x2 = x2.max(pos_x + width + half_stroke + i64::from(SHADOW_SIZE_X));
             }
 
             if s.three_dee {
@@ -1111,13 +1120,13 @@ impl Diagram {
                     THREE_DEE_OFFSET / 2
                 } else {
                     THREE_DEE_OFFSET
-                };
-                y1 = y1.min(s.pos.y - offset_y - s.stroke_width);
-                x2 = x2.max(s.pos.x + THREE_DEE_OFFSET + s.width + s.stroke_width);
+                } as i64;
+                y1 = y1.min(pos_y - offset_y - stroke_width);
+                x2 = x2.max(pos_x + i64::from(THREE_DEE_OFFSET) + width + stroke_width);
             }
             if s.multiple {
-                y1 = y1.min(s.pos.y - MULTIPLE_OFFSET - s.stroke_width);
-                x2 = x2.max(s.pos.x + MULTIPLE_OFFSET + s.width + s.stroke_width);
+                y1 = y1.min(pos_y - i64::from(MULTIPLE_OFFSET) - stroke_width);
+                x2 = x2.max(pos_x + i64::from(MULTIPLE_OFFSET) + width + stroke_width);
             }
 
             // Include the shape's label box. For inside-label shapes the
@@ -1140,10 +1149,40 @@ impl Diagram {
                     lw,
                     lh,
                 );
-                x1 = x1.min(label_tl.0 as i32);
-                y1 = y1.min(label_tl.1 as i32);
-                x2 = x2.max(label_tl.0 as i32 + s.text.label_width);
-                y2 = y2.max(label_tl.1 as i32 + s.text.label_height);
+                let mut label_x = label_tl.0;
+                let mut label_y = label_tl.1;
+
+                // 3D shapes: outside labels shift with the 3D offset
+                if s.three_dee {
+                    let offset = if s.type_ == SHAPE_HEXAGON {
+                        THREE_DEE_OFFSET / 2
+                    } else {
+                        THREE_DEE_OFFSET
+                    } as f64;
+                    if s.label_position.starts_with("OUTSIDE_RIGHT") {
+                        label_x += offset;
+                    }
+                    if s.label_position.starts_with("OUTSIDE_TOP") {
+                        label_y -= offset;
+                    }
+                }
+                // Multiple shapes: outside labels also shift
+                if s.multiple {
+                    let offset = MULTIPLE_OFFSET as f64;
+                    if s.label_position.starts_with("OUTSIDE_RIGHT") {
+                        label_x += offset;
+                    }
+                    if s.label_position.starts_with("OUTSIDE_TOP") {
+                        label_y -= offset;
+                    }
+                }
+
+                let lx = label_x as i64;
+                let ly = label_y as i64;
+                x1 = x1.min(lx);
+                y1 = y1.min(ly);
+                x2 = x2.max(lx + i64::from(s.text.label_width));
+                y2 = y2.max(ly + i64::from(s.text.label_height));
             }
 
             if s.icon.is_some()
@@ -1155,27 +1194,27 @@ impl Diagram {
                 // style checks here and only extends the bbox along the axis
                 // the label/icon sits on. OUTSIDE_TOP_LEFT contributes solely
                 // to y1 (not x1), etc.
-                let icon_side = icon_size(s.width as f64, s.height as f64, false) as i32;
-                const LABEL_PADDING: i32 = 5;
+                let icon_side = i64::from(icon_size(s.width as f64, s.height as f64, false));
+                const LABEL_PADDING: i64 = 5;
                 if s.icon_position.starts_with("OUTSIDE_TOP") {
-                    y1 = y1.min(s.pos.y - LABEL_PADDING - icon_side);
+                    y1 = y1.min(pos_y - LABEL_PADDING - icon_side);
                 } else if s.icon_position.starts_with("OUTSIDE_BOTTOM") {
-                    y2 = y2.max(s.pos.y + s.height + LABEL_PADDING + icon_side);
+                    y2 = y2.max(pos_y + height + LABEL_PADDING + icon_side);
                 } else if s.icon_position.starts_with("OUTSIDE_LEFT") {
-                    x1 = x1.min(s.pos.x - LABEL_PADDING - icon_side);
+                    x1 = x1.min(pos_x - LABEL_PADDING - icon_side);
                 } else if s.icon_position.starts_with("OUTSIDE_RIGHT") {
-                    x2 = x2.max(s.pos.x + s.width + LABEL_PADDING + icon_side);
+                    x2 = x2.max(pos_x + width + LABEL_PADDING + icon_side);
                 }
             }
         }
 
         for c in &self.connections {
             for point in &c.route {
-                let half_stroke = (c.stroke_width as f64 / 2.0).ceil() as i32;
-                x1 = x1.min(point.x.floor() as i32 - half_stroke);
-                y1 = y1.min(point.y.floor() as i32 - half_stroke);
-                x2 = x2.max(point.x.ceil() as i32 + half_stroke);
-                y2 = y2.max(point.y.ceil() as i32 + half_stroke);
+                let half_stroke = (c.stroke_width as f64 / 2.0).ceil() as i64;
+                x1 = x1.min(point.x.floor() as i64 - half_stroke);
+                y1 = y1.min(point.y.floor() as i64 - half_stroke);
+                x2 = x2.max(point.x.ceil() as i64 + half_stroke);
+                y2 = y2.max(point.y.ceil() as i64 + half_stroke);
             }
 
             // Include the connection's label in the bounding box. Go does
@@ -1192,15 +1231,18 @@ impl Diagram {
                     c.text.label_width as f64,
                     c.text.label_height as f64,
                 ) {
-                    x1 = x1.min(label_tl.x as i32);
-                    y1 = y1.min(label_tl.y as i32);
-                    x2 = x2.max(label_tl.x as i32 + c.text.label_width);
-                    y2 = y2.max(label_tl.y as i32 + c.text.label_height);
+                    x1 = x1.min(label_tl.x as i64);
+                    y1 = y1.min(label_tl.y as i64);
+                    x2 = x2.max(label_tl.x as i64 + i64::from(c.text.label_width));
+                    y2 = y2.max(label_tl.y as i64 + i64::from(c.text.label_height));
                 }
             }
         }
 
-        (Point::new(x1, y1), Point::new(x2, y2))
+        (
+            Point::new(clamp_i64_to_i32(x1), clamp_i64_to_i32(y1)),
+            Point::new(clamp_i64_to_i32(x2), clamp_i64_to_i32(y2)),
+        )
     }
 
     /// Compute the bounding box including nested layers, scenarios, and steps.
