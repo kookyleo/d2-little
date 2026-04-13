@@ -302,11 +302,18 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         sub.objects[sub.root].style = g.objects[container_id].style.clone();
 
         // Add children to sub-graph.
+        // Clear children_array because ObjIds point into main graph, not sub-graph.
+        // Grid layout only needs each cell's outer dimensions.
         for &child_id in &children {
             let new_id = sub.objects.len();
             let mut child_copy = g.objects[child_id].clone();
             child_copy.parent = Some(sub.root);
-            // Clear children_array for simple grid cells (we don't handle nested containers yet)
+            let was_container = !child_copy.children_array.is_empty();
+            child_copy.children_array.clear();
+            // Preserve container knowledge for label positioning
+            if was_container && child_copy.label_position.is_none() {
+                child_copy.label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
+            }
             sub.objects.push(child_copy);
             sub.objects[sub.root].children_array.push(new_id);
             id_map.insert(child_id, new_id);
@@ -339,69 +346,37 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         g.objects[container_id].children_array.clear();
     }
 
-    // Collect grid children and mark them with sentinel shape for dagre exclusion
-    let mut grid_children_map: HashMap<ObjId, Vec<(ObjId, String)>> = HashMap::new();
+    // Collect all grid descendants so dagre can skip them.
+    let mut grid_all_descendants: HashSet<ObjId> = HashSet::new();
+    let mut grid_children_map: HashMap<ObjId, Vec<ObjId>> = HashMap::new();
     for &container_id in &grid_containers {
-        let children: Vec<ObjId> = (0..g.objects.len())
+        let direct_children: Vec<ObjId> = (0..g.objects.len())
             .filter(|&i| g.objects[i].parent == Some(container_id))
             .collect();
-        let mut saved = Vec::new();
-        for &child_id in &children {
-            // Save original shape and mark as removed
-            saved.push((child_id, g.objects[child_id].shape.value.clone()));
-            g.objects[child_id].shape.value = "__d2_grid_child_removed__".to_owned();
-            // Also mark descendants
-            let desc: Vec<ObjId> = g.objects[child_id].children_array.clone();
-            for d in desc {
-                fn mark_descendants(g: &mut Graph, id: ObjId) {
-                    g.objects[id].shape.value = "__d2_grid_child_removed__".to_owned();
-                    let kids: Vec<ObjId> = g.objects[id].children_array.clone();
-                    for k in kids {
-                        mark_descendants(g, k);
-                    }
-                }
-                mark_descendants(g, d);
-            }
+        for &child_id in &direct_children {
+            grid_all_descendants.insert(child_id);
+            collect_descendants(g, child_id, &mut grid_all_descendants);
         }
-        grid_children_map.insert(container_id, saved);
+        // Temporarily clear children_array so dagre sees container as leaf
+        grid_children_map.insert(container_id, direct_children);
+        g.objects[container_id].children_array.clear();
     }
 
     if seq_containers.is_empty() && grid_containers.is_empty() {
-        // No nested diagrams -- just run dagre.
         return d2_dagre_layout::layout(g, None);
     }
 
     if seq_containers.is_empty() {
-        // Only grid containers (no sequence diagrams) -- run dagre then restore.
-        d2_dagre_layout::layout(g, None)?;
+        // Run dagre with grid descendants excluded.
+        d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
 
-        // After dagre, restore grid children and offset to container positions.
-        for (&container_id, saved_children) in &grid_children_map {
+        // Restore children and offset grid cells to container positions.
+        for (&container_id, children) in &grid_children_map {
+            g.objects[container_id].children_array = children.clone();
             let dx = g.objects[container_id].top_left.x;
             let dy = g.objects[container_id].top_left.y;
-            let mut children_ids = Vec::new();
-            for &(child_id, ref orig_shape) in saved_children {
-                g.objects[child_id].shape.value = orig_shape.clone();
-                children_ids.push(child_id);
-                // Restore descendants' shapes too
-                fn restore_descendants(g: &mut Graph, id: ObjId) {
-                    // The original shape was saved only for direct children.
-                    // Descendants kept their shapes in the sub-graph.
-                    // But we marked them as sentinel, so we need to restore.
-                    // Since we didn't save descendant shapes, just remove sentinel.
-                    let kids: Vec<ObjId> = g.objects[id].children_array.clone();
-                    for k in kids {
-                        if g.objects[k].shape.value == "__d2_grid_child_removed__" {
-                            g.objects[k].shape.value = "rectangle".to_owned();
-                        }
-                        restore_descendants(g, k);
-                    }
-                }
-                restore_descendants(g, child_id);
-            }
-            g.objects[container_id].children_array = children_ids.clone();
             if dx != 0.0 || dy != 0.0 {
-                for &child_id in &children_ids {
+                for &child_id in children {
                     d2_graph::move_obj_with_descendants(g, child_id, dx, dy);
                 }
             }

@@ -669,10 +669,20 @@ fn apply_constant_near_subgraphs(
 /// This builds a dagre graph from d2 objects and edges, runs the layout,
 /// then reads back positions and routes.
 pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), String> {
+    layout_with_exclude(g, opts, &std::collections::HashSet::new())
+}
+
+/// Layout with an explicit set of object IDs to exclude from dagre.
+pub fn layout_with_exclude(
+    g: &mut Graph,
+    opts: Option<&ConfigurableOpts>,
+    extra_excluded: &std::collections::HashSet<usize>,
+) -> Result<(), String> {
     let default_opts = ConfigurableOpts::default();
     let opts = opts.unwrap_or(&default_opts);
-    let (mut constant_near_subgraphs, excluded_objects, excluded_edges) =
+    let (mut constant_near_subgraphs, mut excluded_objects, excluded_edges) =
         build_constant_near_subgraphs(g);
+    excluded_objects.extend(extra_excluded);
 
     // Determine direction
     let root_direction = g.root_obj().direction.value.clone();
@@ -742,7 +752,6 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                 && !excluded_objects.contains(&i)
                 && g.objects[i].shape.value != "__d2_class_field_removed__"
                 && g.objects[i].shape.value != "__d2_seq_nested_removed__"
-                && g.objects[i].shape.value != "__d2_grid_child_removed__"
         })
         .collect();
     for &obj_id in &obj_ids {
@@ -779,6 +788,12 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
     // Collect edge endpoint data first (immutable borrow)
     let edge_data: Vec<(usize, ObjId, ObjId, i32, i32, String)> = (0..g.edges.len())
         .filter(|ei| !excluded_edges.contains(ei))
+        // Skip edges whose src/dst are excluded from layout
+        .filter(|&ei| {
+            let src = g.edges[ei].src;
+            let dst = g.edges[ei].dst;
+            !excluded_objects.contains(&src) && !excluded_objects.contains(&dst)
+        })
         .map(|ei| {
             let (src, dst) = get_edge_endpoints(g, ei);
             let edge = &g.edges[ei];

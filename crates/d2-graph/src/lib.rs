@@ -1334,6 +1334,9 @@ impl Object {
 
 /// Move object and all descendants by (dx, dy). Mirrors Go `Object.MoveWithDescendants`.
 pub fn move_obj_with_descendants(g: &mut Graph, obj_id: ObjId, dx: f64, dy: f64) {
+    if obj_id >= g.objects.len() {
+        return;
+    }
     g.objects[obj_id].top_left.x += dx;
     g.objects[obj_id].top_left.y += dy;
     let children: Vec<ObjId> = g.objects[obj_id].children_array.clone();
