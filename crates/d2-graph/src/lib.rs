@@ -1179,6 +1179,156 @@ impl Object {
         let size = d2_target::MAX_ICON_SIZE as f64;
         Some(pos.get_point_on_box(&b, d2_label::PADDING, size, size))
     }
+
+    /// Center of this object's bounding box.
+    pub fn center(&self) -> Point {
+        Point {
+            x: self.top_left.x + self.width / 2.0,
+            y: self.top_left.y + self.height / 2.0,
+        }
+    }
+
+    /// Get the margin (space needed for outside labels/icons).
+    /// Mirrors Go `Object.GetMargin()`.
+    pub fn get_margin(&self) -> Spacing {
+        let mut margin = Spacing::default();
+
+        if self.has_label() {
+            if let Some(ref pos_str) = self.label_position {
+                let position = d2_label::Position::from_string(pos_str);
+                let label_width =
+                    self.label_dimensions.width as f64 + d2_label::PADDING;
+                let label_height =
+                    self.label_dimensions.height as f64 + d2_label::PADDING;
+
+                use d2_label::Position::*;
+                match position {
+                    OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
+                        margin.top = label_height;
+                    }
+                    OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
+                        margin.bottom = label_height;
+                    }
+                    OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
+                        margin.left = label_width;
+                    }
+                    OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+                        margin.right = label_width;
+                    }
+                    _ => {}
+                }
+
+                // if an outside label is larger than the object add margin accordingly
+                if label_width > self.width {
+                    let dx = label_width - self.width;
+                    match position {
+                        OutsideTopLeft | OutsideBottomLeft => margin.right = dx,
+                        OutsideTopCenter | OutsideBottomCenter => {
+                            margin.left = (dx / 2.0).ceil();
+                            margin.right = (dx / 2.0).ceil();
+                        }
+                        OutsideTopRight | OutsideBottomRight => margin.left = dx,
+                        _ => {}
+                    }
+                }
+                if label_height > self.height {
+                    let dy = label_height - self.height;
+                    match position {
+                        OutsideLeftTop | OutsideRightTop => margin.bottom = dy,
+                        OutsideLeftMiddle | OutsideRightMiddle => {
+                            margin.top = (dy / 2.0).ceil();
+                            margin.bottom = (dy / 2.0).ceil();
+                        }
+                        OutsideLeftBottom | OutsideRightBottom => margin.top = dy,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if self.has_icon() {
+            if let Some(ref pos_str) = self.icon_position {
+                let position = d2_label::Position::from_string(pos_str);
+                let icon_size = d2_target::MAX_ICON_SIZE as f64 + d2_label::PADDING;
+                use d2_label::Position::*;
+                match position {
+                    OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
+                        margin.top = margin.top.max(icon_size);
+                    }
+                    OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
+                        margin.bottom = margin.bottom.max(icon_size);
+                    }
+                    OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
+                        margin.left = margin.left.max(icon_size);
+                    }
+                    OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+                        margin.right = margin.right.max(icon_size);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let (dx, dy) = self.get_modifier_element_adjustments();
+        margin.right += dx;
+        margin.top += dy;
+        margin
+    }
+
+    /// Resize this object to fit the given content dimensions, applying
+    /// shape-specific sizing rules. Mirrors Go `Object.SizeToContent()`.
+    pub fn size_to_content(&mut self, content_w: f64, content_h: f64, pad_x: f64, pad_y: f64) {
+        // Simplified: rectangle shapes — just set to content size.
+        // For more complex shapes (person, cloud, etc.) we'd need shape.GetDimensionsToFit.
+        let fit_w = content_w + pad_x;
+        let fit_h = content_h + pad_y;
+
+        if let Some(ref wa) = self.width_attr {
+            if let Ok(w) = wa.value.parse::<f64>() {
+                self.width = w;
+            }
+        } else {
+            self.width = fit_w;
+        }
+        if let Some(ref ha) = self.height_attr {
+            if let Ok(h) = ha.value.parse::<f64>() {
+                self.height = h;
+            }
+        } else {
+            self.height = fit_h;
+        }
+
+        // SQL tables, classes, code blocks: use max of desired and fit
+        if self.sql_table.is_some()
+            || self.class.is_some()
+            || !self.language.is_empty()
+        {
+            self.width = self.width.max(fit_w);
+            self.height = self.height.max(fit_h);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Object movement helpers (free functions operating on graph)
+// ---------------------------------------------------------------------------
+
+/// Move object and all descendants by (dx, dy). Mirrors Go `Object.MoveWithDescendants`.
+pub fn move_obj_with_descendants(g: &mut Graph, obj_id: ObjId, dx: f64, dy: f64) {
+    g.objects[obj_id].top_left.x += dx;
+    g.objects[obj_id].top_left.y += dy;
+    let children: Vec<ObjId> = g.objects[obj_id].children_array.clone();
+    for child_id in children {
+        move_obj_with_descendants(g, child_id, dx, dy);
+    }
+}
+
+/// Move object and all descendants so that top-left is at (x, y).
+/// Mirrors Go `Object.MoveWithDescendantsTo`.
+pub fn move_obj_with_descendants_to(g: &mut Graph, obj_id: ObjId, x: f64, y: f64) {
+    let dx = x - g.objects[obj_id].top_left.x;
+    let dy = y - g.objects[obj_id].top_left.y;
+    move_obj_with_descendants(g, obj_id, dx, dy);
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,6 +1484,14 @@ impl Edge {
         let new_end = dst.trace_to_shape_end(points, end_index);
         (new_start, new_end)
     }
+
+    /// Translate all route points by (dx, dy). Mirrors Go `Edge.Move`.
+    pub fn move_route(&mut self, dx: f64, dy: f64) {
+        for p in &mut self.route {
+            p.x += dx;
+            p.y += dy;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1363,6 +1521,10 @@ pub struct Graph {
     pub theme: Option<d2_themes::Theme>,
     pub legend: Option<GraphLegend>,
 
+    /// Nesting depth from the outermost graph. Mirrors Go `Graph.RootLevel`.
+    /// 0 = top-level, >0 = extracted nested graph.
+    pub root_level: u32,
+
     // Nested boards (layers, scenarios, steps)
     pub layers: Vec<Graph>,
     pub scenarios: Vec<Graph>,
@@ -1386,6 +1548,7 @@ impl Default for Graph {
             edges: Vec::new(),
             theme: None,
             legend: None,
+            root_level: 0,
             layers: Vec::new(),
             scenarios: Vec::new(),
             steps: Vec::new(),

@@ -159,7 +159,7 @@ impl fmt::Display for Orientation {
 // Spacing
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Spacing {
     pub top: f64,
     pub bottom: f64,
