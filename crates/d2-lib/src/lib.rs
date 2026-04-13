@@ -296,7 +296,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         sub.objects[sub.root].shape = g.objects[container_id].shape.clone();
         sub.objects[sub.root].width = g.objects[container_id].width;
         sub.objects[sub.root].height = g.objects[container_id].height;
+        sub.objects[sub.root].width_attr = g.objects[container_id].width_attr.clone();
+        sub.objects[sub.root].height_attr = g.objects[container_id].height_attr.clone();
         sub.objects[sub.root].top_left = g.objects[container_id].top_left;
+        sub.objects[sub.root].style = g.objects[container_id].style.clone();
 
         // Add children to sub-graph.
         for &child_id in &children {

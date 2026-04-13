@@ -6,6 +6,7 @@
 use d2_ast as ast;
 use d2_geo::{self, Box2D, Point, Segment, Spacing};
 use d2_label;
+use d2_shape::{self, ShapeOps};
 use d2_target;
 use d2_themes;
 
@@ -1278,20 +1279,31 @@ impl Object {
     /// Resize this object to fit the given content dimensions, applying
     /// shape-specific sizing rules. Mirrors Go `Object.SizeToContent()`.
     pub fn size_to_content(&mut self, content_w: f64, content_h: f64, pad_x: f64, pad_y: f64) {
-        // Simplified: rectangle shapes — just set to content size.
-        // For more complex shapes (person, cloud, etc.) we'd need shape.GetDimensionsToFit.
-        let fit_w = content_w + pad_x;
-        let fit_h = content_h + pad_y;
+        let dsl_shape = self.shape.value.to_lowercase();
+        let shape_type = d2_target::dsl_shape_to_shape_type(&dsl_shape);
+        let bbox = Box2D::new(Point { x: 0.0, y: 0.0 }, content_w, content_h);
+        let s = d2_shape::Shape::new(shape_type, bbox);
 
+        let (fit_w, fit_h) = if shape_type == d2_shape::PERSON_TYPE {
+            (content_w + pad_x, content_h + pad_y)
+        } else {
+            s.get_dimensions_to_fit(content_w, content_h, pad_x, pad_y)
+        };
+
+        let mut desired_w = 0.0f64;
         if let Some(ref wa) = self.width_attr {
             if let Ok(w) = wa.value.parse::<f64>() {
+                desired_w = w;
                 self.width = w;
             }
         } else {
             self.width = fit_w;
         }
+
+        let mut desired_h = 0.0f64;
         if let Some(ref ha) = self.height_attr {
             if let Ok(h) = ha.value.parse::<f64>() {
+                desired_h = h;
                 self.height = h;
             }
         } else {
@@ -1305,6 +1317,13 @@ impl Object {
         {
             self.width = self.width.max(fit_w);
             self.height = self.height.max(fit_h);
+        }
+
+        // Aspect-ratio-1 shapes (circle, real_square, etc.)
+        if s.aspect_ratio_1() {
+            let side = self.width.max(self.height);
+            self.width = side;
+            self.height = side;
         }
     }
 }
