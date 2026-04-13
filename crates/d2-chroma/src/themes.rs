@@ -76,6 +76,7 @@ fn build_github() -> Theme {
     m.insert(TokenType::LiteralStringBacktick, entry("#dd1144", false, false));
     m.insert(TokenType::LiteralStringEscape, entry("#dd1144", false, false));
     m.insert(TokenType::LiteralStringInterpol, entry("#dd1144", false, false));
+    m.insert(TokenType::LiteralStringAffix, entry("#dd1144", false, false));
 
     m.insert(TokenType::LiteralNumber, entry("#009999", false, false));
     m.insert(TokenType::LiteralNumberFloat, entry("#009999", false, false));
@@ -125,6 +126,7 @@ fn build_catppuccin_mocha() -> Theme {
     m.insert(TokenType::LiteralStringBacktick, entry("#a6e3a1", false, false));
     m.insert(TokenType::LiteralStringEscape, entry("#89b4fa", false, false));
     m.insert(TokenType::LiteralStringInterpol, entry("#a6e3a1", false, false));
+    m.insert(TokenType::LiteralStringAffix, entry("#f38ba8", false, false));
 
     m.insert(TokenType::LiteralNumber, entry("#fab387", false, false));
     m.insert(TokenType::LiteralNumberFloat, entry("#fab387", false, false));

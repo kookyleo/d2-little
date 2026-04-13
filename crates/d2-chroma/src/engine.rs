@@ -31,6 +31,7 @@ pub enum TokenType {
     LiteralStringBacktick,
     LiteralStringEscape,
     LiteralStringInterpol,
+    LiteralStringAffix,
     Operator,
     Punctuation,
     Comment,
@@ -67,7 +68,8 @@ impl TokenType {
             | TokenType::LiteralStringSingle
             | TokenType::LiteralStringBacktick
             | TokenType::LiteralStringEscape
-            | TokenType::LiteralStringInterpol => TokenType::Literal,
+            | TokenType::LiteralStringInterpol
+            | TokenType::LiteralStringAffix => TokenType::Literal,
 
             TokenType::CommentSingle
             | TokenType::CommentMultiline
@@ -105,7 +107,8 @@ impl TokenType {
             | TokenType::LiteralStringSingle
             | TokenType::LiteralStringBacktick
             | TokenType::LiteralStringEscape
-            | TokenType::LiteralStringInterpol => TokenType::Literal,
+            | TokenType::LiteralStringInterpol
+            | TokenType::LiteralStringAffix => TokenType::Literal,
 
             TokenType::Comment
             | TokenType::CommentSingle
@@ -262,8 +265,8 @@ impl Lexer for StateMachineLexer {
                             for (i, tt) in group_types.iter().enumerate() {
                                 if let Some(g) = caps.get(i + 1) {
                                     let val = g.as_str();
-                                    if val.is_empty() {
-                                        continue; // Skip empty groups
+                                    if val.is_empty() && *tt == TokenType::Text {
+                                        continue; // Skip empty Text groups
                                     }
                                     tokens.push(Token {
                                         token_type: *tt,

@@ -715,7 +715,7 @@ impl Object {
         // Inside sequence diagrams, objects get isBold=false (Go:
         // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
         if !in_seq {
-            if is_container && self.shape.value != "text" {
+            if (is_container || self.is_grid_diagram()) && self.shape.value != "text" {
                 if self.style.font_size.is_none() {
                     font_size = match self.level(graph) {
                         1 => 28, // FONT_SIZE_XXL

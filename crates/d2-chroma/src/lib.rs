@@ -7,6 +7,7 @@
 mod engine;
 mod go_lexer;
 mod bash_lexer;
+mod python_lexer;
 mod themes;
 
 pub use engine::{Token, TokenType};
@@ -20,6 +21,7 @@ pub fn tokenize(language: &str, source: &str) -> Option<Vec<Token>> {
     let lexer: Option<Box<dyn engine::Lexer>> = match lang.as_str() {
         "go" | "golang" => Some(Box::new(go_lexer::GoLexer::new())),
         "bash" | "sh" | "ksh" | "zsh" | "shell" => Some(Box::new(bash_lexer::BashLexer::new())),
+        "python" | "python3" | "py" | "py3" => Some(Box::new(python_lexer::PythonLexer::new())),
         _ => None,
     };
     match lexer {

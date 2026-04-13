@@ -128,9 +128,40 @@ pub fn compile(
     opts: &CompileOptions,
 ) -> Result<(d2_target::Diagram, Vec<u8>), String> {
     // Step 1: parse + IR + compile -> Graph
-    let mut g = d2_compiler::compile("", input).map_err(|e| format!("{}", e))?;
+    let (mut g, config) =
+        d2_compiler::compile_with_config("", input).map_err(|e| format!("{}", e))?;
 
-    let theme_id = opts.theme_id.unwrap_or(0);
+    let mut theme_id = opts.theme_id;
+    let mut dark_theme_id = opts.dark_theme_id;
+    let mut pad = opts.pad;
+    let mut center = opts.center;
+    let mut sketch = opts.sketch;
+    let mut theme_overrides = None;
+    let mut dark_theme_overrides = None;
+    let mut config_data = std::collections::HashMap::new();
+
+    if let Some(config) = config.as_ref() {
+        if theme_id.is_none() {
+            theme_id = config.theme_id;
+        }
+        if dark_theme_id.is_none() {
+            dark_theme_id = config.dark_theme_id;
+        }
+        if pad.is_none() {
+            pad = config.pad;
+        }
+        if !center {
+            center = config.center.unwrap_or(false);
+        }
+        if !sketch {
+            sketch = config.sketch.unwrap_or(false);
+        }
+        theme_overrides = config.theme_overrides.clone();
+        dark_theme_overrides = config.dark_theme_overrides.clone();
+        config_data = config.data.clone();
+    }
+
+    let theme_id = theme_id.unwrap_or(0);
 
     // Step 2-5: recursively compile graph (theme, dimensions, layout, export)
     let mut ruler = d2_textmeasure::Ruler::new().map_err(|e| format!("ruler init: {}", e))?;
@@ -140,17 +171,17 @@ pub fn compile(
     // diagram.Config so the diagram hash (used for CSS scoping) accounts for
     // appearance-affecting fields like themeID and sketch.
     diagram.config = Some(d2_target::Config {
-        sketch: Some(opts.sketch),
+        sketch: Some(sketch),
         theme_id: Some(theme_id),
-        dark_theme_id: opts.dark_theme_id,
+        dark_theme_id,
         // Pad / center / layoutEngine are intentionally left unset, matching Go
         // applyConfigs which only copies ThemeID/DarkThemeID/Sketch back.
         pad: None,
         center: None,
         layout_engine: None,
-        theme_overrides: None,
-        dark_theme_overrides: None,
-        data: Default::default(),
+        theme_overrides,
+        dark_theme_overrides,
+        data: config_data,
     });
 
     // Step 6: render
@@ -163,10 +194,18 @@ pub fn compile(
     // use <g> form rather than standalone <svg>.
     let mut render_opts = RenderOpts {
         theme_id: Some(theme_id),
-        dark_theme_id: opts.dark_theme_id,
-        pad: opts.pad,
-        sketch: if opts.sketch { Some(true) } else { None },
-        center: if opts.center { Some(true) } else { None },
+        dark_theme_id,
+        pad,
+        sketch: if sketch { Some(true) } else { None },
+        center: if center { Some(true) } else { None },
+        theme_overrides: diagram
+            .config
+            .as_ref()
+            .and_then(|c| c.theme_overrides.clone()),
+        dark_theme_overrides: diagram
+            .config
+            .as_ref()
+            .and_then(|c| c.dark_theme_overrides.clone()),
         ..Default::default()
     };
 
@@ -231,19 +270,376 @@ fn compile_graph(
 // layout_nested: handle nested sequence/grid diagrams before main layout
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
+struct SubObjResult {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    label_position: Option<String>,
+    label: d2_graph::Label,
+    shape: d2_graph::ScalarValue,
+    z_index: i32,
+    is_sequence_diagram_note: bool,
+    is_sequence_diagram_group: bool,
+}
+
+#[derive(Debug, Clone)]
+struct NestedResult {
+    container_id: ObjId,
+    obj_results: HashMap<ObjId, SubObjResult>,
+    edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)>, // (route, label_position, z_index)
+    new_edges: Vec<d2_graph::Edge>,
+    container_width: f64,
+    container_height: f64,
+    container_label_position: Option<String>,
+    container_icon_position: Option<String>,
+}
+
+fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<NestedResult, String> {
+    let mut sub_g = Graph::new();
+    sub_g.root_level = g.objects[container_id].level(g);
+
+    let mut root_copy = g.objects[container_id].clone();
+    root_copy.parent = None;
+    root_copy.children.clear();
+    root_copy.children_array.clear();
+    sub_g.objects[sub_g.root] = root_copy;
+
+    let mut id_map: HashMap<ObjId, ObjId> = HashMap::new();
+    id_map.insert(container_id, sub_g.root);
+
+    let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
+    let mut queue: std::collections::VecDeque<ObjId> = children.iter().copied().collect();
+    while let Some(obj_id) = queue.pop_front() {
+        let obj = &g.objects[obj_id];
+        let mut new_obj = obj.clone();
+        let new_id = sub_g.objects.len();
+
+        new_obj.children.clear();
+        new_obj.children_array.clear();
+
+        let parent_main_id = obj.parent.unwrap_or(container_id);
+        new_obj.parent = Some(*id_map.get(&parent_main_id).unwrap_or(&sub_g.root));
+        id_map.insert(obj_id, new_id);
+        sub_g.objects.push(new_obj);
+
+        let parent_sub_id = *id_map.get(&parent_main_id).unwrap_or(&sub_g.root);
+        sub_g.objects[parent_sub_id].children.push(new_id);
+        sub_g.objects[parent_sub_id].children_array.push(new_id);
+
+        for &child_id in &g.objects[obj_id].children_array {
+            queue.push_back(child_id);
+        }
+    }
+
+    for i in 0..sub_g.objects.len() {
+        for r in &mut sub_g.objects[i].references {
+            if let Some(scope) = r.scope_obj {
+                r.scope_obj = id_map.get(&scope).copied();
+            }
+        }
+    }
+
+    let mut edge_map: HashMap<usize, usize> = HashMap::new();
+    for (ei, edge) in g.edges.iter().enumerate() {
+        if let (Some(&sub_src), Some(&sub_dst)) = (id_map.get(&edge.src), id_map.get(&edge.dst)) {
+            let mut new_edge = edge.clone();
+            new_edge.src = sub_src;
+            new_edge.dst = sub_dst;
+            if let Some(scope) = new_edge.scope_obj {
+                new_edge.scope_obj = id_map.get(&scope).copied();
+            }
+            let new_ei = sub_g.edges.len();
+            edge_map.insert(ei, new_ei);
+            sub_g.edges.push(new_edge);
+        }
+    }
+
+    layout_nested(&mut sub_g)?;
+
+    let mut obj_results = HashMap::new();
+    for (&main_id, &sub_id) in &id_map {
+        if main_id == container_id {
+            continue;
+        }
+        let obj = &sub_g.objects[sub_id];
+        obj_results.insert(
+            main_id,
+            SubObjResult {
+                x: obj.top_left.x,
+                y: obj.top_left.y,
+                w: obj.width,
+                h: obj.height,
+                label_position: obj.label_position.clone(),
+                label: obj.label.clone(),
+                shape: obj.shape.clone(),
+                z_index: obj.z_index,
+                is_sequence_diagram_note: obj.is_sequence_diagram_note,
+                is_sequence_diagram_group: obj.is_sequence_diagram_group,
+            },
+        );
+    }
+
+    let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)> = HashMap::new();
+    let mapped_sub_indices: HashSet<usize> = edge_map.values().copied().collect();
+    for (&main_ei, &sub_ei) in &edge_map {
+        let sub_edge = &sub_g.edges[sub_ei];
+        edge_routes.insert(
+            main_ei,
+            (
+                sub_edge.route.clone(),
+                sub_edge.label_position.clone(),
+                sub_edge.z_index,
+            ),
+        );
+    }
+
+    let reverse_id_map: HashMap<ObjId, ObjId> = id_map.iter().map(|(&m, &s)| (s, m)).collect();
+    let mut new_edges: Vec<d2_graph::Edge> = Vec::new();
+    for (sub_ei, sub_edge) in sub_g.edges.iter().enumerate() {
+        if !mapped_sub_indices.contains(&sub_ei) {
+            let mut edge = sub_edge.clone();
+            if let Some(&main_src) = reverse_id_map.get(&edge.src) {
+                edge.src = main_src;
+            }
+            if let Some(&main_dst) = reverse_id_map.get(&edge.dst) {
+                edge.dst = main_dst;
+            }
+            if let Some(scope) = edge.scope_obj {
+                edge.scope_obj = reverse_id_map.get(&scope).copied();
+            }
+            new_edges.push(edge);
+        }
+    }
+
+    let root = &sub_g.objects[sub_g.root];
+    Ok(NestedResult {
+        container_id,
+        obj_results,
+        edge_routes,
+        new_edges,
+        container_width: root.width,
+        container_height: root.height,
+        container_label_position: root.label_position.clone(),
+        container_icon_position: root.icon_position.clone(),
+    })
+}
+
+fn apply_nested_object_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
+    for (&obj_id, res) in &result.obj_results {
+        let obj = &mut g.objects[obj_id];
+        obj.top_left = Point::new(res.x + dx, res.y + dy);
+        obj.width = res.w;
+        obj.height = res.h;
+        obj.label_position = res.label_position.clone();
+        obj.label = res.label.clone();
+        obj.shape = res.shape.clone();
+        obj.z_index = res.z_index;
+        obj.is_sequence_diagram_note = res.is_sequence_diagram_note;
+        obj.is_sequence_diagram_group = res.is_sequence_diagram_group;
+        obj.update_box();
+    }
+}
+
+fn apply_nested_edge_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
+    for (&ei, (route, label_pos, z_index)) in &result.edge_routes {
+        let edge = &mut g.edges[ei];
+        edge.route = route
+            .iter()
+            .map(|p| Point::new(p.x + dx, p.y + dy))
+            .collect();
+        if let Some(pos) = label_pos {
+            edge.label_position = Some(pos.clone());
+        }
+        edge.z_index = *z_index;
+    }
+
+    for mut edge in result.new_edges.clone() {
+        for p in &mut edge.route {
+            p.x += dx;
+            p.y += dy;
+        }
+        g.edges.push(edge);
+    }
+}
+
+fn remove_edges_touching_descendants(
+    g: &mut Graph,
+    excluded_descendants: &HashSet<ObjId>,
+) -> Vec<(usize, d2_graph::Edge)> {
+    let mut saved_edges: Vec<(usize, d2_graph::Edge)> = Vec::new();
+    let mut removed_indices: Vec<usize> = g
+        .edges
+        .iter()
+        .enumerate()
+        .filter_map(|(ei, edge)| {
+            (excluded_descendants.contains(&edge.src) || excluded_descendants.contains(&edge.dst))
+                .then_some(ei)
+        })
+        .collect();
+    removed_indices.sort_unstable_by(|a, b| b.cmp(a));
+    for &ei in &removed_indices {
+        saved_edges.push((ei, g.edges.remove(ei)));
+    }
+    saved_edges
+}
+
+fn restore_removed_edges(g: &mut Graph, mut saved_edges: Vec<(usize, d2_graph::Edge)>) {
+    saved_edges.reverse();
+    for (ei, edge) in saved_edges {
+        g.edges.insert(ei, edge);
+    }
+}
+
+fn move_obj_with_descendants_and_boxes(g: &mut Graph, obj_id: ObjId, dx: f64, dy: f64) {
+    if obj_id >= g.objects.len() {
+        return;
+    }
+    g.objects[obj_id].top_left.x += dx;
+    g.objects[obj_id].top_left.y += dy;
+    g.objects[obj_id].update_box();
+    let children: Vec<ObjId> = g.objects[obj_id].children_array.clone();
+    for child_id in children {
+        move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
+    }
+}
+
 /// Mirrors Go d2layouts.LayoutNested. Before running the main layout engine,
 /// detect children that are sequence diagrams, extract them, run sequence layout,
 /// fit them to their containers, then run the main dagre layout, and finally
 /// offset nested contents to their container positions.
 fn layout_nested(g: &mut Graph) -> Result<(), String> {
-    // If the root is a sequence diagram, just run sequence layout directly.
     if g.root_obj().is_sequence_diagram() {
-        return d2_sequence::layout(g);
+        let root = g.root;
+        let nested_children: Vec<ObjId> = g.objects[root]
+            .children_array
+            .iter()
+            .copied()
+            .filter(|&child_id| {
+                !g.objects[child_id].children_array.is_empty()
+                    && (g.objects[child_id].is_grid_diagram()
+                        || g.objects[child_id].is_sequence_diagram())
+            })
+            .collect();
+
+        if nested_children.is_empty() {
+            return d2_sequence::layout(g);
+        }
+
+        let mut nested_results = Vec::new();
+        let mut excluded_descendants: HashSet<ObjId> = HashSet::new();
+        let saved_children: Vec<(ObjId, Vec<ObjId>, Vec<ObjId>)> = nested_children
+            .iter()
+            .map(|&child_id| {
+                let result = layout_container_as_subgraph(g, child_id)?;
+                nested_results.push(result);
+                collect_descendants(g, child_id, &mut excluded_descendants);
+                Ok((
+                    child_id,
+                    g.objects[child_id].children.clone(),
+                    g.objects[child_id].children_array.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        for result in &nested_results {
+            g.objects[result.container_id].width = result.container_width;
+            g.objects[result.container_id].height = result.container_height;
+            if let Some(ref pos) = result.container_label_position {
+                g.objects[result.container_id].label_position = Some(pos.clone());
+            }
+            if let Some(ref pos) = result.container_icon_position {
+                g.objects[result.container_id].icon_position = Some(pos.clone());
+            }
+        }
+
+        for (child_id, _, _) in &saved_children {
+            g.objects[*child_id].children.clear();
+            g.objects[*child_id].children_array.clear();
+        }
+
+        let saved_edges = remove_edges_touching_descendants(g, &excluded_descendants);
+        d2_sequence::layout(g)?;
+
+        for (child_id, children, children_array) in saved_children {
+            g.objects[child_id].children = children;
+            g.objects[child_id].children_array = children_array;
+        }
+        restore_removed_edges(g, saved_edges);
+
+        for result in &nested_results {
+            let dx = g.objects[result.container_id].top_left.x;
+            let dy = g.objects[result.container_id].top_left.y;
+            apply_nested_object_results(g, result, dx, dy);
+            apply_nested_edge_results(g, result, dx, dy);
+        }
+        route_direct_edges_for_excluded_descendants(g, &excluded_descendants);
+        return Ok(());
     }
 
-    // If the root is a grid diagram, just run grid layout directly.
     if g.root_obj().is_grid_diagram() {
-        return d2_grid::layout(g);
+        let root = g.root;
+        let nested_children: Vec<ObjId> = g.objects[root]
+            .children_array
+            .iter()
+            .copied()
+            .filter(|&child_id| !g.objects[child_id].children_array.is_empty())
+            .collect();
+
+        if nested_children.is_empty() {
+            return d2_grid::layout(g);
+        }
+
+        let mut nested_results = Vec::new();
+        let mut excluded_descendants: HashSet<ObjId> = HashSet::new();
+        let saved_children: Vec<(ObjId, Vec<ObjId>, Vec<ObjId>)> = nested_children
+            .iter()
+            .map(|&child_id| {
+                let result = layout_container_as_subgraph(g, child_id)?;
+                nested_results.push(result);
+                collect_descendants(g, child_id, &mut excluded_descendants);
+                Ok((
+                    child_id,
+                    g.objects[child_id].children.clone(),
+                    g.objects[child_id].children_array.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        for result in &nested_results {
+            g.objects[result.container_id].width = result.container_width;
+            g.objects[result.container_id].height = result.container_height;
+            if let Some(ref pos) = result.container_label_position {
+                g.objects[result.container_id].label_position = Some(pos.clone());
+            }
+            if let Some(ref pos) = result.container_icon_position {
+                g.objects[result.container_id].icon_position = Some(pos.clone());
+            }
+        }
+
+        for (child_id, _, _) in &saved_children {
+            g.objects[*child_id].children.clear();
+            g.objects[*child_id].children_array.clear();
+        }
+
+        let saved_edges = remove_edges_touching_descendants(g, &excluded_descendants);
+        d2_grid::layout(g)?;
+
+        for (child_id, children, children_array) in saved_children {
+            g.objects[child_id].children = children;
+            g.objects[child_id].children_array = children_array;
+        }
+        restore_removed_edges(g, saved_edges);
+
+        for result in &nested_results {
+            let dx = g.objects[result.container_id].top_left.x;
+            let dy = g.objects[result.container_id].top_left.y;
+            apply_nested_object_results(g, result, dx, dy);
+            apply_nested_edge_results(g, result, dx, dy);
+        }
+        route_direct_edges_for_excluded_descendants(g, &excluded_descendants);
+        return Ok(());
     }
 
     // Find all non-root objects that are sequence or grid diagrams.
@@ -272,6 +668,22 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
         if children.is_empty() {
             continue;
+        }
+
+        for &child_id in &children {
+            if g.objects[child_id].children_array.is_empty() {
+                continue;
+            }
+            let result = layout_container_as_subgraph(g, child_id)?;
+            g.objects[result.container_id].width = result.container_width;
+            g.objects[result.container_id].height = result.container_height;
+            if let Some(ref pos) = result.container_label_position {
+                g.objects[result.container_id].label_position = Some(pos.clone());
+            }
+            if let Some(ref pos) = result.container_icon_position {
+                g.objects[result.container_id].icon_position = Some(pos.clone());
+            }
+            apply_nested_object_results(g, &result, 0.0, 0.0);
         }
 
         // Build a temporary sub-graph for this grid container.
@@ -377,10 +789,11 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             let dy = g.objects[container_id].top_left.y;
             if dx != 0.0 || dy != 0.0 {
                 for &child_id in children {
-                    d2_graph::move_obj_with_descendants(g, child_id, dx, dy);
+                    move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
                 }
             }
         }
+        route_direct_edges_for_excluded_descendants(g, &grid_all_descendants);
         return Ok(());
     }
 
@@ -390,198 +803,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         collect_descendants(g, container_id, &mut seq_descendants);
     }
 
-    // Collect edges that are internal to sequence diagram containers.
-    let mut seq_edges: HashSet<usize> = HashSet::new();
-    for (ei, edge) in g.edges.iter().enumerate() {
-        if seq_descendants.contains(&edge.src) || seq_descendants.contains(&edge.dst) {
-            seq_edges.insert(ei);
-        }
-    }
-
-    // For each sequence diagram container, build a temporary subgraph and
-    // run sequence layout on it.
-    /// Properties copied back from a subgraph object after sequence layout.
-    struct SubObjResult {
-        x: f64,
-        y: f64,
-        w: f64,
-        h: f64,
-        label_position: Option<String>,
-        label: d2_graph::Label,
-        shape: d2_graph::ScalarValue,
-        z_index: i32,
-        is_sequence_diagram_note: bool,
-        is_sequence_diagram_group: bool,
-        box_: d2_geo::Box2D,
-    }
-    struct NestedResult {
-        container_id: ObjId,
-        obj_results: HashMap<ObjId, SubObjResult>,
-        edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)>, // (route, label_position, z_index)
-        /// Newly created edges (e.g. sequence diagram lifelines) that need to
-        /// be added to the main graph.  Routes are relative to (0,0).
-        new_edges: Vec<d2_graph::Edge>,
-        container_width: f64,
-        container_height: f64,
-        container_label_position: Option<String>,
-    }
-
     let mut nested_results: Vec<NestedResult> = Vec::new();
 
     for &container_id in &seq_containers {
-        // Build a temporary subgraph for this sequence diagram.
-        let mut sub_g = Graph::new();
-
-        // Copy the container's attributes to the root of the subgraph.
-        // label_dimensions must be included so that sequence layout can
-        // account for the container label height when computing total height.
-        {
-            let container = &g.objects[container_id];
-            sub_g.objects[sub_g.root].shape = container.shape.clone();
-            sub_g.objects[sub_g.root].direction = container.direction.clone();
-            sub_g.objects[sub_g.root].label = container.label.clone();
-            sub_g.objects[sub_g.root].label_position = container.label_position.clone();
-            sub_g.objects[sub_g.root].icon_position = container.icon_position.clone();
-            sub_g.objects[sub_g.root].label_dimensions = container.label_dimensions.clone();
-        }
-
-        // Map from main graph ObjId to subgraph ObjId.
-        let mut id_map: HashMap<ObjId, ObjId> = HashMap::new();
-        id_map.insert(container_id, sub_g.root);
-
-        // Add children (and their descendants) to the subgraph.
-        // Use FIFO order (remove from front) so that children_array in the
-        // subgraph preserves the original declaration order.
-        let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
-        let mut queue: std::collections::VecDeque<ObjId> = children.iter().copied().collect();
-        while let Some(obj_id) = queue.pop_front() {
-            let obj = &g.objects[obj_id];
-            let mut new_obj = obj.clone();
-            let new_id = sub_g.objects.len();
-
-            // Clear children references -- we'll rebuild them.
-            new_obj.children.clear();
-            new_obj.children_array.clear();
-
-            let parent_main_id = obj.parent.unwrap_or(container_id);
-            new_obj.parent = Some(*id_map.get(&parent_main_id).unwrap_or(&sub_g.root));
-            id_map.insert(obj_id, new_id);
-            sub_g.objects.push(new_obj);
-
-            // Update parent's children in subgraph.
-            let parent_sub_id = *id_map.get(&parent_main_id).unwrap_or(&sub_g.root);
-            sub_g.objects[parent_sub_id].children.push(new_id);
-            sub_g.objects[parent_sub_id].children_array.push(new_id);
-
-            for &child_id in &g.objects[obj_id].children_array {
-                queue.push_back(child_id);
-            }
-        }
-
-        // Remap scope_obj and references in subgraph objects.
-        for i in 1..sub_g.objects.len() {
-            for r in &mut sub_g.objects[i].references {
-                if let Some(scope) = r.scope_obj {
-                    r.scope_obj = id_map.get(&scope).copied();
-                }
-            }
-        }
-
-        // Add edges that are internal to this sequence diagram.
-        let mut edge_map: HashMap<usize, usize> = HashMap::new(); // main edge index -> sub edge index
-        for (ei, edge) in g.edges.iter().enumerate() {
-            if let (Some(&sub_src), Some(&sub_dst)) = (id_map.get(&edge.src), id_map.get(&edge.dst))
-            {
-                let mut new_edge = edge.clone();
-                new_edge.src = sub_src;
-                new_edge.dst = sub_dst;
-                // Remap scope_obj
-                if let Some(scope) = new_edge.scope_obj {
-                    new_edge.scope_obj = id_map.get(&scope).copied();
-                }
-                let new_ei = sub_g.edges.len();
-                edge_map.insert(ei, new_ei);
-                sub_g.edges.push(new_edge);
-            }
-        }
-
-        // Run sequence layout on the subgraph.
-        d2_sequence::layout(&mut sub_g)?;
-
-        // Collect the results — copy back all sequence-layout-modified properties.
-        let mut obj_results = HashMap::new();
-        for (&main_id, &sub_id) in &id_map {
-            if main_id == container_id {
-                continue;
-            }
-            let obj = &sub_g.objects[sub_id];
-            obj_results.insert(
-                main_id,
-                SubObjResult {
-                    x: obj.top_left.x,
-                    y: obj.top_left.y,
-                    w: obj.width,
-                    h: obj.height,
-                    label_position: obj.label_position.clone(),
-                    label: obj.label.clone(),
-                    shape: obj.shape.clone(),
-                    z_index: obj.z_index,
-                    is_sequence_diagram_note: obj.is_sequence_diagram_note,
-                    is_sequence_diagram_group: obj.is_sequence_diagram_group,
-                    box_: obj.box_.clone(),
-                },
-            );
-        }
-
-        let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)> = HashMap::new();
-        let mapped_sub_indices: HashSet<usize> = edge_map.values().copied().collect();
-        for (&main_ei, &sub_ei) in &edge_map {
-            let sub_edge = &sub_g.edges[sub_ei];
-            edge_routes.insert(
-                main_ei,
-                (
-                    sub_edge.route.clone(),
-                    sub_edge.label_position.clone(),
-                    sub_edge.z_index,
-                ),
-            );
-        }
-
-        // Collect newly created edges (e.g. lifelines) that sequence layout
-        // added to the subgraph but have no mapping back to the main graph.
-        // Remap their src/dst from subgraph IDs back to main graph IDs.
-        let reverse_id_map: HashMap<ObjId, ObjId> = id_map.iter().map(|(&m, &s)| (s, m)).collect();
-        let mut new_edges: Vec<d2_graph::Edge> = Vec::new();
-        for (sub_ei, sub_edge) in sub_g.edges.iter().enumerate() {
-            if !mapped_sub_indices.contains(&sub_ei) {
-                let mut edge = sub_edge.clone();
-                // Remap src back to main graph ID
-                if let Some(&main_src) = reverse_id_map.get(&edge.src) {
-                    edge.src = main_src;
-                }
-                // dst may be a synthetic placeholder (lifeline-end); keep dst_id_override
-                if let Some(&main_dst) = reverse_id_map.get(&edge.dst) {
-                    edge.dst = main_dst;
-                }
-                new_edges.push(edge);
-            }
-        }
-
-        // Compute bounding box of the laid-out subgraph.
-        let root = &sub_g.objects[sub_g.root];
-        let container_width = root.width;
-        let container_height = root.height;
-        let container_label_position = root.label_position.clone();
-
-        nested_results.push(NestedResult {
-            container_id,
-            obj_results,
-            edge_routes,
-            new_edges,
-            container_width,
-            container_height,
-            container_label_position,
-        });
+        nested_results.push(layout_container_as_subgraph(g, container_id)?);
     }
 
     // Apply nested layout results: set container sizes, label positions, and child positions.
@@ -590,6 +815,9 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         g.objects[result.container_id].height = result.container_height;
         if let Some(ref pos) = result.container_label_position {
             g.objects[result.container_id].label_position = Some(pos.clone());
+        }
+        if let Some(ref pos) = result.container_icon_position {
+            g.objects[result.container_id].icon_position = Some(pos.clone());
         }
     }
 
@@ -619,15 +847,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         })
         .collect();
 
-    // Save and remove internal edges.
-    let mut saved_edges: Vec<(usize, d2_graph::Edge)> = Vec::new();
-    let mut removed_indices: Vec<usize> = seq_edges.iter().copied().collect();
-    removed_indices.sort_unstable_by(|a, b| b.cmp(a)); // Reverse order for removal
-    for &ei in &removed_indices {
-        saved_edges.push((ei, g.edges.remove(ei)));
-    }
+    // Save and remove internal/external edges touching sequence descendants.
+    let saved_edges = remove_edges_touching_descendants(g, &seq_descendants);
 
-    d2_dagre_layout::layout(g, None)?;
+    d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
 
     // Restore container children.
     for (c, children, children_array) in saved_children {
@@ -641,10 +864,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     }
 
     // Restore edges.
-    saved_edges.reverse(); // Restore in original order
-    for (ei, edge) in saved_edges {
-        g.edges.insert(ei, edge);
-    }
+    restore_removed_edges(g, saved_edges);
 
     // Now offset nested sequence diagram contents by their container's position,
     // and add newly created edges (e.g. lifelines) to the main graph.
@@ -653,41 +873,25 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         let dx = container.top_left.x;
         let dy = container.top_left.y;
 
-        for (&obj_id, res) in &result.obj_results {
-            let obj = &mut g.objects[obj_id];
-            obj.top_left = Point::new(res.x + dx, res.y + dy);
-            obj.width = res.w;
-            obj.height = res.h;
-            obj.label_position = res.label_position.clone();
-            obj.label = res.label.clone();
-            obj.shape = res.shape.clone();
-            obj.z_index = res.z_index;
-            obj.is_sequence_diagram_note = res.is_sequence_diagram_note;
-            obj.is_sequence_diagram_group = res.is_sequence_diagram_group;
-            obj.update_box();
-        }
+        apply_nested_object_results(g, &result, dx, dy);
+        apply_nested_edge_results(g, &result, dx, dy);
+    }
 
-        for (&ei, (route, label_pos, z_index)) in &result.edge_routes {
-            let edge = &mut g.edges[ei];
-            edge.route = route
-                .iter()
-                .map(|p| Point::new(p.x + dx, p.y + dy))
-                .collect();
-            if let Some(pos) = label_pos {
-                edge.label_position = Some(pos.clone());
+    // Restore grid children and offset grid cells to their container positions.
+    for (&container_id, children) in &grid_children_map {
+        g.objects[container_id].children_array = children.clone();
+        let dx = g.objects[container_id].top_left.x;
+        let dy = g.objects[container_id].top_left.y;
+        if dx != 0.0 || dy != 0.0 {
+            for &child_id in children {
+                move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
             }
-            edge.z_index = *z_index;
-        }
-
-        // Add newly created edges (lifelines) with container offset applied.
-        for mut edge in result.new_edges {
-            for p in &mut edge.route {
-                p.x += dx;
-                p.y += dy;
-            }
-            g.edges.push(edge);
         }
     }
+
+    let mut excluded_special_descendants = grid_all_descendants.clone();
+    excluded_special_descendants.extend(seq_descendants.iter().copied());
+    route_direct_edges_for_excluded_descendants(g, &excluded_special_descendants);
 
     Ok(())
 }
@@ -697,6 +901,45 @@ fn collect_descendants(g: &Graph, obj_id: ObjId, out: &mut HashSet<ObjId>) {
     for &child_id in &g.objects[obj_id].children_array {
         out.insert(child_id);
         collect_descendants(g, child_id, out);
+    }
+}
+
+fn route_direct_edges_for_excluded_descendants(g: &mut Graph, excluded_descendants: &HashSet<ObjId>) {
+    for ei in 0..g.edges.len() {
+        let edge = &g.edges[ei];
+        if !edge.route.is_empty() {
+            continue;
+        }
+        if !excluded_descendants.contains(&edge.src) && !excluded_descendants.contains(&edge.dst) {
+            continue;
+        }
+
+        let src = g.objects[edge.src].center();
+        let dst = g.objects[edge.dst].center();
+        let mut points = vec![src, dst];
+        let (new_start, new_end) = edge.trace_to_shape(&points, 0, 1, g);
+        points = points[new_start..=new_end].to_vec();
+
+        if points.len() >= 2 {
+            let src_box = g.objects[edge.src].box_;
+            let dst_box = g.objects[edge.dst].box_;
+            let last = points.len() - 1;
+            let starting_segment = d2_geo::Segment::new(points[1], points[0]);
+            let ending_segment = d2_geo::Segment::new(points[last - 1], points[last]);
+
+            if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
+                points[0] = p;
+            }
+            if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
+                points[last] = p;
+            }
+        }
+
+        let edge = &mut g.edges[ei];
+        edge.route = points;
+        if !edge.label.value.is_empty() {
+            edge.label_position = Some("INSIDE_MIDDLE_CENTER".to_owned());
+        }
     }
 }
 
@@ -846,6 +1089,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         // Inside sequence diagrams all objects get isBold=false (Go:
         // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
         let is_container = !g.objects[i].children_array.is_empty();
+        let is_grid = g.objects[i].is_grid_diagram();
         let in_seq = g.objects[i].is_inside_sequence_diagram(g);
         let mut is_bold = !is_container && shape != "text";
         if let Some(v) = g.objects[i].style.bold.as_ref() {
@@ -859,14 +1103,14 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             .italic
             .as_ref()
             .is_some_and(|v| v.value == "true");
-        // Default font size is FONT_SIZE_M (16). Containers (and grid
-        // diagrams, which we don't yet model) get a level-based size that
-        // scales with depth: level 1 → XXL, 2 → XL, 3 → L, else M. An
-        // explicit `style.font-size` always wins. Mirrors Go
+        // Default font size is FONT_SIZE_M (16). Containers and grid
+        // diagrams get a level-based size that scales with depth:
+        // level 1 → XXL, 2 → XL, 3 → L, else M. An explicit
+        // `style.font-size` always wins. Mirrors Go
         // d2graph.Object.Text() + ContainerLevel.LabelSize().
         let font_size: i32 = if let Some(v) = g.objects[i].style.font_size.as_ref() {
             v.value.parse().unwrap_or(FONT_SIZE_M)
-        } else if !in_seq && is_container && shape != "text" {
+        } else if !in_seq && (is_container || is_grid) && shape != "text" {
             let level = g.objects[i].level(g);
             match level {
                 1 => d2_fonts::FONT_SIZE_XXL,
