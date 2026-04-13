@@ -13,6 +13,7 @@ d2-compiler = { path = "../d2-compiler" }
 d2-graph = { path = "../d2-graph" }
 d2-dagre-layout = { path = "../d2-dagre-layout" }
 d2-sequence = { path = "../d2-sequence" }
+d2-grid = { path = "../d2-grid" }
 d2-exporter = { path = "../d2-exporter" }
 d2-svg-render = { path = "../d2-svg-render" }
 d2-target = { path = "../d2-target" }
@@ -24,4 +25,5 @@ d2-geo = { path = "../d2-geo" }
 d2-latex = { path = "../d2-latex" }
 
 [dev-dependencies]
+serde = { workspace = true }
 serde_json = "1"

@@ -25,6 +25,53 @@ const INNER_LABEL_PADDING: f64 = 5.0;
 /// Default shape padding (matches Go lib/shape baseShape.defaultPadding = 40).
 const DEFAULT_SHAPE_PADDING: f64 = 40.0;
 
+fn has_none_text_transform(style: &d2_graph::Style) -> bool {
+    style
+        .text_transform
+        .as_ref()
+        .is_some_and(|v| v.value == "none")
+}
+
+fn title_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at_word_start = true;
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            if at_word_start {
+                out.extend(ch.to_uppercase());
+                at_word_start = false;
+            } else {
+                out.extend(ch.to_lowercase());
+            }
+        } else {
+            at_word_start = true;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn apply_text_transform(
+    label: &str,
+    style: &d2_graph::Style,
+    caps_lock: bool,
+    skip_caps_lock: bool,
+) -> String {
+    let mut out = label.to_string();
+    if caps_lock && !skip_caps_lock && !has_none_text_transform(style) {
+        out = out.to_uppercase();
+    }
+    if let Some(transform) = style.text_transform.as_ref().map(|v| v.value.as_str()) {
+        out = match transform {
+            "uppercase" => out.to_uppercase(),
+            "lowercase" => out.to_lowercase(),
+            "capitalize" => title_case(&out),
+            _ => out,
+        };
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // CompileOptions
 // ---------------------------------------------------------------------------
@@ -194,10 +241,96 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         return d2_sequence::layout(g);
     }
 
-    // Find all non-root objects that are sequence diagrams.
+    // If the root is a grid diagram, just run grid layout directly.
+    if g.root_obj().is_grid_diagram() {
+        return d2_grid::layout(g);
+    }
+
+    // Find all non-root objects that are sequence or grid diagrams.
     let seq_containers: Vec<ObjId> = (0..g.objects.len())
-        .filter(|&i| i != g.root && g.objects[i].is_sequence_diagram())
+        .filter(|&i| {
+            i != g.root
+                && g.objects[i].is_sequence_diagram()
+                // Match Go LayoutNested: empty nested sequence diagrams stay in
+                // the main graph and are laid out as normal shapes.
+                && !g.objects[i].children_array.is_empty()
+        })
         .collect();
+
+    // Find grid containers that need pre-layout
+    let grid_containers: Vec<ObjId> = (0..g.objects.len())
+        .filter(|&i| {
+            i != g.root
+                && g.objects[i].is_grid_diagram()
+                && !g.objects[i].children_array.is_empty()
+        })
+        .collect();
+
+    // Pre-layout grid containers: for each grid container, build a temporary
+    // sub-graph and run grid layout on it, then set the container's dimensions.
+    for &container_id in &grid_containers {
+        let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
+        if children.is_empty() {
+            continue;
+        }
+
+        // Build a temporary sub-graph for this grid container.
+        let mut sub = Graph::new();
+        sub.root_level = g.objects[container_id].level(g);
+
+        // Map original ObjIds to sub-graph ObjIds.
+        let mut id_map: HashMap<ObjId, ObjId> = HashMap::new();
+        id_map.insert(container_id, sub.root);
+
+        // Copy root properties.
+        sub.objects[sub.root].grid_rows = g.objects[container_id].grid_rows.clone();
+        sub.objects[sub.root].grid_columns = g.objects[container_id].grid_columns.clone();
+        sub.objects[sub.root].grid_gap = g.objects[container_id].grid_gap.clone();
+        sub.objects[sub.root].vertical_gap = g.objects[container_id].vertical_gap.clone();
+        sub.objects[sub.root].horizontal_gap = g.objects[container_id].horizontal_gap.clone();
+        sub.objects[sub.root].label = g.objects[container_id].label.clone();
+        sub.objects[sub.root].label_dimensions = g.objects[container_id].label_dimensions;
+        sub.objects[sub.root].label_position = g.objects[container_id].label_position.clone();
+        sub.objects[sub.root].icon = g.objects[container_id].icon.clone();
+        sub.objects[sub.root].icon_position = g.objects[container_id].icon_position.clone();
+        sub.objects[sub.root].shape = g.objects[container_id].shape.clone();
+        sub.objects[sub.root].width = g.objects[container_id].width;
+        sub.objects[sub.root].height = g.objects[container_id].height;
+        sub.objects[sub.root].top_left = g.objects[container_id].top_left;
+
+        // Add children to sub-graph.
+        for &child_id in &children {
+            let new_id = sub.objects.len();
+            let mut child_copy = g.objects[child_id].clone();
+            child_copy.parent = Some(sub.root);
+            // Clear children_array for simple grid cells (we don't handle nested containers yet)
+            sub.objects.push(child_copy);
+            sub.objects[sub.root].children_array.push(new_id);
+            id_map.insert(child_id, new_id);
+        }
+
+        // Run grid layout on the sub-graph.
+        d2_grid::layout(&mut sub)?;
+
+        // Copy results back to the main graph.
+        g.objects[container_id].width = sub.objects[sub.root].width;
+        g.objects[container_id].height = sub.objects[sub.root].height;
+        g.objects[container_id].label_position = sub.objects[sub.root].label_position.clone();
+        g.objects[container_id].icon_position = sub.objects[sub.root].icon_position.clone();
+
+        // Copy child positions and sizes back.
+        for &child_id in &children {
+            if let Some(&sub_id) = id_map.get(&child_id) {
+                g.objects[child_id].top_left = sub.objects[sub_id].top_left;
+                g.objects[child_id].width = sub.objects[sub_id].width;
+                g.objects[child_id].height = sub.objects[sub_id].height;
+                g.objects[child_id].label_position =
+                    sub.objects[sub_id].label_position.clone();
+                g.objects[child_id].icon_position =
+                    sub.objects[sub_id].icon_position.clone();
+            }
+        }
+    }
 
     if seq_containers.is_empty() {
         // No nested sequence diagrams -- just run dagre.
@@ -222,7 +355,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     // run sequence layout on it.
     /// Properties copied back from a subgraph object after sequence layout.
     struct SubObjResult {
-        x: f64, y: f64, w: f64, h: f64,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
         label_position: Option<String>,
         label: d2_graph::Label,
         shape: d2_graph::ScalarValue,
@@ -307,7 +443,8 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         // Add edges that are internal to this sequence diagram.
         let mut edge_map: HashMap<usize, usize> = HashMap::new(); // main edge index -> sub edge index
         for (ei, edge) in g.edges.iter().enumerate() {
-            if let (Some(&sub_src), Some(&sub_dst)) = (id_map.get(&edge.src), id_map.get(&edge.dst)) {
+            if let (Some(&sub_src), Some(&sub_dst)) = (id_map.get(&edge.src), id_map.get(&edge.dst))
+            {
                 let mut new_edge = edge.clone();
                 new_edge.src = sub_src;
                 new_edge.dst = sub_dst;
@@ -331,23 +468,36 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 continue;
             }
             let obj = &sub_g.objects[sub_id];
-            obj_results.insert(main_id, SubObjResult {
-                x: obj.top_left.x, y: obj.top_left.y, w: obj.width, h: obj.height,
-                label_position: obj.label_position.clone(),
-                label: obj.label.clone(),
-                shape: obj.shape.clone(),
-                z_index: obj.z_index,
-                is_sequence_diagram_note: obj.is_sequence_diagram_note,
-                is_sequence_diagram_group: obj.is_sequence_diagram_group,
-                box_: obj.box_.clone(),
-            });
+            obj_results.insert(
+                main_id,
+                SubObjResult {
+                    x: obj.top_left.x,
+                    y: obj.top_left.y,
+                    w: obj.width,
+                    h: obj.height,
+                    label_position: obj.label_position.clone(),
+                    label: obj.label.clone(),
+                    shape: obj.shape.clone(),
+                    z_index: obj.z_index,
+                    is_sequence_diagram_note: obj.is_sequence_diagram_note,
+                    is_sequence_diagram_group: obj.is_sequence_diagram_group,
+                    box_: obj.box_.clone(),
+                },
+            );
         }
 
         let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)> = HashMap::new();
         let mapped_sub_indices: HashSet<usize> = edge_map.values().copied().collect();
         for (&main_ei, &sub_ei) in &edge_map {
             let sub_edge = &sub_g.edges[sub_ei];
-            edge_routes.insert(main_ei, (sub_edge.route.clone(), sub_edge.label_position.clone(), sub_edge.z_index));
+            edge_routes.insert(
+                main_ei,
+                (
+                    sub_edge.route.clone(),
+                    sub_edge.label_position.clone(),
+                    sub_edge.z_index,
+                ),
+            );
         }
 
         // Collect newly created edges (e.g. lifelines) that sequence layout
@@ -402,19 +552,25 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     let sentinel = "__d2_seq_nested_removed__";
 
     // Save and modify: container children + descendant shapes.
-    let saved_children: Vec<(ObjId, Vec<ObjId>, Vec<ObjId>)> = seq_containers.iter().map(|&c| {
-        let children = g.objects[c].children.clone();
-        let children_array = g.objects[c].children_array.clone();
-        g.objects[c].children.clear();
-        g.objects[c].children_array.clear();
-        (c, children, children_array)
-    }).collect();
+    let saved_children: Vec<(ObjId, Vec<ObjId>, Vec<ObjId>)> = seq_containers
+        .iter()
+        .map(|&c| {
+            let children = g.objects[c].children.clone();
+            let children_array = g.objects[c].children_array.clone();
+            g.objects[c].children.clear();
+            g.objects[c].children_array.clear();
+            (c, children, children_array)
+        })
+        .collect();
 
-    let saved_shapes: Vec<(ObjId, String)> = seq_descendants.iter().map(|&d| {
-        let old = g.objects[d].shape.value.clone();
-        g.objects[d].shape.value = sentinel.to_string();
-        (d, old)
-    }).collect();
+    let saved_shapes: Vec<(ObjId, String)> = seq_descendants
+        .iter()
+        .map(|&d| {
+            let old = g.objects[d].shape.value.clone();
+            g.objects[d].shape.value = sentinel.to_string();
+            (d, old)
+        })
+        .collect();
 
     // Save and remove internal edges.
     let mut saved_edges: Vec<(usize, d2_graph::Edge)> = Vec::new();
@@ -466,7 +622,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
 
         for (&ei, (route, label_pos, z_index)) in &result.edge_routes {
             let edge = &mut g.edges[ei];
-            edge.route = route.iter().map(|p| Point::new(p.x + dx, p.y + dy)).collect();
+            edge.route = route
+                .iter()
+                .map(|p| Point::new(p.x + dx, p.y + dy))
+                .collect();
             if let Some(pos) = label_pos {
                 edge.label_position = Some(pos.clone());
             }
@@ -520,6 +679,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
     // rule (e.g. the terminal theme) force everything to mono; otherwise
     // start from SourceSansPro and let per-object `style.font: mono` opt
     // individual labels into mono. Mirrors Go d2graph.GetLabelSize.
+    let caps_lock = g.theme.as_ref().is_some_and(|t| t.special_rules.caps_lock);
     let default_family = if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
         FontFamily::SourceCodePro
     } else {
@@ -600,6 +760,16 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
     // Process objects (skip root at index 0)
     let count = g.objects.len();
     for i in 1..count {
+        g.objects[i].label.value = apply_text_transform(
+            &g.objects[i].label.value,
+            &g.objects[i].style,
+            caps_lock,
+            g.objects[i]
+                .shape
+                .value
+                .eq_ignore_ascii_case(d2_target::SHAPE_CODE)
+                || g.objects[i].language == "latex",
+        );
         let label = g.objects[i].label.value.clone();
         let shape = g.objects[i].shape.value.clone();
         // Match Go d2graph.GetLabelSize: if the object has `style.font`,
@@ -704,8 +874,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             // Go's GetDefaultSize adds INNER_LABEL_PADDING to labelDims
             // when withLabelPadding is true (no explicit dims and non-empty
             // label). Apply the same adjustment to header_w/header_h.
-            let with_label_padding =
-                desired_width == 0 && desired_height == 0 && !label.is_empty();
+            let with_label_padding = desired_width == 0 && desired_height == 0 && !label.is_empty();
             let label_pad = if with_label_padding {
                 INNER_LABEL_PADDING as i32
             } else {
@@ -755,8 +924,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             let h = if row_h > 0 {
                 let row_height = row_h + d2_target::VERTICAL_PADDING;
                 // label::PADDING = 5 (d2-label crate).
-                let header_reserve =
-                    (2 * row_height).max(padded_header_h + 2 * 5);
+                let header_reserve = (2 * row_height).max(padded_header_h + 2 * 5);
                 row_height * row_count + header_reserve
             } else {
                 // No fields/methods — Go: `2*max(12, labelDims.Height) + VerticalPadding`
@@ -973,7 +1141,8 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         // width/height and the shape isn't `text`. Code shapes instead get
         // 0.5em padding per side (fontSize on each axis). Width/height are
         // then floored to MIN_SHAPE_SIZE.
-        let with_label_padding = desired_width == 0 && desired_height == 0 && shape != "text" && !label.is_empty();
+        let with_label_padding =
+            desired_width == 0 && desired_height == 0 && shape != "text" && !label.is_empty();
         let (label_pad_x, label_pad_y) = if shape == "code" {
             (f64::from(font_size), f64::from(font_size))
         } else if with_label_padding {
@@ -1109,6 +1278,8 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
     // Process edges: measure edge labels
     let edge_count = g.edges.len();
     for i in 0..edge_count {
+        g.edges[i].label.value =
+            apply_text_transform(&g.edges[i].label.value, &g.edges[i].style, caps_lock, false);
         let label = g.edges[i].label.value.clone();
         let src_ah_label = g.edges[i]
             .src_arrowhead
@@ -1206,8 +1377,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 if has_leading && num_trailing < lines.len() {
                     h += font_size;
                 }
-                h += (d2_textmeasure::CODE_LINE_HEIGHT
-                    * f64::from(font_size * num_trailing as i32))
+                h += (d2_textmeasure::CODE_LINE_HEIGHT * f64::from(font_size * num_trailing as i32))
                     .ceil() as i32;
                 (w, h)
             } else {
