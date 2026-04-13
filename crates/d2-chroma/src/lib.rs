@@ -13,15 +13,23 @@ pub use engine::{Token, TokenType};
 pub use themes::{Theme, StyleEntry};
 
 /// Tokenize source code using the given language name.
-/// Returns None if the language is not supported.
+/// Falls back to plain-text tokenization for unsupported languages (like
+/// Go's chroma `lexers.Fallback`).
 pub fn tokenize(language: &str, source: &str) -> Option<Vec<Token>> {
     let lang = language.to_lowercase();
-    let lexer: Box<dyn engine::Lexer> = match lang.as_str() {
-        "go" | "golang" => Box::new(go_lexer::GoLexer::new()),
-        "bash" | "sh" | "ksh" | "zsh" | "shell" => Box::new(bash_lexer::BashLexer::new()),
-        _ => return None,
+    let lexer: Option<Box<dyn engine::Lexer>> = match lang.as_str() {
+        "go" | "golang" => Some(Box::new(go_lexer::GoLexer::new())),
+        "bash" | "sh" | "ksh" | "zsh" | "shell" => Some(Box::new(bash_lexer::BashLexer::new())),
+        _ => None,
     };
-    Some(lexer.tokenize(source))
+    match lexer {
+        Some(l) => Some(l.tokenize(source)),
+        // Fallback: treat entire source as plain text (chroma Fallback lexer).
+        None => Some(vec![Token {
+            token_type: engine::TokenType::Text,
+            value: source.to_owned(),
+        }]),
+    }
 }
 
 /// Split a flat token list into lines, exactly matching chroma.SplitTokensIntoLines.
