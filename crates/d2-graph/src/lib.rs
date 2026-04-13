@@ -1158,7 +1158,7 @@ impl Object {
 
     /// Is this a grid diagram?
     pub fn is_grid_diagram(&self) -> bool {
-        false // simplified
+        self.grid_rows.is_some() || self.grid_columns.is_some()
     }
 
     /// Get label top-left position (simplified).

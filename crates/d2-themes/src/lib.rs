@@ -493,7 +493,7 @@ impl ThemableElement {
             }
         } else if !self.stroke.is_empty() {
             let s = if d2_color::is_gradient(&self.stroke) {
-                format!("url('#{}'))", d2_color::unique_gradient_id(&self.stroke))
+                format!("url('#{}')", d2_color::unique_gradient_id(&self.stroke))
             } else {
                 self.stroke.clone()
             };
@@ -507,7 +507,7 @@ impl ThemableElement {
             }
         } else if !self.fill.is_empty() {
             let s = if d2_color::is_gradient(&self.fill) {
-                format!("url('#{}'))", d2_color::unique_gradient_id(&self.fill))
+                format!("url('#{}')", d2_color::unique_gradient_id(&self.fill))
             } else {
                 self.fill.clone()
             };

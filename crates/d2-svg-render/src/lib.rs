@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
+use d2_ast;
 use d2_color;
 use d2_geo;
 use d2_label;
@@ -26,11 +27,70 @@ const TOOLTIP_ICON_TEMPLATE: &str = include_str!("tooltip.svg");
 /// Raw SVG template used when a shape has a link. Contains two positional
 /// placeholders for diagram hash and shape SVG-ID (Go uses `%[1]s`/`%[2]s`).
 const LINK_ICON_TEMPLATE: &str = include_str!("link.svg");
+const DOTS_PATTERN_TEMPLATE: &str = include_str!("dots.txt");
+const LINES_PATTERN_TEMPLATE: &str = include_str!("lines.txt");
+const GRAIN_PATTERN_TEMPLATE: &str = include_str!("grain.txt");
+const PAPER_PATTERN_TEMPLATE: &str = include_str!("paper.txt");
 
 fn format_appendix_icon(template: &str, diagram_hash: &str, svg_id: &str) -> String {
     template
         .replace("%[1]s", diagram_hash)
         .replace("%[2]s", svg_id)
+}
+
+fn format_pattern_template(template: &str, diagram_hash: &str) -> String {
+    template
+        .replace("%[1]s", diagram_hash)
+        .replace("%s", diagram_hash)
+}
+
+fn append_fill_pattern_defs(
+    upper_buf: &mut String,
+    source: &str,
+    diagram_hash: &str,
+    root_fill_pattern: &str,
+) {
+    let mut style_rules = String::new();
+    let mut pattern_defs = String::new();
+
+    for pattern in d2_ast::FILL_PATTERNS {
+        if *pattern == "none" {
+            continue;
+        }
+        if !source.contains(&format!("{}-overlay", pattern)) && root_fill_pattern != *pattern {
+            continue;
+        }
+
+        let template = match *pattern {
+            "dots" => DOTS_PATTERN_TEMPLATE,
+            "lines" => LINES_PATTERN_TEMPLATE,
+            "grain" => GRAIN_PATTERN_TEMPLATE,
+            "paper" => PAPER_PATTERN_TEMPLATE,
+            _ => continue,
+        };
+        pattern_defs.push_str(&format_pattern_template(template, diagram_hash));
+
+        write!(
+            style_rules,
+            r#"
+.{}-overlay {{
+	fill: url(#{}-{});
+	mix-blend-mode: multiply;
+}}"#,
+            pattern, pattern, diagram_hash
+        )
+        .unwrap();
+    }
+
+    if !pattern_defs.is_empty() {
+        write!(
+            upper_buf,
+            r#"<style type="text/css"><![CDATA[{}]]></style>"#,
+            style_rules
+        )
+        .unwrap();
+        write!(upper_buf, "<defs>{}</defs>", pattern_defs).unwrap();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +250,12 @@ fn connection_css_style(c: &d2_target::Connection) -> String {
                 dash_offset = 10.0;
             }
             write!(out, "stroke-dashoffset:{:.6};", dash_offset * (dash + gap)).unwrap();
-            write!(out, "animation: dashdraw {:.6}s linear infinite;", gap * 0.5).unwrap();
+            write!(
+                out,
+                "animation: dashdraw {:.6}s linear infinite;",
+                gap * 0.5
+            )
+            .unwrap();
         }
     }
     out
@@ -537,7 +602,7 @@ fn arrowhead_marker(
                 height / 2.0 - inset,
             );
             cross_el.transform = format!(
-                "translate({}, {}) rotate(45)",
+                "translate({:.6}, {:.6}) rotate(45)",
                 -new_ox + width / 2.0,
                 -new_oy + height / 2.0
             );
@@ -1070,11 +1135,9 @@ fn draw_connection(
                         .replace(r#"<?xml version="1.0" encoding="UTF-8"?>"#, "")
                         .replace(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">"#, "");
 
-                    let stroke_color = if connection.stroke.is_empty() {
-                        "#0A0F25"
-                    } else {
-                        &connection.stroke
-                    };
+                    // Match Go: use connection.Color (text color), not stroke.
+                    // ThemableElement renders: transform, color attr, color class.
+                    let text_color = &connection.text.color;
                     let route = &connection.route;
                     if !route.is_empty() {
                         let label_pos_str = if connection.label_position.is_empty() {
@@ -1091,9 +1154,27 @@ fn draw_connection(
                             connection.text.label_width as f64,
                             connection.text.label_height as f64,
                         ) {
+                            // Go ThemableElement emits:
+                            //   transform="translate(%f %f)" color="resolved" class=" color-CODE"
+                            let (color_attr, class_attr) =
+                                if d2_color::is_theme_color(text_color) {
+                                    let resolved = inline_theme
+                                        .map(|t| d2_themes::resolve_theme_color(t, text_color))
+                                        .unwrap_or_default();
+                                    let ca = if resolved.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(r#" color="{}""#, resolved)
+                                    };
+                                    (ca, format!(r#" class=" color-{}""#, text_color))
+                                } else if !text_color.is_empty() {
+                                    (format!(r#" color="{}""#, text_color), String::new())
+                                } else {
+                                    (String::new(), String::new())
+                                };
                             buf.push_str(&format!(
-                                r#"<g transform="translate({} {})" style="color:{}">{}</g>"#,
-                                pt.x, pt.y, stroke_color, latex_svg
+                                r#"<g transform="translate({:.6} {:.6})"{}{}>{}</g>"#,
+                                pt.x, pt.y, color_attr, class_attr, latex_svg
                             ));
                         }
                     }
@@ -1101,10 +1182,9 @@ fn draw_connection(
             } else if !connection.text.language.is_empty() {
                 // Code block rendering with syntax highlighting.
                 // Mirrors Go drawConnection lines 1207-1252.
-                if let Some(tokens) = d2_chroma::tokenize(
-                    &connection.text.language,
-                    &connection.text.label,
-                ) {
+                if let Some(tokens) =
+                    d2_chroma::tokenize(&connection.text.language, &connection.text.label)
+                {
                     let line_height: f64 = d2_textmeasure::CODE_LINE_HEIGHT;
                     let lines = d2_chroma::split_into_lines(&tokens);
 
@@ -1115,15 +1195,11 @@ fn draw_connection(
                             "catppuccin-mocha"
                         };
                         let theme = d2_chroma::get_theme(theme_name).unwrap();
-                        let class =
-                            if is_light { "light-code" } else { "dark-code" };
+                        let class = if is_light { "light-code" } else { "dark-code" };
 
                         let font_size_attr =
                             if connection.text.font_size != d2_fonts::FONT_SIZE_M as i32 {
-                                format!(
-                                    " style=\"font-size:{}\"",
-                                    connection.text.font_size,
-                                )
+                                format!(" style=\"font-size:{}\"", connection.text.font_size,)
                             } else {
                                 String::new()
                             };
@@ -1148,8 +1224,7 @@ fn draw_connection(
                                 if attr.is_empty() {
                                     buf.push_str(&text);
                                 } else {
-                                    write!(buf, "<tspan {}>{}</tspan>", attr, text)
-                                        .unwrap();
+                                    write!(buf, "<tspan {}>{}</tspan>", attr, text).unwrap();
                                 }
                             }
                             buf.push_str("</text>");
@@ -1203,8 +1278,21 @@ fn draw_connection(
                     text_el.x.unwrap(),
                     connection.text.label_height as f64,
                 );
-                text_el.fill = connection.get_font_color().to_owned();
-                buf.push_str(&text_el.render());
+
+                if !connection.link.is_empty() {
+                    // Go: wraps in <a> tag, adds text-underline text-link classes.
+                    // When linked, fill is NOT set (handled by CSS .text-link).
+                    text_el.class_name.push_str(" text-underline text-link");
+                    buf.push_str(&format!(
+                        r#"<a href="{link}" xlink:href="{link}">"#,
+                        link = d2_svg_path::escape_text(&connection.link)
+                    ));
+                    buf.push_str(&text_el.render());
+                    buf.push_str("</a>");
+                } else {
+                    text_el.fill = connection.get_font_color().to_owned();
+                    buf.push_str(&text_el.render());
+                }
             }
         }
     }
@@ -1974,10 +2062,9 @@ fn draw_shape(
             }
         } else if !target_shape.text.language.is_empty() {
             // Code block rendering with syntax highlighting.
-            if let Some(tokens) = d2_chroma::tokenize(
-                &target_shape.text.language,
-                &target_shape.text.label,
-            ) {
+            if let Some(tokens) =
+                d2_chroma::tokenize(&target_shape.text.language, &target_shape.text.label)
+            {
                 let line_height: f64 = 1.3; // CODE_LINE_HEIGHT
                 let lines = d2_chroma::split_into_lines(&tokens);
 
@@ -1999,16 +2086,12 @@ fn draw_shape(
                     write!(
                         buf,
                         "<g transform=\"translate({:.6} {:.6})\" class=\"{}\"{}>",
-                        the_box.top_left.x,
-                        the_box.top_left.y,
-                        class,
-                        font_size_attr,
+                        the_box.top_left.x, the_box.top_left.y, class, font_size_attr,
                     )
                     .unwrap();
 
                     // Background rect
-                    let mut rect_el =
-                        d2_themes::ThemableElement::new("rect", inline_theme);
+                    let mut rect_el = d2_themes::ThemableElement::new("rect", inline_theme);
                     rect_el.width = Some(target_shape.width as f64);
                     rect_el.height = Some(target_shape.height as f64);
                     rect_el.stroke = target_shape.stroke.clone();
@@ -2038,17 +2121,11 @@ fn draw_shape(
 
                         for tok in line_tokens {
                             let escaped = d2_chroma::svg_escape(&tok.value);
-                            let attr =
-                                d2_chroma::style_attr(&theme, tok.token_type);
+                            let attr = d2_chroma::style_attr(&theme, tok.token_type);
                             if attr.is_empty() {
                                 buf.push_str(&escaped);
                             } else {
-                                write!(
-                                    buf,
-                                    "<tspan {}>{}</tspan>",
-                                    attr, escaped,
-                                )
-                                .unwrap();
+                                write!(buf, "<tspan {}>{}</tspan>", attr, escaped,).unwrap();
                             }
                         }
 
@@ -2059,12 +2136,9 @@ fn draw_shape(
                 }
             } else {
                 // Unsupported language: fall back to plain text rendering
-                let mut text_el =
-                    d2_themes::ThemableElement::new("text", inline_theme);
-                text_el.x =
-                    Some(label_tl.x + target_shape.text.label_width as f64 / 2.0);
-                text_el.y =
-                    Some(label_tl.y + target_shape.text.font_size as f64);
+                let mut text_el = d2_themes::ThemableElement::new("text", inline_theme);
+                text_el.x = Some(label_tl.x + target_shape.text.label_width as f64 / 2.0);
+                text_el.y = Some(label_tl.y + target_shape.text.font_size as f64);
                 text_el.fill = target_shape.get_font_color().to_owned();
                 text_el.class_name = "text-mono".to_owned();
                 text_el.style = format!(
@@ -2851,15 +2925,7 @@ fn clip_path_for_border_radius(diagram_hash: &str, shape: &d2_target::Shape) -> 
         )
         .unwrap();
         write!(out, "L {:.6} {:.6} ", x + r, y + h).unwrap();
-        write!(
-            out,
-            "S {:.6} {:.6} {:.6} {:.6}",
-            x,
-            y + h,
-            x,
-            y + h - r,
-        )
-        .unwrap();
+        write!(out, "S {:.6} {:.6} {:.6} {:.6}", x, y + h, x, y + h - r,).unwrap();
         write!(out, "L {:.6} {:.6}", x, y + r).unwrap();
     }
 
@@ -3808,6 +3874,12 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
             .unwrap();
         }
     }
+    append_fill_pattern_defs(
+        &mut upper_buf,
+        &buf,
+        &diagram_hash,
+        &diagram.root.fill_pattern,
+    );
 
     // Background element
     let half_sw = (diagram.root.stroke_width as f64 / 2.0).ceil() as i32;
@@ -3830,7 +3902,7 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
             diagram.root.stroke_width as f64,
             diagram.root.stroke_dash,
         );
-        bg_el.stroke_dash_array = format!("{}, {}", dash, gap);
+        bg_el.stroke_dash_array = format!("{:.6}, {:.6}", dash, gap);
     }
     bg_el.attributes = format!(r#"stroke-width="{}""#, diagram.root.stroke_width);
 

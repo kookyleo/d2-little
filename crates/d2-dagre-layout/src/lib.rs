@@ -785,13 +785,11 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
             let mut height = edge.label_dimensions.height;
 
             // Count parallel edges for gap spacing
-            let num_parallel = g
-                .edges
-                .iter()
-                .filter(|e2| {
-                    let (s2, d2) = (e2.src, e2.dst);
-                    // Simplified: check direct src/dst match
-                    (s2 == edge.src && d2 == edge.dst) || (s2 == edge.dst && d2 == edge.src)
+            let num_parallel = (0..g.edges.len())
+                .filter(|ei2| !excluded_edges.contains(ei2))
+                .filter(|&ei2| {
+                    let (s2, d2) = get_edge_endpoints(g, ei2);
+                    (s2 == src && d2 == dst) || (s2 == dst && d2 == src)
                 })
                 .count();
 
@@ -1044,7 +1042,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     points[0] = *p;
                 }
             }
-            if !src_is_rect {
+            if src_label_hit.is_none() && !src_is_rect {
                 let bbox = src_trace_box
                     .unwrap_or_else(|| d2_geo::Box2D::new(
                         g.objects[src_id].top_left,
@@ -1092,7 +1090,7 @@ pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), Stri
                     points[last] = *p;
                 }
             }
-            if !dst_is_rect {
+            if dst_label_hit.is_none() && !dst_is_rect {
                 let bbox = dst_trace_box
                     .unwrap_or_else(|| d2_geo::Box2D::new(
                         g.objects[dst_id].top_left,
