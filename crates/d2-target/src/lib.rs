@@ -1172,11 +1172,17 @@ fn arrowhead_label_tl(c: &Connection, is_dst: bool) -> Option<(f64, f64)> {
     let offset_x = stroke_width / 2.0 + padding + width / 2.0;
     let offset_y = stroke_width / 2.0 + padding + height / 2.0;
 
-    let mut label_cx = base_point.x + normal_x * offset_x;
-    let mut label_cy = base_point.y + normal_y * offset_y;
+    let label_cx = base_point.x + normal_x * offset_x;
+    let label_cy = base_point.y + normal_y * offset_y;
+
+    // Convert center → top-left with chop_precision (matches Go's
+    // GetPointOnRoute which chops right before returning).
+    let mut label_tl_x = chop_precision_f32_round(label_cx - width / 2.0);
+    let mut label_tl_y = chop_precision_f32_round(label_cy - height / 2.0);
 
     // If arrow is larger than label's fit offset, shift further to avoid
-    // overlap with the arrowhead. Matches Go GetArrowheadLabelPosition.
+    // overlap with the arrowhead. Go GetArrowheadLabelPosition adds this
+    // AFTER the chop_precision in GetPointOnRoute, without re-chopping.
     let arrow_size: f64 = if is_dst {
         if !matches!(c.dst_arrow, Arrowhead::None) {
             c.dst_arrow.dimensions(stroke_width).1
@@ -1191,12 +1197,19 @@ fn arrowhead_label_tl(c: &Connection, is_dst: bool) -> Option<(f64, f64)> {
     if arrow_size > 0.0 {
         let extra = (arrow_size / 2.0 + ARROWHEAD_PADDING) - stroke_width / 2.0 - padding;
         if extra > 0.0 {
-            label_cx += normal_x * extra;
-            label_cy += normal_y * extra;
+            label_tl_x += normal_x * extra;
+            label_tl_y += normal_y * extra;
         }
     }
 
-    Some((label_cx - width / 2.0, label_cy - height / 2.0))
+    Some((label_tl_x, label_tl_y))
+}
+
+/// chop_precision matching Go d2label.chopPrecision: cast to f32 then
+/// round to the nearest integer (after multiplying/dividing by 10000).
+fn chop_precision_f32_round(f: f64) -> f64 {
+    let r = ((f as f32 * 10000.0) as f64 / 10000.0).round();
+    if r == 0.0 { 0.0 } else { r }
 }
 
 /// positions the result is `min(minDim, max(DEFAULT_ICON_SIZE, ceil(minDim/2)))`,
