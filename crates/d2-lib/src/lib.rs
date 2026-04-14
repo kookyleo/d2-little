@@ -712,7 +712,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         sub.objects[sub.root].height = g.objects[container_id].height;
         sub.objects[sub.root].width_attr = g.objects[container_id].width_attr.clone();
         sub.objects[sub.root].height_attr = g.objects[container_id].height_attr.clone();
-        sub.objects[sub.root].top_left = g.objects[container_id].top_left;
+        // Leave sub.root.top_left at (0,0) so the nested grid layout positions its
+        // contents relative to (0,0). The container's actual top_left is re-applied
+        // later (see grid_children_map post-processing).
+        sub.objects[sub.root].top_left = Point::new(0.0, 0.0);
         sub.objects[sub.root].style = g.objects[container_id].style.clone();
 
         // Add children to sub-graph.
@@ -724,8 +727,11 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             child_copy.parent = Some(sub.root);
             let was_container = !child_copy.children_array.is_empty();
             child_copy.children_array.clear();
-            // Preserve container knowledge for label positioning
-            if was_container && child_copy.label_position.is_none() {
+            // Preserve container knowledge for label positioning. Only set
+            // this for containers with a non-empty label; Go's grid layout
+            // guards the same defaulting with `o.HasLabel()`, so containers
+            // like `TALA: ""` must stay without a label position.
+            if was_container && child_copy.label_position.is_none() && child_copy.has_label() {
                 child_copy.label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
             }
             sub.objects.push(child_copy);
