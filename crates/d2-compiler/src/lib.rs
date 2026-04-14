@@ -86,6 +86,39 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
     Ok(g)
 }
 
+/// Port of Go `d2ir.compileLink`: if the link value starts with a board
+/// reserved word (`layers`, `scenarios`, `steps`) and isn't absolute
+/// (doesn't start with `root.`), prepend `root.` to form the absolute
+/// board path. Remote URLs (with scheme or leading `/`) and other values
+/// are passed through unchanged.
+fn normalize_board_link(val: &str) -> String {
+    // Detect remote URL (scheme or leading `/`)
+    if val.starts_with('/') {
+        return val.to_owned();
+    }
+    let bytes = val.as_bytes();
+    if !bytes.is_empty() && bytes[0].is_ascii_alphabetic() {
+        let mut i = 1;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b':' {
+                return val.to_owned();
+            }
+            if !(b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+                break;
+            }
+            i += 1;
+        }
+    }
+    // Extract first path segment
+    let first = val.split('.').next().unwrap_or("");
+    let lower = first.to_ascii_lowercase();
+    if (lower == "layers" || lower == "scenarios" || lower == "steps") {
+        return format!("root.{}", val);
+    }
+    val.to_owned()
+}
+
 /// Port of Go `d2compiler.validateBoardLinks`: a shape's `link` is kept
 /// only if it is a remote URL (has a scheme or begins with `/`) or a
 /// D2 keypath starting with `root`. Everything else (like `link: foo`
@@ -1170,7 +1203,8 @@ impl Compiler {
             }
             "link" => {
                 if let Some(val) = primary_str {
-                    g.objects[obj].link = Some(ScalarValue { value: val });
+                    let normalized = normalize_board_link(&val);
+                    g.objects[obj].link = Some(ScalarValue { value: normalized });
                 }
             }
             "near" => {
@@ -1527,7 +1561,8 @@ impl Compiler {
             }
             "link" => {
                 if let Some(val) = primary_str {
-                    g.edges[edge_idx].link = Some(ScalarValue { value: val });
+                    let normalized = normalize_board_link(&val);
+                    g.edges[edge_idx].link = Some(ScalarValue { value: normalized });
                 }
             }
             "class" => {
