@@ -1047,7 +1047,7 @@ pub fn layout_with_exclude(
     adjust_cross_rank_spacing(g, ranksep as f64, !is_horizontal, &excluded_objects);
 
     // Shrink containers around their children + padding.
-    fit_container_padding(g);
+    fit_container_padding(g, &excluded_objects);
 
     // Final edge post-processing (mirrors the second `for _, edge := range
     // g.Edges` block in Go `d2dagrelayout.Layout`). At this point node
@@ -1304,25 +1304,33 @@ pub fn layout_with_exclude(
 /// overlap detection are left alone for now. Those rely on `Object.Spacing`
 /// returning per-direction margin/padding values that account for label and
 /// icon positioning, which we haven't implemented yet.
-fn fit_container_padding(g: &mut Graph) {
+fn fit_container_padding(g: &mut Graph, excluded_objects: &HashSet<ObjId>) {
     let root_children: Vec<ObjId> = g.objects[g.root].children_array.clone();
     for child_id in root_children {
         if is_constant_near_key(g.objects[child_id].near_key.as_deref()) {
             continue;
         }
-        fit_padding(g, child_id);
+        if excluded_objects.contains(&child_id) {
+            continue;
+        }
+        fit_padding(g, child_id, excluded_objects);
     }
 }
 
-fn fit_padding(g: &mut Graph, obj_id: ObjId) {
+fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) {
     let dsl_shape = g.objects[obj_id].shape.value.clone();
     let is_container = !g.objects[obj_id].children_array.is_empty();
 
     // Recurse depth-first regardless: nested containers must be sized first
     // so the parent's inner-box computation sees their final dimensions.
-    let children: Vec<ObjId> = g.objects[obj_id].children_array.clone();
+    let children: Vec<ObjId> = g.objects[obj_id]
+        .children_array
+        .iter()
+        .copied()
+        .filter(|c| !excluded_objects.contains(c))
+        .collect();
     for child in &children {
-        fit_padding(g, *child);
+        fit_padding(g, *child, excluded_objects);
     }
 
     // Match Go: only square-type containers (rectangle, sequence diagram,
@@ -1761,6 +1769,7 @@ use d2_geo::Spacing;
 fn get_ranks(
     g: &Graph,
     is_horizontal: bool,
+    excluded_objects: &HashSet<ObjId>,
 ) -> (
     Vec<Vec<ObjId>>,
     HashMap<ObjId, usize>,
@@ -1774,6 +1783,13 @@ fn get_ranks(
             continue;
         }
         if obj.is_container() {
+            continue;
+        }
+        // Skip objects that were physically extracted from the graph before
+        // dagre ran (grid descendants, sequence diagram internals). Mirrors
+        // Go's behaviour: those objects live in their own sub-graph while
+        // dagre runs so `g.Objects` doesn't see them at all.
+        if excluded_objects.contains(&i) {
             continue;
         }
         // Skip objects removed from layout (e.g. sequence diagram internals
@@ -1804,6 +1820,9 @@ fn get_ranks(
     let mut ending_parent_ranks: HashMap<ObjId, usize> = HashMap::new();
     for (i, obj) in g.objects.iter().enumerate() {
         if i == g.root || obj.is_container() {
+            continue;
+        }
+        if excluded_objects.contains(&i) {
             continue;
         }
         // Skip sentinel-shaped objects (same filter as rank assignment above).
@@ -1839,11 +1858,20 @@ fn get_ranks(
 /// Shift everything at-or-below `start` down by `distance` (mirrors Go
 /// `shiftDown`). Also shifts edge routes with guards to avoid collapsing
 /// endpoints onto static neighbours.
-fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
+fn shift_down(
+    g: &mut Graph,
+    start: f64,
+    distance: f64,
+    is_horizontal: bool,
+    excluded_objects: &HashSet<ObjId>,
+) {
     if is_horizontal {
         let edge_len = g.edges.len();
         for ei in 0..edge_len {
             let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            if excluded_objects.contains(&src_id) || excluded_objects.contains(&dst_id) {
+                continue;
+            }
             let src_right = g.objects[src_id].top_left.x + g.objects[src_id].width;
             let src_left = g.objects[src_id].top_left.x;
             let dst_right = g.objects[dst_id].top_left.x + g.objects[dst_id].width;
@@ -1878,6 +1906,9 @@ fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
             if i == g.root {
                 continue;
             }
+            if excluded_objects.contains(&i) {
+                continue;
+            }
             if g.objects[i].top_left.x < start {
                 continue;
             }
@@ -1887,6 +1918,9 @@ fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
         let edge_len = g.edges.len();
         for ei in 0..edge_len {
             let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            if excluded_objects.contains(&src_id) || excluded_objects.contains(&dst_id) {
+                continue;
+            }
             let src_bot = g.objects[src_id].top_left.y + g.objects[src_id].height;
             let src_top = g.objects[src_id].top_left.y;
             let dst_bot = g.objects[dst_id].top_left.y + g.objects[dst_id].height;
@@ -1921,6 +1955,9 @@ fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
             if i == g.root {
                 continue;
             }
+            if excluded_objects.contains(&i) {
+                continue;
+            }
             if g.objects[i].top_left.y < start {
                 continue;
             }
@@ -1931,11 +1968,20 @@ fn shift_down(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
 
 /// Mirror of Go `shiftUp`: shift everything at-or-above `start` up by
 /// `distance`, with the same edge-endpoint guards as `shift_down`.
-fn shift_up(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
+fn shift_up(
+    g: &mut Graph,
+    start: f64,
+    distance: f64,
+    is_horizontal: bool,
+    excluded_objects: &HashSet<ObjId>,
+) {
     if is_horizontal {
         let edge_len = g.edges.len();
         for ei in 0..edge_len {
             let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            if excluded_objects.contains(&src_id) || excluded_objects.contains(&dst_id) {
+                continue;
+            }
             let src_left = g.objects[src_id].top_left.x;
             let src_right = g.objects[src_id].top_left.x + g.objects[src_id].width;
             let dst_left = g.objects[dst_id].top_left.x;
@@ -1970,6 +2016,9 @@ fn shift_up(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
             if i == g.root {
                 continue;
             }
+            if excluded_objects.contains(&i) {
+                continue;
+            }
             if start < g.objects[i].top_left.x {
                 continue;
             }
@@ -1979,6 +2028,9 @@ fn shift_up(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
         let edge_len = g.edges.len();
         for ei in 0..edge_len {
             let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+            if excluded_objects.contains(&src_id) || excluded_objects.contains(&dst_id) {
+                continue;
+            }
             let src_top = g.objects[src_id].top_left.y;
             let src_bot = g.objects[src_id].top_left.y + g.objects[src_id].height;
             let dst_top = g.objects[dst_id].top_left.y;
@@ -2015,6 +2067,9 @@ fn shift_up(g: &mut Graph, start: f64, distance: f64, is_horizontal: bool) {
             if i == g.root {
                 continue;
             }
+            if excluded_objects.contains(&i) {
+                continue;
+            }
             if start < g.objects[i].top_left.y {
                 continue;
             }
@@ -2041,6 +2096,7 @@ fn shift_reachable_down(
     distance: f64,
     is_horizontal: bool,
     is_margin: bool,
+    excluded_objects: &HashSet<ObjId>,
 ) -> HashSet<ObjId> {
     const THRESHOLD: f64 = 100.0;
 
@@ -2069,6 +2125,9 @@ fn shift_reachable_down(
                 if oi == g.root || oi == curr {
                     continue;
                 }
+                if excluded_objects.contains(&oi) {
+                    continue;
+                }
                 if g.objects[curr].is_descendant_of(curr, oi, g) {
                     continue;
                 }
@@ -2090,6 +2149,9 @@ fn shift_reachable_down(
             }
             for oi in 0..g.objects.len() {
                 if oi == g.root || oi == curr {
+                    continue;
+                }
+                if excluded_objects.contains(&oi) {
                     continue;
                 }
                 if g.objects[curr].is_descendant_of(curr, oi, g) {
@@ -2118,6 +2180,9 @@ fn shift_reachable_down(
     'outer: loop {
         while let Some(curr) = (!q.is_empty()).then(|| q.remove(0)) {
             if seen.contains(&curr) {
+                continue;
+            }
+            if excluded_objects.contains(&curr) {
                 continue;
             }
 
@@ -2165,6 +2230,9 @@ fn shift_reachable_down(
             // Walk into children.
             let children: Vec<ObjId> = g.objects[curr].children_array.clone();
             for c in children {
+                if excluded_objects.contains(&c) {
+                    continue;
+                }
                 if !seen.contains(&c) {
                     q.push(c);
                 }
@@ -2176,6 +2244,9 @@ fn shift_reachable_down(
                     continue;
                 }
                 let (src, dst) = (g.edges[ei].src, g.edges[ei].dst);
+                if excluded_objects.contains(&src) || excluded_objects.contains(&dst) {
+                    continue;
+                }
                 if src == curr && dst == curr {
                     // Self-edge: shift every route point.
                     let route = &mut g.edges[ei].route;
@@ -2420,9 +2491,8 @@ fn adjust_rank_spacing(
     is_horizontal: bool,
     excluded_objects: &HashSet<ObjId>,
 ) {
-    let _ = excluded_objects; // currently unused; grid containers themselves gate via is_grid_diagram
     let (ranks, object_ranks, starting_parent_ranks, ending_parent_ranks) =
-        get_ranks(g, is_horizontal);
+        get_ranks(g, is_horizontal, excluded_objects);
 
     for rank in (0..ranks.len()).rev() {
         let mut starting_parents: Vec<ObjId> = Vec::new();
@@ -2459,6 +2529,9 @@ fn adjust_rank_spacing(
                 }
                 let children: Vec<ObjId> = g.objects[parent].children_array.clone();
                 for child in children {
+                    if excluded_objects.contains(&child) {
+                        continue;
+                    }
                     let in_rank = match object_ranks.get(&child) {
                         Some(&r) => r == rank,
                         None => starting_parent_ranks.get(&child).copied() == Some(rank),
@@ -2505,6 +2578,9 @@ fn adjust_rank_spacing(
                 }
                 let children: Vec<ObjId> = g.objects[parent].children_array.clone();
                 for child in children {
+                    if excluded_objects.contains(&child) {
+                        continue;
+                    }
                     let in_rank = match object_ranks.get(&child) {
                         Some(&r) => r == rank,
                         None => ending_parent_ranks.get(&child).copied() == Some(rank),
@@ -2558,6 +2634,9 @@ fn adjust_rank_spacing(
                     if oi == g.root {
                         continue;
                     }
+                    if excluded_objects.contains(&oi) {
+                        continue;
+                    }
                     if !g.objects[oi].is_container() {
                         continue;
                     }
@@ -2577,7 +2656,7 @@ fn adjust_rank_spacing(
                         }
                     }
                 }
-                shift_down(g, pos, end_delta, is_horizontal);
+                shift_down(g, pos, end_delta, is_horizontal, excluded_objects);
             }
         }
 
@@ -2601,6 +2680,9 @@ fn adjust_rank_spacing(
                     if oi == g.root {
                         continue;
                     }
+                    if excluded_objects.contains(&oi) {
+                        continue;
+                    }
                     if !g.objects[oi].is_container() {
                         continue;
                     }
@@ -2616,7 +2698,7 @@ fn adjust_rank_spacing(
                         }
                     }
                 }
-                shift_up(g, pos, start_delta, is_horizontal);
+                shift_up(g, pos, start_delta, is_horizontal, excluded_objects);
             }
         }
     }
@@ -2658,7 +2740,7 @@ fn adjust_cross_rank_spacing(
             if margin.bottom > 0.0 {
                 let start = g.objects[obj].top_left.y + g.objects[obj].height;
                 let increased =
-                    shift_reachable_down(g, obj, start, margin.bottom, is_horizontal, true);
+                    shift_reachable_down(g, obj, start, margin.bottom, is_horizontal, true, excluded_objects);
                 for o in increased {
                     let e = prev_bottom.entry(o).or_insert(0.0);
                     if margin.bottom > *e {
@@ -2668,7 +2750,7 @@ fn adjust_cross_rank_spacing(
             }
             if padding.bottom > 0.0 {
                 let start = g.objects[obj].top_left.y + g.objects[obj].height;
-                shift_reachable_down(g, obj, start, padding.bottom, is_horizontal, false);
+                shift_reachable_down(g, obj, start, padding.bottom, is_horizontal, false, excluded_objects);
                 g.objects[obj].height += padding.bottom;
             }
             if let Some(&pm) = prev_top.get(&obj) {
@@ -2677,7 +2759,7 @@ fn adjust_cross_rank_spacing(
             if margin.top > 0.0 {
                 let start = g.objects[obj].top_left.y;
                 let increased =
-                    shift_reachable_down(g, obj, start, margin.top, is_horizontal, true);
+                    shift_reachable_down(g, obj, start, margin.top, is_horizontal, true, excluded_objects);
                 for o in increased {
                     let e = prev_top.entry(o).or_insert(0.0);
                     if margin.top > *e {
@@ -2687,7 +2769,7 @@ fn adjust_cross_rank_spacing(
             }
             if padding.top > 0.0 {
                 let start = g.objects[obj].top_left.y;
-                shift_reachable_down(g, obj, start, padding.top, is_horizontal, false);
+                shift_reachable_down(g, obj, start, padding.top, is_horizontal, false, excluded_objects);
                 g.objects[obj].height += padding.top;
             }
         } else {
@@ -2697,7 +2779,7 @@ fn adjust_cross_rank_spacing(
             if margin.right > 0.0 {
                 let start = g.objects[obj].top_left.x + g.objects[obj].width;
                 let increased =
-                    shift_reachable_down(g, obj, start, margin.right, is_horizontal, true);
+                    shift_reachable_down(g, obj, start, margin.right, is_horizontal, true, excluded_objects);
                 for o in increased {
                     let e = prev_right.entry(o).or_insert(0.0);
                     if margin.right > *e {
@@ -2707,7 +2789,7 @@ fn adjust_cross_rank_spacing(
             }
             if padding.right > 0.0 {
                 let start = g.objects[obj].top_left.x + g.objects[obj].width;
-                shift_reachable_down(g, obj, start, padding.right, is_horizontal, false);
+                shift_reachable_down(g, obj, start, padding.right, is_horizontal, false, excluded_objects);
                 g.objects[obj].width += padding.right;
             }
             if let Some(&pm) = prev_left.get(&obj) {
@@ -2716,7 +2798,7 @@ fn adjust_cross_rank_spacing(
             if margin.left > 0.0 {
                 let start = g.objects[obj].top_left.x;
                 let increased =
-                    shift_reachable_down(g, obj, start, margin.left, is_horizontal, true);
+                    shift_reachable_down(g, obj, start, margin.left, is_horizontal, true, excluded_objects);
                 for o in increased {
                     let e = prev_left.entry(o).or_insert(0.0);
                     if margin.left > *e {
@@ -2726,7 +2808,7 @@ fn adjust_cross_rank_spacing(
             }
             if padding.left > 0.0 {
                 let start = g.objects[obj].top_left.x;
-                shift_reachable_down(g, obj, start, padding.left, is_horizontal, false);
+                shift_reachable_down(g, obj, start, padding.left, is_horizontal, false, excluded_objects);
                 g.objects[obj].width += padding.left;
             }
         }
@@ -2735,6 +2817,9 @@ fn adjust_cross_rank_spacing(
     // Update box_ after all shifting.
     for i in 0..g.objects.len() {
         if i == g.root {
+            continue;
+        }
+        if excluded_objects.contains(&i) {
             continue;
         }
         g.objects[i].update_box();
