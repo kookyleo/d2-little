@@ -929,15 +929,31 @@ fn route_direct_edges_for_excluded_descendants(g: &mut Graph, excluded_descendan
         points = points[new_start..=new_end].to_vec();
 
         if points.len() >= 2 {
-            let src_box = g.objects[edge.src].box_;
-            let dst_box = g.objects[edge.dst].box_;
+            // Rebuild src/dst boxes from current top_left/width/height rather
+            // than reading `box_`, which is stale for grid descendants whose
+            // container sits at the origin (the move_obj pass is a no-op in
+            // that case, and the dagre `update_box` pass skips excluded
+            // objects).
+            let src_box = d2_geo::Box2D::new(
+                g.objects[edge.src].top_left,
+                g.objects[edge.src].width,
+                g.objects[edge.src].height,
+            );
+            let dst_box = d2_geo::Box2D::new(
+                g.objects[edge.dst].top_left,
+                g.objects[edge.dst].width,
+                g.objects[edge.dst].height,
+            );
             let last = points.len() - 1;
+            // Mirror Go d2graph.Edge.TraceToShape: src intersection is
+            // applied first and the updated `points[0]` feeds into
+            // `ending_segment`, so the dst clip sees the shortened segment
+            // from src boundary to dst center.
             let starting_segment = d2_geo::Segment::new(points[1], points[0]);
-            let ending_segment = d2_geo::Segment::new(points[last - 1], points[last]);
-
             if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
                 points[0] = p;
             }
+            let ending_segment = d2_geo::Segment::new(points[last - 1], points[last]);
             if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
                 points[last] = p;
             }
