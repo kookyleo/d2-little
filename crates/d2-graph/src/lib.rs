@@ -1889,11 +1889,13 @@ impl Graph {
 
         for name in ida {
             // Look for existing child — match on the unquoted value
-            // (id_val), same as the incoming IR field name.
+            // (id_val), same as the incoming IR field name. Comparison is
+            // case-insensitive to mirror Go's `obj.Children[ToLower(head)]`
+            // lookup (so `Manual` and `manual` resolve to the same child).
             let existing = self.objects[cur]
                 .children_array
                 .iter()
-                .find(|&&cid| self.objects[cid].id_val() == name)
+                .find(|&&cid| self.objects[cid].id_val().eq_ignore_ascii_case(name))
                 .copied();
             if let Some(cid) = existing {
                 cur = cid;
