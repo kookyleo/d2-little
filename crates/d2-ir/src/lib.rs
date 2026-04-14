@@ -1396,6 +1396,25 @@ impl Compiler {
                 }
             }
         }
+
+        // BlockString (|md ...|) supports variable substitution in non-code
+        // text. Mirror Go `textmeasure.ReplaceSubstitutionsMarkdown`.
+        if let ast::ScalarBox::BlockString(ref bs) = primary.value {
+            let mut variables = std::collections::BTreeMap::new();
+            for vars_map in vars_stack {
+                collect_variables_flat(vars_map, String::new(), &mut variables);
+            }
+            if !variables.is_empty() {
+                let new_val = replace_substitutions_markdown(&bs.value, &variables);
+                if new_val != bs.value {
+                    let mut new_bs = bs.clone();
+                    new_bs.value = new_val;
+                    f.primary = Some(Scalar {
+                        value: ast::ScalarBox::BlockString(new_bs),
+                    });
+                }
+            }
+        }
     }
 
     fn resolve_edge_substitutions(&mut self, vars_stack: &[&Map], e: &mut IREdge) {
@@ -1480,6 +1499,110 @@ impl Compiler {
         }
         let inner = f.map()?;
         self.lookup_var_field(inner, &path[1..])
+    }
+}
+
+/// Collect all scalar variables from a `vars` map into a flat
+/// `name.path` → value map. Matches Go `d2ir.collectVariables`.
+fn collect_variables_flat(
+    vars: &Map,
+    prefix: String,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
+    for f in &vars.fields {
+        if let Some(p) = f.primary.as_ref() {
+            let key = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}.{}", prefix, f.name)
+            };
+            out.insert(key, p.scalar_string().to_string());
+        } else if let Some(m) = f.map() {
+            let new_prefix = if prefix.is_empty() {
+                f.name.clone()
+            } else {
+                format!("{}.{}", prefix, f.name)
+            };
+            collect_variables_flat(m, new_prefix, out);
+            // Go also adds nested vars with short names directly at the top
+            // level via a separate `collectVariables(f.Map(), variables)`
+            // recursion — emulate by recursing without prefix.
+            collect_variables_flat(m, prefix.clone(), out);
+        }
+    }
+}
+
+/// Port of Go `textmeasure.ReplaceSubstitutionsMarkdown`: replace
+/// `${key}` occurrences with variable values, but skip code spans
+/// (backticks) and fenced code blocks (``` lines).
+fn replace_substitutions_markdown(
+    md: &str,
+    variables: &std::collections::BTreeMap<String, String>,
+) -> String {
+    // Process line by line to detect fenced code blocks, and character by
+    // character within each line to skip code spans.
+    let mut out = String::with_capacity(md.len());
+    let mut in_fenced = false;
+    for (i, line) in md.split_inclusive('\n').enumerate() {
+        let trimmed = line.trim_start();
+        // Detect fenced code block boundary: line starting with ``` (or more)
+        if trimmed.starts_with("```") {
+            in_fenced = !in_fenced;
+            out.push_str(line);
+            continue;
+        }
+        if in_fenced {
+            out.push_str(line);
+            continue;
+        }
+        // Replace `${var}` in this line, skipping inline code spans marked
+        // by backticks.
+        let _ = i;
+        replace_substitutions_line(line, variables, &mut out);
+    }
+    out
+}
+
+fn replace_substitutions_line(
+    line: &str,
+    variables: &std::collections::BTreeMap<String, String>,
+    out: &mut String,
+) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            // Inline code span: find the closing backtick
+            out.push('`');
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'`' {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < bytes.len() {
+                out.push('`');
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            // Find the matching '}'
+            let start = i + 2;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b'}' {
+                end += 1;
+            }
+            if end < bytes.len() {
+                let key = &line[start..end];
+                if let Some(val) = variables.get(key) {
+                    out.push_str(val);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
     }
 }
 
