@@ -1208,7 +1208,7 @@ fn draw_connection(
                     let route = &connection.route;
                     if !route.is_empty() {
                         let label_pos_str = if connection.label_position.is_empty() {
-                            "InsideMiddleCenter"
+                            "INSIDE_MIDDLE_CENTER"
                         } else {
                             &connection.label_position
                         };
@@ -2084,6 +2084,31 @@ fn draw_shape(
 
         if target_shape.text.language == "markdown" {
             let mut render = d2_textmeasure::render_markdown(&target_shape.text.label)?;
+
+            // Match Go: markdown labels fall back to InsideMiddleCenter when
+            // the label position is unset, and pick the box/inner-box solely
+            // based on IsOutside (ignoring the 3D/multiple extensions applied
+            // above for non-markdown labels).
+            let label_position = {
+                let lp = d2_label::Position::from_string(&target_shape.label_position);
+                if lp == d2_label::Position::Unset {
+                    d2_label::Position::InsideMiddleCenter
+                } else {
+                    lp
+                }
+            };
+            let box_ = if label_position.is_outside() {
+                s.get_box().clone()
+            } else {
+                s.get_inner_box()
+            };
+            let label_tl = label_position.get_point_on_box(
+                &box_,
+                d2_label::PADDING,
+                target_shape.text.label_width as f64,
+                target_shape.text.label_height as f64,
+            );
+
             write!(
                 buf,
                 r#"<g><foreignObject requiredFeatures="http://www.w3.org/TR/SVG11/feature#Extensibility" x="{:.6}" y="{:.6}" width="{}" height="{}">"#,
@@ -2133,7 +2158,7 @@ fn draw_shape(
                     .replace(r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd">"#, "");
 
                 let label_pos_str = if target_shape.label_position.is_empty() {
-                    "InsideMiddleCenter"
+                    "INSIDE_MIDDLE_CENTER"
                 } else {
                     &target_shape.label_position
                 };
