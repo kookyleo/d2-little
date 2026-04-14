@@ -15,9 +15,31 @@ fn main() {
     let category = args.next().expect("category");
     let name = args.next().expect("name");
     let script = args.next().expect("script");
+    let theme_id: Option<i64> = args.next().and_then(|v| v.parse().ok());
 
-    let svg = match d2_lib::d2_to_svg(&script) {
-        Ok(s) => s,
+    let opts = d2_lib::CompileOptions {
+        pad: Some(0),
+        theme_id,
+        ..d2_lib::CompileOptions::default()
+    };
+    let svg = match d2_lib::compile(&script, &opts) {
+        Ok((diagram, s)) => {
+            if std::env::var("DUMP_DIAG").is_ok() {
+                for shape in &diagram.shapes {
+                    eprintln!(
+                        "SHAPE id={} type={} label={:?} w={} h={} labelW={} labelH={}",
+                        shape.id,
+                        shape.type_,
+                        shape.text.label,
+                        shape.width,
+                        shape.height,
+                        shape.text.label_width,
+                        shape.text.label_height
+                    );
+                }
+            }
+            s
+        }
         Err(e) => {
             eprintln!("ERR: {}", e);
             std::process::exit(1);
