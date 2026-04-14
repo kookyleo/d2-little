@@ -512,6 +512,8 @@ fn move_obj_with_descendants_and_boxes(g: &mut Graph, obj_id: ObjId, dx: f64, dy
 /// fit them to their containers, then run the main dagre layout, and finally
 /// offset nested contents to their container positions.
 fn layout_nested(g: &mut Graph) -> Result<(), String> {
+    eprintln!("DBG layout_nested: root_level={} root.shape={} is_sd={} is_grid={}",
+        g.root_level, g.root_obj().shape.value, g.root_obj().is_sequence_diagram(), g.root_obj().is_grid_diagram());
     if g.root_obj().is_sequence_diagram() {
         let root = g.root;
         let nested_children: Vec<ObjId> = g.objects[root]
@@ -569,6 +571,20 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             g.objects[child_id].children_array = children_array;
         }
         restore_removed_edges(g, saved_edges);
+
+        // Mirror Go InjectNested(curr, nestedGraph, true) which re-applies the
+        // nested graph's root LabelPosition / IconPosition onto the container
+        // AFTER the parent's layout has run. Without this, e.g. a sequence
+        // diagram's placeActors overwrites a grid-cell actor's label position
+        // (set to InsideTopCenter by grid layout) back to InsideMiddleCenter.
+        for result in &nested_results {
+            if let Some(ref pos) = result.container_label_position {
+                g.objects[result.container_id].label_position = Some(pos.clone());
+            }
+            if let Some(ref pos) = result.container_icon_position {
+                g.objects[result.container_id].icon_position = Some(pos.clone());
+            }
+        }
 
         for result in &nested_results {
             let dx = g.objects[result.container_id].top_left.x;
