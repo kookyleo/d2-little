@@ -1051,35 +1051,103 @@ fn arrowhead_label_tl(c: &Connection, is_dst: bool) -> Option<(f64, f64)> {
     if c.route.len() < 2 {
         return None;
     }
-    let (p0, p1, label) = if is_dst {
-        let l = c.dst_label.as_ref()?;
-        let last = c.route.len() - 1;
-        (&c.route[last], &c.route[last - 1], l)
+    let label = if is_dst {
+        c.dst_label.as_ref()?
     } else {
-        let l = c.src_label.as_ref()?;
-        (&c.route[0], &c.route[1], l)
+        c.src_label.as_ref()?
     };
 
-    let lw = label.label_width as f64;
-    let lh = label.label_height as f64;
-    let gap = 3.0; // arrowhead label gap
+    let width = label.label_width as f64;
+    let height = label.label_height as f64;
+    let padding = 5.0; // label.PADDING
 
-    // Direction from endpoint into the edge
-    let dx = p1.x - p0.x;
-    let dy = p1.y - p0.y;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len == 0.0 {
+    // Arrowhead segment: (start, end) where end is the arrowhead tip.
+    let (seg_start, seg_end) = if is_dst {
+        let n = c.route.len();
+        (&c.route[n - 2], &c.route[n - 1])
+    } else {
+        (&c.route[1], &c.route[0])
+    };
+
+    // Initial normal vector (end→start direction) for shift calculation.
+    // GetUnitNormalVector(end, start) = (end.Y - start.Y)/L, (start.X - end.X)/L
+    let sx = seg_end.x - seg_start.x;
+    let sy = seg_end.y - seg_start.y;
+    let seg_len = (sx * sx + sy * sy).sqrt();
+    if seg_len == 0.0 {
         return None;
     }
+    let norm_x0 = (seg_end.y - seg_start.y) / seg_len;
+    let norm_y0 = (seg_start.x - seg_end.x) / seg_len;
 
-    // Place label beside the arrowhead tip
-    let nx = dx / len;
-    let ny = dy / len;
+    // Shift back from the endpoint to fit the label.
+    let shift = norm_x0.abs() * (height / 2.0 + padding)
+        + norm_y0.abs() * (width / 2.0 + padding);
 
-    let x = p0.x + nx * gap - if nx.abs() > ny.abs() { 0.0 } else { lw / 2.0 };
-    let y = p0.y + ny * gap - if ny.abs() > nx.abs() { 0.0 } else { lh / 2.0 };
+    let route = d2_geo::Route(c.route.clone());
+    let total_length = route.length();
+    let position = if total_length > 0.0 {
+        if is_dst {
+            1.0 - shift / total_length
+        } else {
+            shift / total_length
+        }
+    } else if is_dst {
+        1.0
+    } else {
+        0.0
+    };
 
-    Some((x, y))
+    // UnlockedTop.GetPointOnRoute: compute basePoint at `position * length`,
+    // then offset perpendicular to the route in the top direction (flip).
+    let base_distance = position * total_length;
+    let (base_point, idx) = route.get_point_at_distance(base_distance);
+    if idx + 1 >= c.route.len() {
+        return None;
+    }
+    let ps = &c.route[idx];
+    let pe = &c.route[idx + 1];
+    let seg_dx = pe.x - ps.x;
+    let seg_dy = pe.y - ps.y;
+    let sl = (seg_dx * seg_dx + seg_dy * seg_dy).sqrt();
+    if sl == 0.0 {
+        return None;
+    }
+    // getOffsetLabelPosition uses GetUnitNormalVector(route[idx], route[idx+1]),
+    // so normalX = (ps.Y - pe.Y)/L, normalY = (pe.X - ps.X)/L.
+    // For UnlockedTop we flip (multiply by -1).
+    let normal_x = -(ps.y - pe.y) / sl;
+    let normal_y = -(pe.x - ps.x) / sl;
+
+    let stroke_width = c.stroke_width as f64;
+    let offset_x = stroke_width / 2.0 + padding + width / 2.0;
+    let offset_y = stroke_width / 2.0 + padding + height / 2.0;
+
+    let mut label_cx = base_point.x + normal_x * offset_x;
+    let mut label_cy = base_point.y + normal_y * offset_y;
+
+    // If arrow is larger than label's fit offset, shift further to avoid
+    // overlap with the arrowhead. Matches Go GetArrowheadLabelPosition.
+    let arrow_size: f64 = if is_dst {
+        if !matches!(c.dst_arrow, Arrowhead::None) {
+            c.dst_arrow.dimensions(stroke_width).1
+        } else {
+            0.0
+        }
+    } else if !matches!(c.src_arrow, Arrowhead::None) {
+        c.src_arrow.dimensions(stroke_width).1
+    } else {
+        0.0
+    };
+    if arrow_size > 0.0 {
+        let extra = (arrow_size / 2.0 + ARROWHEAD_PADDING) - stroke_width / 2.0 - padding;
+        if extra > 0.0 {
+            label_cx += normal_x * extra;
+            label_cy += normal_y * extra;
+        }
+    }
+
+    Some((label_cx - width / 2.0, label_cy - height / 2.0))
 }
 
 /// positions the result is `min(minDim, max(DEFAULT_ICON_SIZE, ceil(minDim/2)))`,
