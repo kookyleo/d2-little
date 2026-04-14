@@ -774,6 +774,54 @@ impl Compiler {
         self.ensure_field_path_with_refs(dst, path, None, None, 0)
     }
 
+    /// Like `ensure_field_path_with_refs`, but skip recording a new
+    /// FieldReference for the first `skip` path components. Used when the
+    /// caller has prepended scope names to reconstruct an absolute path
+    /// after resolving `_` — those prepended names already have their own
+    /// references from the containing scope, so recording them again (with
+    /// AST indices that don't match the original KeyPath) pollutes the
+    /// "first reference" used by SortObjectsByAST.
+    fn ensure_field_path_with_refs_skip<'a>(
+        &mut self,
+        dst: &'a mut Map,
+        path: &[String],
+        kp: Option<&ast::KeyPath>,
+        key: Option<&ast::Key>,
+        kp_offset: usize,
+        skip: usize,
+    ) -> &'a mut Map {
+        let mut cur = dst as *mut Map;
+        for (i, name) in path.iter().enumerate() {
+            let m = unsafe { &mut *cur };
+            let f = self.ensure_field(m, name, true);
+            if i >= skip {
+                if let (Some(kp), Some(key)) = (kp, key) {
+                    f.references.push(FieldReference {
+                        string: name.clone(),
+                        key_path: Some(kp.clone()),
+                        key_path_index: kp_offset + (i - skip),
+                        primary: false,
+                        context: RefContext {
+                            key: key.clone(),
+                            edge_ast: None,
+                            scope_map_idx: None,
+                        },
+                    });
+                }
+            }
+            if f.composite.is_none() {
+                f.composite = Some(Composite::Map(Map::new()));
+            }
+            match f.composite.as_mut().unwrap() {
+                Composite::Map(inner) => {
+                    cur = inner as *mut Map;
+                }
+                _ => break,
+            }
+        }
+        unsafe { &mut *cur }
+    }
+
     /// Variant that records FieldReferences along the path. `kp` is the
     /// originating AST KeyPath (e.g. the src/dst of an edge), `key` is its
     /// containing AST Key, and `kp_offset` is the index in `kp.path` where
@@ -979,8 +1027,16 @@ impl Compiler {
                     self.apply_edge_value(e, key, i);
                 }
             } else {
-                // Create new edge
-                self.create_edge(dst, key, i, &src_path, &dst_path, src_arrow, dst_arrow);
+                // Create new edge. For paths shifted up via `_`, the
+                // prepended scope names already have their own references
+                // from the containing scope's AST; don't add spurious
+                // references pointing at the wrong AST positions.
+                let src_skip = edge_up.saturating_sub(src_up);
+                let dst_skip = edge_up.saturating_sub(dst_up);
+                self.create_edge(
+                    dst, key, i, &src_path, &dst_path, src_arrow, dst_arrow,
+                    src_skip, dst_skip,
+                );
             }
         }
     }
@@ -994,6 +1050,8 @@ impl Compiler {
         dst_path: &[String],
         src_arrow: bool,
         dst_arrow: bool,
+        src_skip: usize,
+        dst_skip: usize,
     ) {
         // Resolve common prefix
         let mut common_len = 0;
@@ -1012,11 +1070,17 @@ impl Compiler {
 
             // Ensure common path fields exist and put edge there
             let scope = self.ensure_field_path(dst, &common.to_vec());
+            let src_skip_inner = src_skip.saturating_sub(common_len);
+            let dst_skip_inner = dst_skip.saturating_sub(common_len);
             self.create_edge_inner(
                 scope, key, edge_idx, inner_src, inner_dst, src_arrow, dst_arrow,
+                src_skip_inner, dst_skip_inner,
             );
         } else {
-            self.create_edge_inner(dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow);
+            self.create_edge_inner(
+                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow,
+                src_skip, dst_skip,
+            );
         }
     }
 
@@ -1029,6 +1093,8 @@ impl Compiler {
         dst_path: &[String],
         src_arrow: bool,
         dst_arrow: bool,
+        src_skip: usize,
+        dst_skip: usize,
     ) {
         // Ensure src and dst fields exist, recording the AST KeyPath for
         // each new field reference. The KeyPath comes from the AST edge
@@ -1042,11 +1108,15 @@ impl Compiler {
         };
         if !src_path.is_empty() {
             let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
-            self.ensure_field_path_with_refs(dst, src_path, src_kp, Some(key), 0);
+            self.ensure_field_path_with_refs_skip(
+                dst, src_path, src_kp, Some(key), 0, src_skip,
+            );
         }
         if !dst_path.is_empty() {
             let dst_kp = ast_edge_for_paths.and_then(|e| e.dst.as_ref());
-            self.ensure_field_path_with_refs(dst, dst_path, dst_kp, Some(key), 0);
+            self.ensure_field_path_with_refs_skip(
+                dst, dst_path, dst_kp, Some(key), 0, dst_skip,
+            );
         }
         let _ = common_offset; // reserved for future common-prefix sharing
 
