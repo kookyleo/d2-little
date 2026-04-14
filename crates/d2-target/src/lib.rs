@@ -1039,6 +1039,55 @@ fn label_top_left(
             x += sw - lw - padding;
             y += sh - lh - padding;
         }
+        // Border labels: centered on the shape's border (half in, half out).
+        "BORDER_TOP_LEFT" => {
+            x += padding;
+            y -= lh / 2.0;
+        }
+        "BORDER_TOP_CENTER" => {
+            x = cx - lw / 2.0;
+            y -= lh / 2.0;
+        }
+        "BORDER_TOP_RIGHT" => {
+            x += sw - lw - padding;
+            y -= lh / 2.0;
+        }
+        "BORDER_LEFT_TOP" => {
+            x -= lw / 2.0;
+            y += padding;
+        }
+        "BORDER_LEFT_MIDDLE" => {
+            x -= lw / 2.0;
+            y = cy - lh / 2.0;
+        }
+        "BORDER_LEFT_BOTTOM" => {
+            x -= lw / 2.0;
+            y += sh - lh - padding;
+        }
+        "BORDER_RIGHT_TOP" => {
+            x += sw - lw / 2.0;
+            y += padding;
+        }
+        "BORDER_RIGHT_MIDDLE" => {
+            x += sw - lw / 2.0;
+            y = cy - lh / 2.0;
+        }
+        "BORDER_RIGHT_BOTTOM" => {
+            x += sw - lw / 2.0;
+            y += sh - lh - padding;
+        }
+        "BORDER_BOTTOM_LEFT" => {
+            x += padding;
+            y += sh - lh / 2.0;
+        }
+        "BORDER_BOTTOM_CENTER" => {
+            x = cx - lw / 2.0;
+            y += sh - lh / 2.0;
+        }
+        "BORDER_BOTTOM_RIGHT" => {
+            x += sw - lw - padding;
+            y += sh - lh / 2.0;
+        }
         _ => {}
     }
     (x, y)

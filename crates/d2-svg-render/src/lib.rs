@@ -2322,7 +2322,7 @@ fn make_border_label_mask(
     };
 
     format!(
-        r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"></rect>"#,
+        r#"<rect x="{:.6}" y="{:.6}" width="{:.6}" height="{:.6}" fill="{}"></rect>"#,
         mx, my, mw, mh, fill
     )
 }
