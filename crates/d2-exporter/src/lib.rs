@@ -69,7 +69,13 @@ pub fn export(
         .map(|edge| to_connection(edge, g))
         .collect();
 
-    // Handle legend
+    // Handle legend. Legend objects/edges were compiled in a scratch graph,
+    // so `edge.src`/`edge.dst` are indices into that scratch graph's object
+    // array — a direct `g.objects[edge.src]` lookup in `to_connection` would
+    // panic when the scratch graph has more objects than the main one. We
+    // redirect src/dst to main root during conversion, then overwrite the
+    // resulting connection's `src`/`dst` strings using `legend.object_abs_ids`
+    // (indexed by the scratch ObjId).
     if let Some(ref legend) = g.legend {
         let mut target_legend = d2_target::Legend {
             label: legend.label.clone(),
@@ -84,7 +90,23 @@ pub fn export(
             target_legend.connections = legend
                 .edges
                 .iter()
-                .map(|edge| to_connection(edge, g))
+                .map(|edge| {
+                    let mut patched = edge.clone();
+                    patched.src = g.root;
+                    patched.dst = g.root;
+                    let mut conn = to_connection(&patched, g);
+                    conn.src = legend
+                        .object_abs_ids
+                        .get(edge.src)
+                        .cloned()
+                        .unwrap_or_default();
+                    conn.dst = legend
+                        .object_abs_ids
+                        .get(edge.dst)
+                        .cloned()
+                        .unwrap_or_default();
+                    conn
+                })
                 .collect();
         }
 

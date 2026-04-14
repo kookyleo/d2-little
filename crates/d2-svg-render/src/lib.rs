@@ -7,8 +7,10 @@ use std::fmt::Write as FmtWrite;
 
 use d2_ast;
 use d2_color;
+use d2_fonts;
 use d2_geo;
 use d2_label;
+use d2_textmeasure;
 use d2_shape::{self, ShapeOps};
 use d2_svg_path;
 use d2_target;
@@ -20,6 +22,13 @@ use d2_themes;
 
 pub const DEFAULT_PADDING: i32 = 100;
 pub const APPENDIX_ICON_RADIUS: i32 = 16;
+
+// Legend constants. Mirror Go d2svg.go (LEGEND_* block).
+pub const LEGEND_PADDING: i32 = 20;
+pub const LEGEND_ITEM_SPACING: i32 = 15;
+pub const LEGEND_ICON_SIZE: i32 = 24;
+pub const LEGEND_FONT_SIZE: i32 = 14;
+pub const LEGEND_CORNER_PADDING: i32 = 10;
 
 /// Raw SVG template used when a shape has a tooltip. Contains two positional
 /// placeholders for diagram hash and shape SVG-ID (Go uses `%[1]s`/`%[2]s`).
@@ -3570,11 +3579,376 @@ fn scoped_markdown_css(diagram_hash: &str) -> String {
 
 fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
     let (tl, br) = diagram.bounding_box();
-    let left = tl.x - pad;
-    let top = tl.y - pad;
-    let width = br.x - tl.x + pad * 2;
-    let height = br.y - tl.y + pad * 2;
+    let mut left = tl.x - pad;
+    let mut top = tl.y - pad;
+    let mut width = br.x - tl.x + pad * 2;
+    let mut height = br.y - tl.y + pad * 2;
+
+    // Port of Go d2svg.dimensions: widen bounding box to include the legend
+    // on the right-hand side (and top-stretch when the legend is taller
+    // than the diagram's existing bbox).
+    if let Some(ref legend) = diagram.legend {
+        if !legend.shapes.is_empty() || !legend.connections.is_empty() {
+            if let Some((legend_width, total_height)) = legend_dimensions(legend) {
+                let mut legend_y = br.y - total_height;
+                if legend_y < tl.y {
+                    legend_y = tl.y;
+                }
+                let legend_right = br.x + LEGEND_CORNER_PADDING + legend_width;
+                if left + width < legend_right {
+                    width = legend_right - left + pad / 2;
+                }
+                if legend_y < top {
+                    let diff_y = top - legend_y;
+                    top -= diff_y;
+                    height += diff_y;
+                }
+                let legend_bottom = legend_y + total_height;
+                if top + height < legend_bottom {
+                    height = legend_bottom - top + pad / 2;
+                }
+                let _ = left; // silence if statement below never needs left
+            }
+        }
+    }
     (left, top, width, height)
+}
+
+/// Compute (legend_box_width, total_height) for the legend, matching Go
+/// d2svg.go. Returns `None` if there are no labelled items (nothing to draw).
+fn legend_dimensions(legend: &d2_target::Legend) -> Option<(i32, i32)> {
+    // Attempt a ruler, but fall back to heuristics if fonts are unavailable.
+    let mut ruler = d2_textmeasure::Ruler::new().ok();
+    let mut total_height = LEGEND_PADDING + LEGEND_FONT_SIZE + LEGEND_ITEM_SPACING;
+    let mut max_label_width = 0;
+    let mut item_count = 0;
+
+    let mut measure = |label: &str, is_bold: bool| -> (i32, i32) {
+        if let Some(ref mut r) = ruler {
+            let style = if is_bold {
+                d2_fonts::FontStyle::Bold
+            } else {
+                d2_fonts::FontStyle::Regular
+            };
+            let font = d2_fonts::Font::new(
+                d2_fonts::FontFamily::SourceSansPro,
+                style,
+                LEGEND_FONT_SIZE,
+            );
+            r.measure(font, label)
+        } else {
+            // Crude fallback: assume 7px per character, font-size height.
+            (label.chars().count() as i32 * 7, LEGEND_FONT_SIZE)
+        }
+    };
+
+    for s in &legend.shapes {
+        if s.text.label.is_empty() {
+            continue;
+        }
+        let (w, h) = measure(&s.text.label, false);
+        max_label_width = max_label_width.max(w);
+        total_height += h.max(LEGEND_ICON_SIZE) + LEGEND_ITEM_SPACING;
+        item_count += 1;
+    }
+    for c in &legend.connections {
+        if c.text.label.is_empty() {
+            continue;
+        }
+        let (w, h) = measure(&c.text.label, false);
+        max_label_width = max_label_width.max(w);
+        total_height += h.max(LEGEND_ICON_SIZE) + LEGEND_ITEM_SPACING;
+        item_count += 1;
+    }
+
+    if item_count == 0 {
+        return None;
+    }
+
+    // match Go: totalHeight -= LEGEND_ITEM_SPACING / 2
+    total_height -= LEGEND_ITEM_SPACING / 2;
+
+    if !legend.connections.is_empty() {
+        total_height += (LEGEND_PADDING as f64 * 1.5) as i32;
+    } else {
+        total_height += (LEGEND_PADDING as f64 * 1.2) as i32;
+    }
+
+    if total_height <= 0 || max_label_width <= 0 {
+        return None;
+    }
+
+    let legend_width = LEGEND_PADDING * 2 + LEGEND_ICON_SIZE + LEGEND_PADDING + max_label_width;
+    Some((legend_width, total_height))
+}
+
+/// Port of Go `d2svg.RenderLegend`. Renders the legend sidebar to the
+/// right of the diagram. Returns `Ok(())` and writes nothing if there
+/// are no labelled legend items.
+fn render_legend(
+    buf: &mut String,
+    diagram: &d2_target::Diagram,
+    diagram_hash: &str,
+    theme: Option<&d2_themes::ResolvedTheme>,
+) -> Result<(), String> {
+    let Some(ref legend) = diagram.legend else {
+        return Ok(());
+    };
+    if legend.shapes.is_empty() && legend.connections.is_empty() {
+        return Ok(());
+    }
+
+    let Some((legend_width, total_height)) = legend_dimensions(legend) else {
+        return Ok(());
+    };
+
+    let mut ruler = d2_textmeasure::Ruler::new().ok();
+    let mut measure = |label: &str| -> (i32, i32) {
+        if let Some(ref mut r) = ruler {
+            let font = d2_fonts::Font::new(
+                d2_fonts::FontFamily::SourceSansPro,
+                d2_fonts::FontStyle::Regular,
+                LEGEND_FONT_SIZE,
+            );
+            r.measure(font, label)
+        } else {
+            (label.chars().count() as i32 * 7, LEGEND_FONT_SIZE)
+        }
+    };
+
+    let (tl, br) = diagram.bounding_box();
+    let legend_x = br.x + LEGEND_CORNER_PADDING;
+    let mut legend_y = br.y - total_height;
+    if legend_y < tl.y {
+        legend_y = tl.y;
+    }
+
+    // Shadow rect.
+    let mut shadow = d2_themes::ThemableElement::new("rect", theme);
+    shadow.fill = "#F7F7FA".to_owned();
+    shadow.stroke = "#DEE1EB".to_owned();
+    shadow.style =
+        "stroke-width: 1px; filter: drop-shadow(0px 2px 3px rgba(0, 0, 0, 0.1))".to_owned();
+    shadow.x = Some(legend_x as f64);
+    shadow.y = Some(legend_y as f64);
+    shadow.width = Some(legend_width as f64);
+    shadow.height = Some(total_height as f64);
+    shadow.rx = Some(4.0);
+    buf.push_str(&shadow.render());
+
+    // Main legend rect.
+    let mut main = d2_themes::ThemableElement::new("rect", theme);
+    main.fill = "#ffffff".to_owned();
+    main.stroke = "#DEE1EB".to_owned();
+    main.style = "stroke-width: 1px".to_owned();
+    main.x = Some(legend_x as f64);
+    main.y = Some(legend_y as f64);
+    main.width = Some(legend_width as f64);
+    main.height = Some(total_height as f64);
+    main.rx = Some(4.0);
+    buf.push_str(&main.render());
+
+    // Legend title.
+    let legend_label = if legend.label.is_empty() {
+        "Legend"
+    } else {
+        legend.label.as_str()
+    };
+    write!(
+        buf,
+        r#"<text class="text-bold" x="{}" y="{}" style="font-size: {}px;">{}</text>"#,
+        legend_x + LEGEND_PADDING,
+        legend_y + LEGEND_PADDING + LEGEND_FONT_SIZE,
+        LEGEND_FONT_SIZE + 2,
+        html_escape(legend_label),
+    )
+    .unwrap();
+
+    let mut current_y = legend_y + LEGEND_PADDING * 2 + LEGEND_FONT_SIZE;
+    let mut shape_count = 0;
+
+    for s in &legend.shapes {
+        if s.text.label.is_empty() {
+            continue;
+        }
+        let icon_x = legend_x + LEGEND_PADDING;
+        let icon_y = current_y;
+
+        let shape_icon = render_legend_shape_icon(s, icon_x, icon_y, diagram_hash, theme)?;
+        buf.push_str(&shape_icon);
+
+        let (_, dh) = measure(&s.text.label);
+        let row_height = dh.max(LEGEND_ICON_SIZE);
+        let text_y = current_y + row_height / 2 + (dh as f64 * 0.3) as i32;
+        write!(
+            buf,
+            r#"<text class="text" x="{}" y="{}" style="font-size: {}px;">{}</text>"#,
+            icon_x + LEGEND_ICON_SIZE + LEGEND_PADDING,
+            text_y,
+            LEGEND_FONT_SIZE,
+            html_escape(&s.text.label),
+        )
+        .unwrap();
+
+        current_y += row_height + LEGEND_ITEM_SPACING;
+        shape_count += 1;
+    }
+
+    if shape_count > 0 && !legend.connections.is_empty() {
+        current_y += LEGEND_ITEM_SPACING / 2;
+
+        let mut sep = d2_themes::ThemableElement::new("line", theme);
+        sep.x1 = Some((legend_x + LEGEND_PADDING) as f64);
+        sep.y1 = Some(current_y as f64);
+        sep.x2 = Some((legend_x + legend_width - LEGEND_PADDING) as f64);
+        sep.y2 = Some(current_y as f64);
+        sep.stroke = "#DEE1EB".to_owned();
+        sep.stroke_dash_array = "2,2".to_owned();
+        buf.push_str(&sep.render());
+
+        current_y += LEGEND_ITEM_SPACING;
+    }
+
+    for c in &legend.connections {
+        if c.text.label.is_empty() {
+            continue;
+        }
+        let icon_x = legend_x + LEGEND_PADDING;
+        let icon_y = current_y + LEGEND_ICON_SIZE / 2;
+
+        let conn_icon = render_legend_connection_icon(c, icon_x, icon_y, theme)?;
+        buf.push_str(&conn_icon);
+
+        let (_, dh) = measure(&c.text.label);
+        let row_height = dh.max(LEGEND_ICON_SIZE);
+        let text_y = current_y + row_height / 2 + (dh as f64 * 0.2) as i32;
+        write!(
+            buf,
+            r#"<text class="text" x="{}" y="{}" style="font-size: {}px;">{}</text>"#,
+            icon_x + LEGEND_ICON_SIZE + LEGEND_PADDING,
+            text_y,
+            LEGEND_FONT_SIZE,
+            html_escape(&c.text.label),
+        )
+        .unwrap();
+
+        current_y += row_height + LEGEND_ITEM_SPACING;
+    }
+
+    Ok(())
+}
+
+/// Render a single legend shape icon (scaled 0.2x).
+/// Port of Go `d2svg.renderLegendShapeIcon`.
+fn render_legend_shape_icon(
+    s: &d2_target::Shape,
+    x: i32,
+    y: i32,
+    diagram_hash: &str,
+    theme: Option<&d2_themes::ResolvedTheme>,
+) -> Result<String, String> {
+    const SIZE_FACTOR: i32 = 5;
+    let mut icon_shape = s.clone();
+    icon_shape.pos.x = 0;
+    icon_shape.pos.y = 0;
+    icon_shape.width = LEGEND_ICON_SIZE * SIZE_FACTOR;
+    icon_shape.height = LEGEND_ICON_SIZE * SIZE_FACTOR;
+    icon_shape.text.label = String::new();
+
+    let mut final_buf = String::new();
+    write!(
+        final_buf,
+        r#"<g transform="translate({}, {}) scale({:.6})">"#,
+        x,
+        y,
+        1.0 / SIZE_FACTOR as f64
+    )
+    .unwrap();
+
+    let mut inner = String::new();
+    let mut appendix = String::new();
+    draw_shape(&mut inner, &mut appendix, diagram_hash, &icon_shape, theme)?;
+    final_buf.push_str(&inner);
+    final_buf.push_str("</g>");
+    Ok(final_buf)
+}
+
+/// Render a single legend connection icon (scaled 0.5x).
+/// Port of Go `d2svg.renderLegendConnectionIcon`.
+fn render_legend_connection_icon(
+    c: &d2_target::Connection,
+    x: i32,
+    y: i32,
+    theme: Option<&d2_themes::ResolvedTheme>,
+) -> Result<String, String> {
+    const SIZE_FACTOR: i32 = 2;
+    let mut legend_conn = d2_target::base_connection();
+    legend_conn.id = c.id.clone();
+    legend_conn.src_arrow = c.src_arrow.clone();
+    legend_conn.dst_arrow = c.dst_arrow.clone();
+    legend_conn.stroke_dash = c.stroke_dash;
+    legend_conn.stroke_width = c.stroke_width;
+    legend_conn.stroke = c.stroke.clone();
+    legend_conn.fill = c.fill.clone();
+    legend_conn.border_radius = c.border_radius;
+    legend_conn.opacity = c.opacity;
+    legend_conn.animated = c.animated;
+
+    let start_x = 0.0;
+    let mid_y = 0.0;
+    let width = (LEGEND_ICON_SIZE * SIZE_FACTOR) as f64;
+    legend_conn.route = vec![
+        d2_geo::Point::new(start_x, mid_y),
+        d2_geo::Point::new(start_x + width, mid_y),
+    ];
+
+    // Go uses hash("c.ID-x-y") prefixed with "legend-" for the per-icon
+    // diagram hash so marker IDs and mask refs stay unique.
+    let legend_hash = format!(
+        "legend-{}",
+        hash_str(&format!("{}-{}-{}", c.id, x, y))
+    );
+
+    let mut final_buf = String::new();
+    write!(
+        final_buf,
+        r#"<g transform="translate({}, {}) scale({:.6})">"#,
+        x,
+        y,
+        1.0 / SIZE_FACTOR as f64
+    )
+    .unwrap();
+
+    let mut inner = String::new();
+    let mut markers: HashMap<String, ()> = HashMap::new();
+    let id_to_shape: HashMap<String, &d2_target::Shape> = HashMap::new();
+    draw_connection(
+        &mut inner,
+        &legend_hash,
+        &legend_conn,
+        &mut markers,
+        &id_to_shape,
+        theme,
+    )?;
+    final_buf.push_str(&inner);
+    final_buf.push_str("</g>");
+    Ok(final_buf)
+}
+
+/// Minimal XML text escape (&, <, >, ", ').
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -4083,6 +4457,10 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     // Flush appendix items after all shapes so tooltip/link icons stack on top.
     buf.push_str(&appendix_buf);
 
+    // Render legend (if any) after the main diagram but before the mask,
+    // matching Go d2svg.go ordering.
+    render_legend(&mut buf, diagram, &diagram_hash, inline_theme)?;
+
     // Compute dimensions
     let (mut left, mut top, mut w, mut h) = dimensions(diagram, pad);
 
@@ -4348,7 +4726,22 @@ fn collect_corpus(diagram: &d2_target::Diagram) -> String {
             corpus.push_str(&l.label);
         }
     }
-    // Legend corpus still TODO.
+    // Port of Go `d2target.Diagram.GetCorpus` legend section: include the
+    // legend label (falling back to "Legend"), every shape label, and every
+    // connection label so font subsetting picks up their glyphs.
+    if let Some(ref legend) = diagram.legend {
+        if !legend.label.is_empty() {
+            corpus.push_str(&legend.label);
+        } else {
+            corpus.push_str("Legend");
+        }
+        for s in &legend.shapes {
+            corpus.push_str(&s.text.label);
+        }
+        for c in &legend.connections {
+            corpus.push_str(&c.text.label);
+        }
+    }
     corpus
 }
 

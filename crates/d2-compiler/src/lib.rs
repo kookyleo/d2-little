@@ -5,6 +5,7 @@
 
 use d2_ast::{self as ast};
 use d2_color;
+use d2_geo;
 use d2_graph::{self as graph, Graph, ObjId, ScalarValue};
 use d2_ir::{self as ir};
 use d2_target;
@@ -55,6 +56,7 @@ pub fn compile_with_config(
     c.expand_literal_star_globs(&mut g);
     c.set_default_shapes(&mut g);
     validate_board_links(&mut g);
+    c.compile_legend(&mut g, &ir_map);
 
     // Match Go d2compiler: if there are no user objects (only the implicit root),
     // mark the graph as folder-only so it will not be rendered as its own board.
@@ -446,6 +448,89 @@ impl Compiler {
                 g.is_folder_only = true;
             }
         }
+    }
+
+    /// Port of Go `compiler.compileLegend` (d2compiler/compile.go).
+    /// Extracts `vars.d2-legend` and stores it in `g.legend`.
+    fn compile_legend(&mut self, g: &mut Graph, ir: &ir::Map) {
+        let Some(vars_field) = ir.get_field("vars") else {
+            return;
+        };
+        let Some(vars_map) = vars_field.map() else {
+            return;
+        };
+        let Some(legend_field) = vars_map.get_field("d2-legend") else {
+            return;
+        };
+        let Some(legend_map) = legend_field.map() else {
+            return;
+        };
+
+        // Compile the legend sub-map into a scratch graph.
+        let mut scratch = Graph::new();
+        let scratch_root = scratch.root;
+        self.compile_map(&mut scratch, scratch_root, legend_map);
+        self.set_default_shapes(&mut scratch);
+
+        // Snapshot every scratch object's abs_id keyed by ObjId so the
+        // exporter can resolve edge.src/edge.dst without the scratch graph.
+        let object_abs_ids: Vec<String> = scratch
+            .objects
+            .iter()
+            .map(|o| o.abs_id().to_owned())
+            .collect();
+
+        // Extract objects (skip root and class field/method placeholders),
+        // setting default position/size for the legend thumbnail.
+        let mut objects: Vec<graph::Object> = Vec::new();
+        for (i, obj) in scratch.objects.iter().enumerate() {
+            if i == scratch.root {
+                continue;
+            }
+            if obj.shape.value == "__d2_class_field_removed__" {
+                continue;
+            }
+            // Skip fully-transparent objects (opacity==0), matching Go.
+            if let Some(ref op) = obj.style.opacity {
+                if let Ok(v) = op.value.parse::<f64>() {
+                    if v == 0.0 {
+                        continue;
+                    }
+                }
+            }
+            let mut cloned = obj.clone();
+            cloned.top_left.x = 10.0;
+            cloned.top_left.y = 10.0;
+            cloned.width = 100.0;
+            cloned.height = 100.0;
+            objects.push(cloned);
+        }
+
+        let mut edges: Vec<graph::Edge> = Vec::new();
+        for edge in &scratch.edges {
+            let mut cloned = edge.clone();
+            cloned.route = vec![
+                d2_geo::Point { x: 10.0, y: 10.0 },
+                d2_geo::Point { x: 110.0, y: 10.0 },
+            ];
+            edges.push(cloned);
+        }
+
+        if objects.is_empty() && edges.is_empty() {
+            return;
+        }
+
+        let mut label = String::new();
+        if let Some(ref primary) = legend_field.primary {
+            label = primary.scalar_string();
+        }
+
+        g.legend = Some(graph::GraphLegend {
+            label,
+            objects,
+            edges,
+            object_abs_ids,
+        });
     }
 
     fn expand_literal_star_globs(&mut self, g: &mut Graph) {
@@ -1104,6 +1189,7 @@ impl Compiler {
                     key: kp.clone(),
                     key_path_index: fr.key_path_index,
                     scope_obj: Some(scope),
+                    is_var: fr.is_var,
                 });
             }
         }

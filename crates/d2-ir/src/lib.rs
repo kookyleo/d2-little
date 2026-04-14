@@ -111,6 +111,11 @@ pub struct FieldReference {
     pub key_path_index: usize,
     /// Whether this reference sets the primary value.
     pub primary: bool,
+    /// Whether this reference was cloned from a variable/spread
+    /// substitution and therefore points at the variable's declaration
+    /// rather than the substitution site. Go's SortObjectsByAST skips
+    /// sorting for such references, keeping insertion order.
+    pub is_var: bool,
     pub context: RefContext,
 }
 
@@ -427,7 +432,9 @@ fn expand_substitution(base: &mut Map, resolved: &Map, placeholder_idx: usize) {
         if let Some(bf) = base.get_field_mut(&of.name) {
             overlay_field(bf, of);
         } else {
-            base.fields.insert(insert_at, of.clone());
+            let mut cloned = of.clone();
+            mark_refs_as_var(&mut cloned);
+            base.fields.insert(insert_at, cloned);
             insert_at += 1;
         }
     }
@@ -446,6 +453,31 @@ fn expand_substitution(base: &mut Map, resolved: &Map, placeholder_idx: usize) {
         } else {
             let idx = existing[0];
             overlay_edge(&mut base.edges[idx], oe);
+        }
+    }
+}
+
+/// Recursively mark all FieldReferences under this field (and its
+/// nested composites) as is_var=true. Matches Go d2ir.Copy behavior
+/// where spread-expanded fields track that their references point at
+/// the variable, not the substitution location.
+fn mark_refs_as_var(f: &mut Field) {
+    for r in &mut f.references {
+        r.is_var = true;
+    }
+    if let Some(ref mut c) = f.composite {
+        match c {
+            Composite::Map(m) => {
+                for sub in &mut m.fields {
+                    mark_refs_as_var(sub);
+                }
+                for e in &mut m.edges {
+                    for er in &mut e.references {
+                        let _ = er;
+                    }
+                }
+            }
+            Composite::Array(_) => {}
         }
     }
 }
@@ -715,6 +747,7 @@ impl Compiler {
                     key_path: Some(kp.clone()),
                     key_path_index: i,
                     primary: true,
+                    is_var: false,
                     context: RefContext {
                         key: key.clone(),
                         edge_ast: None,
@@ -733,6 +766,7 @@ impl Compiler {
                 key_path: Some(kp.clone()),
                 key_path_index: i,
                 primary: false,
+                is_var: false,
                 context: RefContext {
                     key: key.clone(),
                     edge_ast: None,
@@ -892,6 +926,7 @@ impl Compiler {
                         key_path: Some(kp.clone()),
                         key_path_index: kp_offset + (i - skip),
                         primary: false,
+                        is_var: false,
                         context: RefContext {
                             key: key.clone(),
                             edge_ast: None,
@@ -936,6 +971,7 @@ impl Compiler {
                     key_path: Some(kp.clone()),
                     key_path_index: kp_offset + i,
                     primary: false,
+                    is_var: false,
                     context: RefContext {
                         key: key.clone(),
                         edge_ast: None,

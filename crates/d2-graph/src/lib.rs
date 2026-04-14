@@ -594,6 +594,11 @@ pub struct Reference {
     /// Go `Reference.ScopeObj`. Used by sequence diagram layout to determine
     /// which objects are contained by a group.
     pub scope_obj: Option<ObjId>,
+    /// True when this reference was carried over from a variable
+    /// (spread) substitution and therefore points at the variable's
+    /// declaration rather than the substitution site. SortObjectsByAST
+    /// ignores these refs and relies on insertion order instead.
+    pub is_var: bool,
 }
 
 impl Default for Object {
@@ -1545,8 +1550,16 @@ impl Edge {
 #[derive(Debug, Clone, Default)]
 pub struct GraphLegend {
     pub label: String,
+    /// Non-root objects compiled from `vars.d2-legend`.
     pub objects: Vec<Object>,
+    /// Edges compiled from `vars.d2-legend`. `src`/`dst` are indices into
+    /// `objects` (offset by 1 if `root` is at index 0 of the scratch graph).
     pub edges: Vec<Edge>,
+    /// Absolute IDs of the scratch graph's objects (root + children) so
+    /// the exporter can resolve `edge.src`/`edge.dst` without needing
+    /// access to the scratch graph. Index matches the scratch graph's
+    /// object indices.
+    pub object_abs_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1632,6 +1645,14 @@ impl Graph {
             }
             let ra = &oa.references[0];
             let rb = &ob.references[0];
+            // Variable/spread substitution references point at the var
+            // definition, not the substitution site, so they don't
+            // reflect this object's real source position. Match Go
+            // SortObjectsByAST: skip them and fall back to insertion
+            // order.
+            if ra.is_var || rb.is_var {
+                return a.cmp(&b);
+            }
             let pa = ra.key.path.get(ra.key_path_index);
             let pb = rb.key.path.get(rb.key_path_index);
             match (pa, pb) {
