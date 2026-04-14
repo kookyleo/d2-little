@@ -54,6 +54,7 @@ pub fn compile_with_config(
     c.compile_board(&mut g, &ir_map);
     c.expand_literal_star_globs(&mut g);
     c.set_default_shapes(&mut g);
+    validate_board_links(&mut g);
 
     // Match Go d2compiler: if there are no user objects (only the implicit root),
     // mark the graph as folder-only so it will not be rendered as its own board.
@@ -83,6 +84,57 @@ pub fn compile_with_config(
 pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
     let (g, _) = compile_with_config(path, input)?;
     Ok(g)
+}
+
+/// Port of Go `d2compiler.validateBoardLinks`: a shape's `link` is kept
+/// only if it is a remote URL (has a scheme or begins with `/`) or a
+/// D2 keypath starting with `root`. Everything else (like `link: foo`
+/// or bare domain `link: "example.com"`) is stripped to match Go's
+/// behavior.
+fn validate_board_links(g: &mut Graph) {
+    fn is_remote_url(s: &str) -> bool {
+        // Scheme detection: initial run of `[A-Za-z][A-Za-z0-9+.-]*:`
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return false;
+        }
+        let mut i = 0;
+        if !bytes[0].is_ascii_alphabetic() {
+            return s.starts_with('/');
+        }
+        while i < bytes.len() {
+            let b = bytes[i];
+            if i == 0 {
+                if !b.is_ascii_alphabetic() {
+                    break;
+                }
+            } else if !(b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+                if b == b':' && i > 0 {
+                    return true; // has a scheme
+                }
+                break;
+            }
+            i += 1;
+        }
+        s.starts_with('/')
+    }
+
+    for obj in &mut g.objects {
+        let Some(ref link) = obj.link else { continue };
+        let val = &link.value;
+        if is_remote_url(val) {
+            continue;
+        }
+        // Not remote: must be a keypath starting with "root". Since we don't
+        // have a full D2 parser available, we use simple heuristic: split on
+        // `.` and check the first segment (unquoted).
+        // TODO: full ParseKey equivalent. For now strip the link unless the
+        // first path segment is literally `root`.
+        let first = val.split('.').next().unwrap_or("");
+        if first != "root" {
+            obj.link = None;
+        }
+    }
 }
 
 fn compile_config(ir: &ir::Map) -> Option<d2_target::Config> {
