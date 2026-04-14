@@ -1697,7 +1697,23 @@ impl Compiler {
         if let Some(fmap) = f.map() {
             for f2 in &fmap.fields {
                 let keyword = f2.name.to_lowercase();
-                if keyword == "shape" && f2.name_is_unquoted {
+                if keyword == "label" && f2.name_is_unquoted {
+                    // `source-arrowhead.label: eth1` sets the arrowhead
+                    // label value (mirrors the Go equivalent in
+                    // d2compiler.compileArrowheads). This path fires
+                    // when the arrowhead is defined via a map subfield
+                    // rather than a primary value on the arrowhead key
+                    // itself.
+                    if let Some(val) = f2.primary_string() {
+                        if is_src {
+                            if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
+                                ah.label.value = val;
+                            }
+                        } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                            ah.label.value = val;
+                        }
+                    }
+                } else if keyword == "shape" && f2.name_is_unquoted {
                     if let Some(val) = f2.primary_string() {
                         if is_src {
                             if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
