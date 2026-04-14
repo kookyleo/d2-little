@@ -10,3 +10,5 @@ d2-geo = { path = "../d2-geo" }
 d2-color = { path = "../d2-color" }
 d2-themes = { path = "../d2-themes" }
 d2-label = { path = "../d2-label" }
+d2-textmeasure = { path = "../d2-textmeasure" }
+d2-fonts = { path = "../d2-fonts" }

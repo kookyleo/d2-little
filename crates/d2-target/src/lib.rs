@@ -1228,6 +1228,105 @@ fn icon_size(sw: f64, sh: f64, is_inside_center: bool) -> i32 {
     size.min(MAX_ICON_SIZE)
 }
 
+/// Compute the top-left corner (x, y) of a positioned tooltip box, given the
+/// host shape position/size, the tooltip box size, and the `near:` keyword
+/// (e.g. `top-left`, `center-right`). Mirrors Go d2target.CalculateTooltipPosition.
+pub fn calculate_tooltip_position(
+    shape_x: f64,
+    shape_y: f64,
+    shape_width: f64,
+    shape_height: f64,
+    tooltip_width: i32,
+    tooltip_height: i32,
+    position: &str,
+) -> (f64, f64) {
+    let padding = 10.0;
+    let tw = tooltip_width as f64;
+    let th = tooltip_height as f64;
+    match position {
+        "top-left" => (shape_x, shape_y - th - padding),
+        "top-center" => (shape_x + shape_width / 2.0 - tw / 2.0, shape_y - th - padding),
+        "top-right" => (shape_x + shape_width - tw, shape_y - th - padding),
+        "center-left" => (
+            shape_x - tw - padding,
+            shape_y + shape_height / 2.0 - th / 2.0,
+        ),
+        "center-right" => (
+            shape_x + shape_width + padding,
+            shape_y + shape_height / 2.0 - th / 2.0,
+        ),
+        "bottom-left" => (shape_x, shape_y + shape_height + padding),
+        "bottom-center" => (
+            shape_x + shape_width / 2.0 - tw / 2.0,
+            shape_y + shape_height + padding,
+        ),
+        "bottom-right" => (
+            shape_x + shape_width - tw,
+            shape_y + shape_height + padding,
+        ),
+        _ => (
+            shape_x + shape_width / 2.0 - tw / 2.0,
+            shape_y - th - padding,
+        ),
+    }
+}
+
+/// Measure a positioned tooltip's box (width, height including inner padding)
+/// using the shape's font settings. Falls back to a heuristic size when the
+/// ruler or markdown measurement fails.
+pub fn measure_positioned_tooltip(shape: &Shape) -> (i32, i32) {
+    if shape.tooltip.is_empty() || shape.tooltip_position.is_empty() {
+        return (0, 0);
+    }
+    let (mut tw, mut th) = {
+        let text_len = shape.tooltip.chars().count() as i32;
+        ((text_len * 8 + 20).min(200), 30)
+    };
+    if let Ok(mut ruler) = d2_textmeasure::Ruler::new() {
+        let font_family = d2_fonts::d2_font_to_family(&shape.text.font_family);
+        let font_size = if shape.text.font_size > 0 {
+            shape.text.font_size
+        } else {
+            d2_fonts::FONT_SIZE_M
+        };
+        if let Ok((w, h)) = d2_textmeasure::measure_markdown(
+            &shape.tooltip,
+            &mut ruler,
+            font_family,
+            None,
+            font_size,
+        ) {
+            tw = w + 20;
+            th = h + 20;
+        }
+    }
+    (tw, th)
+}
+
+/// Compute the axis-aligned bounding box of a positioned tooltip card for
+/// `shape` (including the tooltip rect itself; the tail is ignored, matching
+/// Go d2target.calculateTooltipBounds).
+pub fn calculate_tooltip_bounds(shape: &Shape) -> (i32, i32, i32, i32) {
+    if shape.tooltip.is_empty() || shape.tooltip_position.is_empty() {
+        return (0, 0, 0, 0);
+    }
+    let (tw, th) = measure_positioned_tooltip(shape);
+    let (x, y) = calculate_tooltip_position(
+        shape.pos.x as f64,
+        shape.pos.y as f64,
+        shape.width as f64,
+        shape.height as f64,
+        tw,
+        th,
+        &shape.tooltip_position,
+    );
+    let min_x = x.floor() as i32;
+    let min_y = y.floor() as i32;
+    let max_x = x.ceil() as i32 + tw;
+    let max_y = y.ceil() as i32 + th;
+    (min_x, min_y, max_x, max_y)
+}
+
 impl Diagram {
     /// Compute the axis-aligned bounding box of all shapes and connections.
     ///
@@ -1269,9 +1368,15 @@ impl Diagram {
             // Reserve space for the top-right appendix icon when a shape has
             // tooltip or link. Go d2's d2target.Diagram.BoundingBox expands by
             // -16/+16 when there is no custom tooltipPosition; with a custom
-            // tooltipPosition it uses calculateTooltipBounds (not yet ported).
+            // tooltipPosition it grows to fit the positioned tooltip card.
             if !s.tooltip.is_empty() || !s.link.is_empty() {
-                if s.tooltip_position.is_empty() {
+                if !s.tooltip_position.is_empty() {
+                    let (tmin_x, tmin_y, tmax_x, tmax_y) = calculate_tooltip_bounds(s);
+                    x1 = x1.min(i64::from(tmin_x));
+                    y1 = y1.min(i64::from(tmin_y));
+                    x2 = x2.max(i64::from(tmax_x));
+                    y2 = y2.max(i64::from(tmax_y));
+                } else {
                     y1 = y1.min(pos_y - stroke_width - 16);
                     x2 = x2.max(pos_x + stroke_width + width + 16);
                 }

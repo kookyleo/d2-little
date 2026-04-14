@@ -275,8 +275,10 @@ name = "d2-target"
 version = "0.7.1"
 dependencies = [
  "d2-color",
+ "d2-fonts",
  "d2-geo",
  "d2-label",
+ "d2-textmeasure",
  "d2-themes",
 ]
 

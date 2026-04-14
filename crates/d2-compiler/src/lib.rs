@@ -414,18 +414,13 @@ impl Compiler {
     }
 
     fn normalize_tooltip_position(pos: &str) -> Option<String> {
-        let normalized = match pos {
-            "top-left" => "INSIDE_TOP_LEFT",
-            "top-center" => "INSIDE_TOP_CENTER",
-            "top-right" => "INSIDE_TOP_RIGHT",
-            "center-left" => "INSIDE_MIDDLE_LEFT",
-            "center-right" => "INSIDE_MIDDLE_RIGHT",
-            "bottom-left" => "INSIDE_BOTTOM_LEFT",
-            "bottom-center" => "INSIDE_BOTTOM_CENTER",
-            "bottom-right" => "INSIDE_BOTTOM_RIGHT",
-            _ => return None,
-        };
-        Some(normalized.to_owned())
+        // Go d2 stores the raw `near:` keyword (e.g. "top-left") in
+        // TooltipPosition; renderers switch on those literal strings.
+        match pos {
+            "top-left" | "top-center" | "top-right" | "center-left" | "center-right"
+            | "bottom-left" | "bottom-center" | "bottom-right" => Some(pos.to_owned()),
+            _ => None,
+        }
     }
 
     fn errorf(&mut self, range: &ast::Range, msg: String) {

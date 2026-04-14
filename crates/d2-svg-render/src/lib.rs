@@ -1521,14 +1521,109 @@ fn arrowhead_label_position(connection: &d2_target::Connection, is_dst: bool) ->
 // Appendix items (tooltip/link icons) — ported from Go's addAppendixItems
 // ---------------------------------------------------------------------------
 
+/// Render a positioned tooltip card (rect + tail + markdown foreignObject) for
+/// a shape whose tooltip has a `near:` keyword. Mirrors Go d2svg.renderPositionedTooltip.
+fn render_positioned_tooltip(target_shape: &d2_target::Shape) -> Result<String, String> {
+    if target_shape.tooltip.is_empty() || target_shape.tooltip_position.is_empty() {
+        return Ok(String::new());
+    }
+
+    let (tooltip_width, tooltip_height) = d2_target::measure_positioned_tooltip(target_shape);
+    let render = d2_textmeasure::render_markdown(&target_shape.tooltip)?;
+
+    let (x, y) = d2_target::calculate_tooltip_position(
+        target_shape.pos.x as f64,
+        target_shape.pos.y as f64,
+        target_shape.width as f64,
+        target_shape.height as f64,
+        tooltip_width,
+        tooltip_height,
+        &target_shape.tooltip_position,
+    );
+
+    let (tail_direction, tail_x_off, tail_y_off) =
+        positioned_tooltip_tail(&target_shape.tooltip_position, tooltip_width, tooltip_height);
+
+    let tooltip_content = format!(
+        "<foreignObject x=\"{:.6}\" y=\"{:.6}\" width=\"{}\" height=\"{}\"><div xmlns=\"http://www.w3.org/1999/xhtml\" class=\"md color-N1\">{}</div></foreignObject>",
+        x + 10.0,
+        y + 10.0,
+        tooltip_width - 20,
+        tooltip_height - 20,
+        render,
+    );
+
+    let tooltip_box = format!(
+        "<rect x=\"{:.6}\" y=\"{:.6}\" width=\"{}\" height=\"{}\" rx=\"4\" ry=\"4\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
+        x, y, tooltip_width, tooltip_height,
+    );
+
+    let tail = render_tooltip_tail(tail_direction, tail_x_off + x, tail_y_off + y);
+
+    Ok(format!(
+        "<g class=\"positioned-tooltip\">{}{}{}</g>",
+        tooltip_box, tail, tooltip_content
+    ))
+}
+
+/// Tail direction and (x, y) offsets relative to the tooltip's top-left
+/// corner. Mirrors Go d2svg.calculateTooltipPosition's switch statement.
+fn positioned_tooltip_tail(position: &str, tw: i32, th: i32) -> (&'static str, f64, f64) {
+    let tw = tw as f64;
+    let th = th as f64;
+    match position {
+        "top-left" => ("bottom", 20.0, th),
+        "top-center" => ("bottom", tw / 2.0, th),
+        "top-right" => ("bottom", tw - 20.0, th),
+        "center-left" => ("right", tw, th / 2.0),
+        "center-right" => ("left", 0.0, th / 2.0),
+        "bottom-left" => ("top", 20.0, 0.0),
+        "bottom-center" => ("top", tw / 2.0, 0.0),
+        "bottom-right" => ("top", tw - 20.0, 0.0),
+        _ => ("bottom", tw / 2.0, th),
+    }
+}
+
+/// Render the tooltip tail triangle. Mirrors Go d2svg.renderTooltipTail.
+fn render_tooltip_tail(direction: &str, tail_x: f64, tail_y: f64) -> String {
+    let tail_size = 8.0_f64;
+    match direction {
+        "top" => format!(
+            "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
+            tail_x - tail_size / 2.0, tail_y,
+            tail_x + tail_size / 2.0, tail_y,
+            tail_x, tail_y - tail_size,
+        ),
+        "bottom" => format!(
+            "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
+            tail_x - tail_size / 2.0, tail_y,
+            tail_x + tail_size / 2.0, tail_y,
+            tail_x, tail_y + tail_size,
+        ),
+        "left" => format!(
+            "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
+            tail_x, tail_y - tail_size / 2.0,
+            tail_x, tail_y + tail_size / 2.0,
+            tail_x - tail_size, tail_y,
+        ),
+        "right" => format!(
+            "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
+            tail_x, tail_y - tail_size / 2.0,
+            tail_x, tail_y + tail_size / 2.0,
+            tail_x + tail_size, tail_y,
+        ),
+        _ => String::new(),
+    }
+}
+
 fn add_appendix_items(
     appendix_buf: &mut String,
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
     s: &d2_shape::Shape,
-) {
+) -> Result<(), String> {
     if target_shape.tooltip.is_empty() && target_shape.link.is_empty() {
-        return;
+        return Ok(());
     }
 
     // Positioned tooltips are rendered elsewhere (not yet implemented here).
@@ -1592,20 +1687,25 @@ fn add_appendix_items(
         }
     };
 
-    if !target_shape.tooltip.is_empty() && target_shape.tooltip_position.is_empty() {
-        let x = p1.x.ceil() as i32;
-        let y = p1.y.ceil() as i32;
-        let svg_id = d2_svg_path::svg_id(&target_shape.id);
-        let icon = format_appendix_icon(TOOLTIP_ICON_TEMPLATE, diagram_hash, &svg_id);
-        write!(
-            appendix_buf,
-            r#"<g transform="translate({} {})" class="appendix-icon"><title>{}</title>{}</g>"#,
-            x - APPENDIX_ICON_RADIUS,
-            y - APPENDIX_ICON_RADIUS,
-            d2_svg_path::escape_text(&target_shape.tooltip),
-            icon,
-        )
-        .unwrap();
+    if !target_shape.tooltip.is_empty() {
+        if !target_shape.tooltip_position.is_empty() {
+            let rendered = render_positioned_tooltip(target_shape)?;
+            appendix_buf.push_str(&rendered);
+        } else {
+            let x = p1.x.ceil() as i32;
+            let y = p1.y.ceil() as i32;
+            let svg_id = d2_svg_path::svg_id(&target_shape.id);
+            let icon = format_appendix_icon(TOOLTIP_ICON_TEMPLATE, diagram_hash, &svg_id);
+            write!(
+                appendix_buf,
+                r#"<g transform="translate({} {})" class="appendix-icon"><title>{}</title>{}</g>"#,
+                x - APPENDIX_ICON_RADIUS,
+                y - APPENDIX_ICON_RADIUS,
+                d2_svg_path::escape_text(&target_shape.tooltip),
+                icon,
+            )
+            .unwrap();
+        }
     }
     if !target_shape.link.is_empty() {
         let p2 = p2.unwrap_or(p1);
@@ -1622,6 +1722,7 @@ fn add_appendix_items(
         )
         .unwrap();
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2353,7 +2454,7 @@ fn draw_shape(
                 s.set_inner_box_aspect_ratio(ar);
             }
         }
-        add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
+        add_appendix_items(appendix_buf, diagram_hash, target_shape, &s)?;
     }
 
     buf.push_str(&closing_tag);
