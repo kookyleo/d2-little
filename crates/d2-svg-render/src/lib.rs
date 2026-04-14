@@ -2703,6 +2703,7 @@ fn draw_class(
     el.width = Some(shape.width as f64);
     el.height = Some(shape.height as f64);
     el.fill = fill;
+    el.fill_pattern = shape.fill_pattern.clone();
     el.stroke = stroke;
     el.style = style;
     if shape.border_radius != 0 {
@@ -3034,6 +3035,7 @@ fn draw_table(
     el.width = Some(shape.width as f64);
     el.height = Some(shape.height as f64);
     el.fill = fill.clone();
+    el.fill_pattern = shape.fill_pattern.clone();
     el.stroke = stroke.clone();
     el.style = style;
     el.class_name = "shape".to_owned();
