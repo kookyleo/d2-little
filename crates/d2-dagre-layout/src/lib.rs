@@ -1367,6 +1367,65 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
     let mut inner_left = f64::INFINITY;
     let mut inner_right = f64::NEG_INFINITY;
 
+    // Mirror Go: collect inside-label / inside-icon boxes for this container so
+    // we can prevent shrinkage that would collide with children's outside
+    // label/icon boxes.
+    let mut container_label_info: Option<(d2_geo::Box2D, d2_label::Position)> = None;
+    let mut container_icon_info: Option<(d2_geo::Box2D, d2_label::Position)> = None;
+    {
+        let obj = &g.objects[obj_id];
+        if obj.has_label() {
+            if let Some(lp_str) = obj.label_position.as_deref() {
+                let lp = d2_label::Position::from_string(lp_str);
+                use d2_label::Position::*;
+                let is_inside = matches!(
+                    lp,
+                    InsideTopLeft
+                        | InsideTopCenter
+                        | InsideTopRight
+                        | InsideBottomLeft
+                        | InsideBottomCenter
+                        | InsideBottomRight
+                        | InsideMiddleLeft
+                        | InsideMiddleRight
+                );
+                if is_inside {
+                    if let Some(tl) = obj.get_label_top_left() {
+                        let lw = obj.label_dimensions.width as f64 + 2.0 * d2_label::PADDING;
+                        let lh = obj.label_dimensions.height as f64;
+                        container_label_info = Some((d2_geo::Box2D::new(tl, lw, lh), lp));
+                    }
+                }
+            }
+        }
+        if obj.has_icon() {
+            if let Some(ip_str) = obj.icon_position.as_deref() {
+                let ip = d2_label::Position::from_string(ip_str);
+                use d2_label::Position::*;
+                let is_inside = matches!(
+                    ip,
+                    InsideTopLeft
+                        | InsideTopCenter
+                        | InsideTopRight
+                        | InsideBottomLeft
+                        | InsideBottomCenter
+                        | InsideBottomRight
+                        | InsideMiddleLeft
+                        | InsideMiddleRight
+                );
+                if is_inside {
+                    if let Some(tl) = obj.get_icon_top_left() {
+                        let sz = d2_target::MAX_ICON_SIZE as f64;
+                        container_icon_info = Some((d2_geo::Box2D::new(tl, sz, sz), ip));
+                    }
+                }
+            }
+        }
+    }
+    let needs_inner_boxes =
+        container_label_info.is_some() || container_icon_info.is_some();
+    let mut inner_boxes: Vec<d2_geo::Box2D> = Vec::new();
+
     for &child in &children {
         // Use `Object::spacing()` so outside icons (MAX_ICON_SIZE) contribute
         // to the child's margin on the same axis as its outside label.
@@ -1374,6 +1433,35 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
         let c = &g.objects[child];
         let (margin, _) = c.spacing();
         let (dx, dy) = c.get_modifier_element_adjustments();
+
+        if needs_inner_boxes {
+            if c.has_label() {
+                if let Some(lp_str) = c.label_position.as_deref() {
+                    let lp = d2_label::Position::from_string(lp_str);
+                    if lp.is_outside() {
+                        if let Some(tl) = c.get_label_top_left() {
+                            inner_boxes.push(d2_geo::Box2D::new(
+                                tl,
+                                c.label_dimensions.width as f64,
+                                c.label_dimensions.height as f64,
+                            ));
+                        }
+                    }
+                }
+            }
+            if c.has_icon() {
+                if let Some(ip_str) = c.icon_position.as_deref() {
+                    let ip = d2_label::Position::from_string(ip_str);
+                    if ip.is_outside() {
+                        if let Some(tl) = c.get_icon_top_left() {
+                            let sz = d2_target::MAX_ICON_SIZE as f64;
+                            inner_boxes.push(d2_geo::Box2D::new(tl, sz, sz));
+                        }
+                    }
+                }
+            }
+        }
+
         inner_top = inner_top.min(c.top_left.y - dy - margin.top.max(pad_top));
         inner_bottom = inner_bottom.max(c.top_left.y + c.height + margin.bottom.max(pad_bottom));
         inner_left = inner_left.min(c.top_left.x - margin.left.max(pad_left));
@@ -1403,6 +1491,9 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
             let lp = d2_label::Position::from_string(lp_str);
             if let Some((pt, _)) = lp.get_point_on_route(&route, 2.0, 0.0, label_width, label_height)
             {
+                if needs_inner_boxes {
+                    inner_boxes.push(d2_geo::Box2D::new(pt, label_width, label_height));
+                }
                 inner_top = inner_top.min(pt.y - pad_top);
                 inner_bottom = inner_bottom.max(pt.y + label_height + pad_bottom);
                 inner_left = inner_left.min(pt.x - pad_left);
@@ -1418,10 +1509,131 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
         }
     }
 
-    let top_delta = inner_top - current_top;
-    let bottom_delta = current_bottom - inner_bottom;
-    let left_delta = inner_left - current_left;
-    let right_delta = current_right - inner_right;
+    let mut top_delta = inner_top - current_top;
+    let mut bottom_delta = current_bottom - inner_bottom;
+    let mut left_delta = inner_left - current_left;
+    let mut right_delta = current_right - inner_right;
+
+    // Mirror Go fitPadding: when a shrinking side would pull the container's
+    // inside label/icon into one of the children's outside label/icon boxes,
+    // reduce the shrink by the overlap depth plus MIN_SPACING so the container
+    // stays large enough to avoid collisions.
+    if (top_delta > 0.0 || bottom_delta > 0.0 || left_delta > 0.0 || right_delta > 0.0)
+        && !inner_boxes.is_empty()
+    {
+        use d2_label::Position::*;
+        let side_of = |pos: d2_label::Position| -> Option<u8> {
+            match pos {
+                InsideTopLeft | InsideTopCenter | InsideTopRight => Some(0),
+                InsideBottomLeft | InsideBottomCenter | InsideBottomRight => Some(1),
+                InsideMiddleLeft => Some(2),
+                InsideMiddleRight => Some(3),
+                _ => None,
+            }
+        };
+
+        let mut top_overlap = 0.0f64;
+        let mut bottom_overlap = 0.0f64;
+        let mut left_overlap = 0.0f64;
+        let mut right_overlap = 0.0f64;
+
+        let mut process = |info: &Option<(d2_geo::Box2D, d2_label::Position)>,
+                           top_overlap: &mut f64,
+                           bottom_overlap: &mut f64,
+                           left_overlap: &mut f64,
+                           right_overlap: &mut f64| {
+            let Some((b, pos)) = info else { return };
+            let side = match side_of(*pos) {
+                Some(s) => s,
+                None => return,
+            };
+            // Move box by the projected shrink delta.
+            let mut moved = b.clone();
+            match side {
+                0 => {
+                    if top_delta > 0.0 {
+                        moved.top_left.y += top_delta;
+                    }
+                }
+                1 => {
+                    if bottom_delta > 0.0 {
+                        moved.top_left.y -= bottom_delta;
+                    }
+                }
+                2 => {
+                    if left_delta > 0.0 {
+                        moved.top_left.x += left_delta;
+                    }
+                }
+                3 => {
+                    if right_delta > 0.0 {
+                        moved.top_left.x -= right_delta;
+                    }
+                }
+                _ => {}
+            }
+            for ib in &inner_boxes {
+                if !moved.overlaps(ib) {
+                    continue;
+                }
+                match side {
+                    0 => {
+                        let dy = moved.top_left.y + moved.height - ib.top_left.y;
+                        if dy > 0.0 {
+                            *top_overlap = top_overlap.max(dy);
+                        }
+                    }
+                    1 => {
+                        let dy = ib.top_left.y + ib.height - moved.top_left.y;
+                        if dy > 0.0 {
+                            *bottom_overlap = bottom_overlap.max(dy);
+                        }
+                    }
+                    2 => {
+                        let dx = moved.top_left.x + moved.width - ib.top_left.x;
+                        if dx > 0.0 {
+                            *left_overlap = left_overlap.max(dx);
+                        }
+                    }
+                    3 => {
+                        let dx = ib.top_left.x + ib.width - moved.top_left.x;
+                        if dx > 0.0 {
+                            *right_overlap = right_overlap.max(dx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        process(
+            &container_label_info,
+            &mut top_overlap,
+            &mut bottom_overlap,
+            &mut left_overlap,
+            &mut right_overlap,
+        );
+        process(
+            &container_icon_info,
+            &mut top_overlap,
+            &mut bottom_overlap,
+            &mut left_overlap,
+            &mut right_overlap,
+        );
+
+        if top_overlap > 0.0 {
+            top_delta -= top_overlap + MIN_SPACING;
+        }
+        if bottom_overlap > 0.0 {
+            bottom_delta -= bottom_overlap + MIN_SPACING;
+        }
+        if left_overlap > 0.0 {
+            left_delta -= left_overlap + MIN_SPACING;
+        }
+        if right_overlap > 0.0 {
+            right_delta -= right_overlap + MIN_SPACING;
+        }
+    }
 
     // Only shrink (positive delta = excess space we can trim). For each
     // side, first reduce `delta` by any edge that would otherwise get
