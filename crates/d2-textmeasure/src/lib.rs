@@ -26,6 +26,7 @@ use regex::Regex;
 use roxmltree::{Document, Node, NodeType};
 use ttf_parser::Face;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 const TAB_SIZE: f64 = 4.0;
 const SIZELESS_FONT_SIZE: i32 = 0;
@@ -1049,7 +1050,8 @@ impl Ruler {
 
                 let mono = Font::new(FontFamily::SourceCodePro, font.style, font.size);
                 for grapheme in line.graphemes(true) {
-                    if grapheme.chars().count() == 1 {
+                    let unicode_width = UnicodeWidthStr::width(grapheme);
+                    if unicode_width == 1 {
                         continue;
                     }
 
@@ -1076,9 +1078,6 @@ impl Ruler {
                     }
 
                     adjusted_w -= b.w();
-                    let unicode_width =
-                        unicode_segmentation::UnicodeSegmentation::graphemes(grapheme, true)
-                            .count();
                     adjusted_w += self.space_width(mono) * unicode_width as f64;
                 }
 
@@ -1878,5 +1877,20 @@ mod tests {
             ww,
             wa
         );
+    }
+
+    #[test]
+    fn test_measure_cjk_matches_go_fixture() {
+        let mut ruler = Ruler::new().unwrap();
+
+        let font_16 = FontFamily::SourceSansPro.font(16, FontStyle::Regular);
+        let (w16, h16) = ruler.measure(font_16, "送信機");
+        assert_eq!(w16, 59);
+        assert_eq!(h16, 21);
+
+        let font_24 = FontFamily::SourceSansPro.font(24, FontStyle::Regular);
+        let (w24, h24) = ruler.measure(font_24, "オンラインポータル");
+        assert_eq!(w24, 271);
+        assert_eq!(h24, 31);
     }
 }
