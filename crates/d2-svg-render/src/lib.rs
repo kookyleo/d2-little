@@ -4061,6 +4061,47 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     w += half_sw * 2;
     h += half_sw * 2;
 
+    // Root double-border: Go d2svg.go renders a second background rect
+    // offset by INNER_BORDER_OFFSET + strokeWidth/2 beyond the first.
+    // Then shifts the viewbox by another strokeWidth/2 to envelop it.
+    let mut double_border_el = String::new();
+    if diagram.root.double_border {
+        let offset = d2_target::INNER_BORDER_OFFSET;
+        left -= half_sw + offset;
+        top -= half_sw + offset;
+        w += half_sw * 2 + 2 * offset;
+        h += half_sw * 2 + 2 * offset;
+
+        // Clone bg_el for the outer border rect
+        let mut bg_el2 = d2_themes::ThemableElement::new("rect", inline_theme);
+        bg_el2.x = Some(left as f64);
+        bg_el2.y = Some(top as f64);
+        bg_el2.width = Some(w as f64);
+        bg_el2.height = Some(h as f64);
+        bg_el2.fill = diagram.root.fill.clone();
+        bg_el2.stroke = diagram.root.stroke.clone();
+        bg_el2.fill_pattern = diagram.root.fill_pattern.clone();
+        bg_el2.rx = Some(diagram.root.border_radius as f64);
+        if diagram.root.stroke_dash != 0.0 {
+            let (dash, gap) = d2_svg_path::get_stroke_dash_attributes(
+                diagram.root.stroke_width as f64,
+                diagram.root.stroke_dash,
+            );
+            bg_el2.stroke_dash_array = format!("{:.6}, {:.6}", dash, gap);
+        }
+        bg_el2.attributes = format!(r#"stroke-width="{}""#, diagram.root.stroke_width);
+        double_border_el = bg_el2.render();
+
+        // Make the inner background transparent to avoid double-painting
+        bg_el.fill = "transparent".to_owned();
+
+        // Envelope the outer rect's stroke
+        left -= half_sw;
+        top -= half_sw;
+        w += half_sw * 2;
+        h += half_sw * 2;
+    }
+
     // Scaling dimensions
     let dim_attr = if let Some(sc) = scale {
         format!(
@@ -4102,6 +4143,8 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
         (String::new(), "", "", "", "g")
     };
 
+    // Render double-border outer rect first, then inner (matches Go order).
+    let bg_rendered = format!("{}{}", double_border_el, bg_el.render());
     let doc = format!(
         r#"{}{}<{} class="{} {}" width="{}" height="{}" viewBox="{} {} {} {}">{}{}{}</{}>{}"#,
         xml_tag,
@@ -4115,7 +4158,7 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
         top,
         w,
         h,
-        bg_el.render(),
+        bg_rendered,
         upper_buf,
         buf,
         tag,
