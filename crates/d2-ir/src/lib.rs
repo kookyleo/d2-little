@@ -1185,8 +1185,20 @@ impl Compiler {
             let inner_src = &src_path[common_len..];
             let inner_dst = &dst_path[common_len..];
 
-            // Ensure common path fields exist and put edge there
-            let scope = self.ensure_field_path(dst, &common.to_vec());
+            // Ensure common path fields exist. Record references to the
+            // original edge src/dst keypaths so shapes like the common-
+            // prefix field "a" in `a.b -> a.c` get first-references that
+            // match Go's sort_objects_by_ast (pointing at path[0]="a").
+            let ast_edge_for_paths = key.edges.get(edge_idx);
+            let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
+            let scope = self.ensure_field_path_with_refs_skip(
+                dst,
+                &common.to_vec(),
+                src_kp,
+                Some(key),
+                0,
+                src_skip.min(common_len),
+            );
             let src_skip_inner = src_skip.saturating_sub(common_len);
             let dst_skip_inner = dst_skip.saturating_sub(common_len);
             self.create_edge_inner(
@@ -1199,10 +1211,12 @@ impl Compiler {
                 dst_arrow,
                 src_skip_inner,
                 dst_skip_inner,
+                common_len,
             );
         } else {
             self.create_edge_inner(
                 dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow, src_skip, dst_skip,
+                0,
             );
         }
     }
@@ -1218,26 +1232,26 @@ impl Compiler {
         dst_arrow: bool,
         src_skip: usize,
         dst_skip: usize,
+        kp_offset: usize,
     ) {
         // Ensure src and dst fields exist, recording the AST KeyPath for
-        // each new field reference. The KeyPath comes from the AST edge
-        // (per src/dst). For a common-prefix edge like `a.b -> a.c`, the
-        // common `a` was already added as a field by the caller (with the
-        // src KeyPath); we account for that via `kp_offset`.
+        // each new field reference. `kp_offset` is the number of path
+        // segments (common prefix) already consumed from the AST KeyPath
+        // by the caller; when walking `src_path` at index i, the matching
+        // AST StringBox sits at `kp.path[kp_offset + i]`.
         let ast_edge_for_paths = key.edges.get(edge_idx);
-        let common_offset = match key.key.as_ref() {
-            Some(kp) => kp.path.len(),
-            None => 0,
-        };
         if !src_path.is_empty() {
             let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
-            self.ensure_field_path_with_refs_skip(dst, src_path, src_kp, Some(key), 0, src_skip);
+            self.ensure_field_path_with_refs_skip(
+                dst, src_path, src_kp, Some(key), kp_offset, src_skip,
+            );
         }
         if !dst_path.is_empty() {
             let dst_kp = ast_edge_for_paths.and_then(|e| e.dst.as_ref());
-            self.ensure_field_path_with_refs_skip(dst, dst_path, dst_kp, Some(key), 0, dst_skip);
+            self.ensure_field_path_with_refs_skip(
+                dst, dst_path, dst_kp, Some(key), kp_offset, dst_skip,
+            );
         }
-        let _ = common_offset; // reserved for future common-prefix sharing
 
         // Count existing edges with same src/dst/arrows (to compute index)
         let match_eid = EdgeID {

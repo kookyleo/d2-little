@@ -1037,8 +1037,14 @@ pub fn layout_with_exclude(
     // extensions, which dagre itself does not model. Without them, shapes
     // with `style.multiple` or `style.3d` end up 10px short on their right
     // side and outside labels overlap neighbouring shapes.
-    adjust_rank_spacing(g, ranksep as f64, is_horizontal);
-    adjust_cross_rank_spacing(g, ranksep as f64, !is_horizontal);
+    //
+    // Pass `excluded_objects` so grid descendants (which Go physically
+    // extracts from the graph before running dagre) don't contribute margin
+    // or padding adjustments that would grow their grid container — Go never
+    // sees them during this phase because they've been pulled out into a
+    // sub-graph.
+    adjust_rank_spacing(g, ranksep as f64, is_horizontal, &excluded_objects);
+    adjust_cross_rank_spacing(g, ranksep as f64, !is_horizontal, &excluded_objects);
 
     // Shrink containers around their children + padding.
     fit_container_padding(g);
@@ -2408,7 +2414,13 @@ fn shift_reachable_down(
 /// positions to create room, growing the stretched containers in the
 /// process. Preserves Go's two-pass (ending then starting) order so the
 /// containers' boxes match bytewise.
-fn adjust_rank_spacing(g: &mut Graph, rank_sep: f64, is_horizontal: bool) {
+fn adjust_rank_spacing(
+    g: &mut Graph,
+    rank_sep: f64,
+    is_horizontal: bool,
+    excluded_objects: &HashSet<ObjId>,
+) {
+    let _ = excluded_objects; // currently unused; grid containers themselves gate via is_grid_diagram
     let (ranks, object_ranks, starting_parent_ranks, ending_parent_ranks) =
         get_ranks(g, is_horizontal);
 
@@ -2615,7 +2627,12 @@ fn adjust_rank_spacing(g: &mut Graph, rank_sep: f64, is_horizontal: bool) {
 /// reachable shapes (via `shift_reachable_down`) to open up room. The
 /// `prev_margin` maps record how much of each direction's margin has already
 /// been handed out to an object so nested margins don't double-count.
-fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool) {
+fn adjust_cross_rank_spacing(
+    g: &mut Graph,
+    _rank_sep: f64,
+    is_horizontal: bool,
+    excluded_objects: &HashSet<ObjId>,
+) {
     let mut prev_top: HashMap<ObjId, f64> = HashMap::new();
     let mut prev_bottom: HashMap<ObjId, f64> = HashMap::new();
     let mut prev_left: HashMap<ObjId, f64> = HashMap::new();
@@ -2624,6 +2641,7 @@ fn adjust_cross_rank_spacing(g: &mut Graph, _rank_sep: f64, is_horizontal: bool)
     let obj_ids: Vec<ObjId> = (0..g.objects.len())
         .filter(|&i| {
             i != g.root
+                && !excluded_objects.contains(&i)
                 && g.objects[i].shape.value != "__d2_seq_nested_removed__"
                 && g.objects[i].shape.value != "__d2_class_field_removed__"
         })
