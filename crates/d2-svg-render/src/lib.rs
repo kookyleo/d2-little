@@ -10,10 +10,10 @@ use d2_color;
 use d2_fonts;
 use d2_geo;
 use d2_label;
-use d2_textmeasure;
 use d2_shape::{self, ShapeOps};
 use d2_svg_path;
 use d2_target;
+use d2_textmeasure;
 use d2_themes;
 
 // ---------------------------------------------------------------------------
@@ -1026,20 +1026,22 @@ fn draw_connection(
             let icon_pos = if !connection.text.label.is_empty() {
                 let label_pos = d2_label::Position::from_string(&connection.label_position);
                 let r = d2_geo::Route(route.clone());
-                label_pos.get_point_on_route(
-                    &r,
-                    connection.stroke_width as f64,
-                    connection.label_percentage,
-                    connection.text.label_width as f64,
-                    connection.text.label_height as f64,
-                ).map(|(tl, _)| {
-                    d2_geo::Point::new(
-                        tl.x - d2_target::CONNECTION_ICON_LABEL_GAP as f64
-                            - d2_target::DEFAULT_ICON_SIZE as f64,
-                        tl.y + connection.text.label_height as f64 / 2.0
-                            - d2_target::DEFAULT_ICON_SIZE as f64 / 2.0,
+                label_pos
+                    .get_point_on_route(
+                        &r,
+                        connection.stroke_width as f64,
+                        connection.label_percentage,
+                        connection.text.label_width as f64,
+                        connection.text.label_height as f64,
                     )
-                })
+                    .map(|(tl, _)| {
+                        d2_geo::Point::new(
+                            tl.x - d2_target::CONNECTION_ICON_LABEL_GAP as f64
+                                - d2_target::DEFAULT_ICON_SIZE as f64,
+                            tl.y + connection.text.label_height as f64 / 2.0
+                                - d2_target::DEFAULT_ICON_SIZE as f64 / 2.0,
+                        )
+                    })
             } else {
                 let icon_label_pos = if connection.icon_position.is_empty() {
                     d2_label::Position::InsideMiddleCenter
@@ -1047,17 +1049,22 @@ fn draw_connection(
                     d2_label::Position::from_string(&connection.icon_position)
                 };
                 let r = d2_geo::Route(route.clone());
-                icon_label_pos.get_point_on_route(
-                    &r,
-                    connection.stroke_width as f64,
-                    -1.0,
-                    d2_target::DEFAULT_ICON_SIZE as f64,
-                    d2_target::DEFAULT_ICON_SIZE as f64,
-                ).map(|(pt, _)| pt)
+                icon_label_pos
+                    .get_point_on_route(
+                        &r,
+                        connection.stroke_width as f64,
+                        -1.0,
+                        d2_target::DEFAULT_ICON_SIZE as f64,
+                        d2_target::DEFAULT_ICON_SIZE as f64,
+                    )
+                    .map(|(pt, _)| pt)
             };
             if let Some(pos) = icon_pos {
                 let clip = if connection.icon_border_radius != 0.0 {
-                    format!(r#" clip-path="inset(0 round {:.6}px)""#, connection.icon_border_radius)
+                    format!(
+                        r#" clip-path="inset(0 round {:.6}px)""#,
+                        connection.icon_border_radius
+                    )
                 } else {
                     String::new()
                 };
@@ -1065,11 +1072,13 @@ fn draw_connection(
                     buf,
                     r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}"{} />"#,
                     d2_svg_path::escape_text(icon_url),
-                    pos.x, pos.y,
+                    pos.x,
+                    pos.y,
                     d2_target::DEFAULT_ICON_SIZE,
                     d2_target::DEFAULT_ICON_SIZE,
                     clip,
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -1149,26 +1158,18 @@ fn draw_connection(
             let mut mask_tl = label_tl.clone();
             let mut mask_width = connection.text.label_width;
             if connection.icon.is_some() {
-                mask_width += d2_target::CONNECTION_ICON_LABEL_GAP as i32
-                    + d2_target::DEFAULT_ICON_SIZE;
-                mask_tl.x -= d2_target::CONNECTION_ICON_LABEL_GAP
-                    + d2_target::DEFAULT_ICON_SIZE as f64;
+                mask_width +=
+                    d2_target::CONNECTION_ICON_LABEL_GAP as i32 + d2_target::DEFAULT_ICON_SIZE;
+                mask_tl.x -=
+                    d2_target::CONNECTION_ICON_LABEL_GAP + d2_target::DEFAULT_ICON_SIZE as f64;
             }
 
             if label_pos.is_on_edge() {
-                label_mask = make_label_mask(
-                    &mask_tl,
-                    mask_width,
-                    connection.text.label_height,
-                    1.0,
-                );
+                label_mask =
+                    make_label_mask(&mask_tl, mask_width, connection.text.label_height, 1.0);
             } else {
-                label_mask = make_label_mask(
-                    &mask_tl,
-                    mask_width,
-                    connection.text.label_height,
-                    0.75,
-                );
+                label_mask =
+                    make_label_mask(&mask_tl, mask_width, connection.text.label_height, 0.75);
             }
 
             if connection.text.language == "markdown" {
@@ -1232,21 +1233,21 @@ fn draw_connection(
                         ) {
                             // Go ThemableElement emits:
                             //   transform="translate(%f %f)" color="resolved" class=" color-CODE"
-                            let (color_attr, class_attr) =
-                                if d2_color::is_theme_color(text_color) {
-                                    let resolved =
-                                        inline_theme.map(|t| t.resolve_color(text_color)).unwrap_or_default();
-                                    let ca = if resolved.is_empty() {
-                                        String::new()
-                                    } else {
-                                        format!(r#" color="{}""#, resolved)
-                                    };
-                                    (ca, format!(r#" class=" color-{}""#, text_color))
-                                } else if !text_color.is_empty() {
-                                    (format!(r#" color="{}""#, text_color), String::new())
+                            let (color_attr, class_attr) = if d2_color::is_theme_color(text_color) {
+                                let resolved = inline_theme
+                                    .map(|t| t.resolve_color(text_color))
+                                    .unwrap_or_default();
+                                let ca = if resolved.is_empty() {
+                                    String::new()
                                 } else {
-                                    (String::new(), String::new())
+                                    format!(r#" color="{}""#, resolved)
                                 };
+                                (ca, format!(r#" class=" color-{}""#, text_color))
+                            } else if !text_color.is_empty() {
+                                (format!(r#" color="{}""#, text_color), String::new())
+                            } else {
+                                (String::new(), String::new())
+                            };
                             buf.push_str(&format!(
                                 r#"<g transform="translate({:.6} {:.6})"{}{}>{}</g>"#,
                                 pt.x, pt.y, color_attr, class_attr, latex_svg
@@ -1392,7 +1393,11 @@ fn draw_connection(
                 d2_target::DEFAULT_ICON_SIZE as f64,
             ) {
                 let mask_tl = d2_geo::Point::new(pt.x, pt.y);
-                let opacity = if icon_label_pos.is_on_edge() { 1.0 } else { 0.75 };
+                let opacity = if icon_label_pos.is_on_edge() {
+                    1.0
+                } else {
+                    0.75
+                };
                 label_mask = make_label_mask(
                     &mask_tl,
                     d2_target::DEFAULT_ICON_SIZE,
@@ -1541,8 +1546,11 @@ fn render_positioned_tooltip(target_shape: &d2_target::Shape) -> Result<String, 
         &target_shape.tooltip_position,
     );
 
-    let (tail_direction, tail_x_off, tail_y_off) =
-        positioned_tooltip_tail(&target_shape.tooltip_position, tooltip_width, tooltip_height);
+    let (tail_direction, tail_x_off, tail_y_off) = positioned_tooltip_tail(
+        &target_shape.tooltip_position,
+        tooltip_width,
+        tooltip_height,
+    );
 
     let tooltip_content = format!(
         "<foreignObject x=\"{:.6}\" y=\"{:.6}\" width=\"{}\" height=\"{}\"><div xmlns=\"http://www.w3.org/1999/xhtml\" class=\"md color-N1\">{}</div></foreignObject>",
@@ -1590,27 +1598,39 @@ fn render_tooltip_tail(direction: &str, tail_x: f64, tail_y: f64) -> String {
     match direction {
         "top" => format!(
             "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
-            tail_x - tail_size / 2.0, tail_y,
-            tail_x + tail_size / 2.0, tail_y,
-            tail_x, tail_y - tail_size,
+            tail_x - tail_size / 2.0,
+            tail_y,
+            tail_x + tail_size / 2.0,
+            tail_y,
+            tail_x,
+            tail_y - tail_size,
         ),
         "bottom" => format!(
             "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
-            tail_x - tail_size / 2.0, tail_y,
-            tail_x + tail_size / 2.0, tail_y,
-            tail_x, tail_y + tail_size,
+            tail_x - tail_size / 2.0,
+            tail_y,
+            tail_x + tail_size / 2.0,
+            tail_y,
+            tail_x,
+            tail_y + tail_size,
         ),
         "left" => format!(
             "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
-            tail_x, tail_y - tail_size / 2.0,
-            tail_x, tail_y + tail_size / 2.0,
-            tail_x - tail_size, tail_y,
+            tail_x,
+            tail_y - tail_size / 2.0,
+            tail_x,
+            tail_y + tail_size / 2.0,
+            tail_x - tail_size,
+            tail_y,
         ),
         "right" => format!(
             "<path d=\"M {:.6} {:.6} L {:.6} {:.6} L {:.6} {:.6} Z\" fill=\"white\" stroke=\"#DEE1EB\" stroke-width=\"1\"/>",
-            tail_x, tail_y - tail_size / 2.0,
-            tail_x, tail_y + tail_size / 2.0,
-            tail_x + tail_size, tail_y,
+            tail_x,
+            tail_y - tail_size / 2.0,
+            tail_x,
+            tail_y + tail_size / 2.0,
+            tail_x + tail_size,
+            tail_y,
         ),
         _ => String::new(),
     }
@@ -2991,22 +3011,23 @@ fn draw_class(
     // Shape icon (matches Go class.go drawClass icon rendering)
     if let Some(ref icon) = shape.icon {
         if shape.type_ != d2_target::SHAPE_IMAGE {
-            let bbox = d2_geo::Box2D::new(
-                d2_geo::Point::new(box_x, box_y),
-                box_w,
-                box_h,
-            );
+            let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
             let icon_pos = d2_label::Position::from_string(&shape.icon_position);
             let icon_size = get_icon_size(&bbox, &shape.icon_position);
             let tl = icon_pos.get_point_on_box(
-                &bbox, d2_label::PADDING, icon_size as f64, icon_size as f64,
+                &bbox,
+                d2_label::PADDING,
+                icon_size as f64,
+                icon_size as f64,
             );
             write!(
                 buf,
                 r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
                 d2_svg_path::escape_text(icon),
-                tl.x, tl.y,
-                icon_size, icon_size,
+                tl.x,
+                tl.y,
+                icon_size,
+                icon_size,
             )
             .unwrap();
         }
@@ -3389,22 +3410,23 @@ fn draw_table(
     // Shape icon (matches Go table.go/class.go icon rendering)
     if let Some(ref icon) = shape.icon {
         if shape.type_ != d2_target::SHAPE_IMAGE {
-            let bbox = d2_geo::Box2D::new(
-                d2_geo::Point::new(box_x, box_y),
-                box_w,
-                box_h,
-            );
+            let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
             let icon_pos = d2_label::Position::from_string(&shape.icon_position);
             let icon_size = get_icon_size(&bbox, &shape.icon_position);
             let tl = icon_pos.get_point_on_box(
-                &bbox, d2_label::PADDING, icon_size as f64, icon_size as f64,
+                &bbox,
+                d2_label::PADDING,
+                icon_size as f64,
+                icon_size as f64,
             );
             write!(
                 buf,
                 r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
                 d2_svg_path::escape_text(icon),
-                tl.x, tl.y,
-                icon_size, icon_size,
+                tl.x,
+                tl.y,
+                icon_size,
+                icon_size,
             )
             .unwrap();
         }
@@ -3731,11 +3753,8 @@ fn legend_dimensions(legend: &d2_target::Legend) -> Option<(i32, i32)> {
             } else {
                 d2_fonts::FontStyle::Regular
             };
-            let font = d2_fonts::Font::new(
-                d2_fonts::FontFamily::SourceSansPro,
-                style,
-                LEGEND_FONT_SIZE,
-            );
+            let font =
+                d2_fonts::Font::new(d2_fonts::FontFamily::SourceSansPro, style, LEGEND_FONT_SIZE);
             r.measure(font, label)
         } else {
             // Crude fallback: assume 7px per character, font-size height.
@@ -4005,10 +4024,7 @@ fn render_legend_connection_icon(
 
     // Go uses hash("c.ID-x-y") prefixed with "legend-" for the per-icon
     // diagram hash so marker IDs and mask refs stay unique.
-    let legend_hash = format!(
-        "legend-{}",
-        hash_str(&format!("{}-{}-{}", c.id, x, y))
-    );
+    let legend_hash = format!("legend-{}", hash_str(&format!("{}-{}-{}", c.id, x, y)));
 
     let mut final_buf = String::new();
     write!(

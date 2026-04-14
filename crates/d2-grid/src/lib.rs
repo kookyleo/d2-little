@@ -205,10 +205,10 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
         if label_w > 0.0 {
             use Position::*;
             match label_pos {
-                OutsideTopLeft | OutsideTopCenter | OutsideTopRight
-                | InsideTopLeft | InsideTopCenter | InsideTopRight
-                | InsideBottomLeft | InsideBottomCenter | InsideBottomRight
-                | OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
+                OutsideTopLeft | OutsideTopCenter | OutsideTopRight | InsideTopLeft
+                | InsideTopCenter | InsideTopRight | InsideBottomLeft | InsideBottomCenter
+                | InsideBottomRight | OutsideBottomLeft | OutsideBottomCenter
+                | OutsideBottomRight => {
                     let overflow = label_w - content_w;
                     if overflow > 0.0 {
                         padding.left += overflow / 2.0;
@@ -221,9 +221,9 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
         if label_h > 0.0 {
             use Position::*;
             match label_pos {
-                OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom
-                | InsideMiddleLeft | InsideMiddleCenter | InsideMiddleRight
-                | OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+                OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom | InsideMiddleLeft
+                | InsideMiddleCenter | InsideMiddleRight | OutsideRightTop | OutsideRightMiddle
+                | OutsideRightBottom => {
                     let overflow = label_h - content_h;
                     if overflow > 0.0 {
                         padding.top += overflow / 2.0;
@@ -239,9 +239,8 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
             let icon_size = d2_target::MAX_ICON_SIZE as f64 + 2.0 * d2_label::PADDING;
             padding.left = padding.left.max(icon_size);
             padding.right = padding.right.max(icon_size);
-            let min_w = 2.0 * icon_size
-                + obj.label_dimensions.width as f64
-                + 2.0 * d2_label::PADDING;
+            let min_w =
+                2.0 * icon_size + obj.label_dimensions.width as f64 + 2.0 * d2_label::PADDING;
             let overflow = min_w - content_w;
             if overflow > 0.0 {
                 padding.left = padding.left.max(overflow / 2.0);
@@ -396,8 +395,7 @@ fn layout_grid(g: &mut Graph, root: ObjId) -> Result<GridDiagram, String> {
             if is_container {
                 g.objects[obj_id].icon_position = Some("OUTSIDE_TOP_LEFT".to_owned());
                 if !label_pos_set {
-                    g.objects[obj_id].label_position =
-                        Some("OUTSIDE_TOP_RIGHT".to_owned());
+                    g.objects[obj_id].label_position = Some("OUTSIDE_TOP_RIGHT".to_owned());
                     positioned_label = true;
                 }
             } else {
@@ -406,17 +404,13 @@ fn layout_grid(g: &mut Graph, root: ObjId) -> Result<GridDiagram, String> {
         }
         if !positioned_label && has_label && !label_pos_set {
             if is_container {
-                g.objects[obj_id].label_position =
-                    Some("OUTSIDE_TOP_CENTER".to_owned());
+                g.objects[obj_id].label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
             } else if has_outside_bottom {
-                g.objects[obj_id].label_position =
-                    Some("OUTSIDE_BOTTOM_CENTER".to_owned());
+                g.objects[obj_id].label_position = Some("OUTSIDE_BOTTOM_CENTER".to_owned());
             } else if has_icon {
-                g.objects[obj_id].label_position =
-                    Some("INSIDE_TOP_CENTER".to_owned());
+                g.objects[obj_id].label_position = Some("INSIDE_TOP_CENTER".to_owned());
             } else {
-                g.objects[obj_id].label_position =
-                    Some("INSIDE_MIDDLE_CENTER".to_owned());
+                g.objects[obj_id].label_position = Some("INSIDE_MIDDLE_CENTER".to_owned());
             }
         }
     }
@@ -702,7 +696,14 @@ fn get_best_layout(
 
     // Try fast layout first
     if let Some(fl) = fast_layout(g, gd, target_size, n_cuts, columns) {
-        let dist = get_dist_to_target(g, &fl, target_size, gd.horizontal_gap as f64, gd.vertical_gap as f64, columns);
+        let dist = get_dist_to_target(
+            g,
+            &fl,
+            target_size,
+            gd.horizontal_gap as f64,
+            gd.vertical_gap as f64,
+            columns,
+        );
         if dist == 0.0 {
             return fl;
         }
@@ -730,7 +731,9 @@ fn get_best_layout(
         .collect();
     let sd = stddev(&sizes);
 
-    let mut threshold_attempts = (sd.ceil() as usize).max(MIN_THRESHOLD_ATTEMPTS).min(MAX_THRESHOLD_ATTEMPTS);
+    let mut threshold_attempts = (sd.ceil() as usize)
+        .max(MIN_THRESHOLD_ATTEMPTS)
+        .min(MAX_THRESHOLD_ATTEMPTS);
     let mut ok_threshold = STARTING_THRESHOLD;
 
     let mut attempt = 0;
@@ -763,7 +766,9 @@ fn get_best_layout(
         attempt += 1;
     }
 
-    state.best_layout.unwrap_or_else(|| vec![gd.objects.clone()])
+    state
+        .best_layout
+        .unwrap_or_else(|| vec![gd.objects.clone()])
 }
 
 /// Port of Go `iterDivisions`, carrying pending outer cuts in reverse order.
@@ -784,7 +789,14 @@ fn iter_divisions_search(
     }
     let last_obj = sizes.len() - 1;
     for index in (n_cuts..=last_obj).rev() {
-        if !check_cut(&sizes[index..], false, gap, ok_threshold, target_size, state) {
+        if !check_cut(
+            &sizes[index..],
+            false,
+            gap,
+            ok_threshold,
+            target_size,
+            state,
+        ) {
             continue;
         }
         if n_cuts > 1 {
@@ -972,7 +984,6 @@ fn get_dist_to_target(
     total_delta
 }
 
-
 // ---------------------------------------------------------------------------
 // Outside label sizing
 // ---------------------------------------------------------------------------
@@ -1059,10 +1070,7 @@ mod tests {
     fn gen_layout_three_cuts() {
         let objects: Vec<usize> = (0..8).collect();
         let result = gen_layout(&objects, &[0, 2, 6]);
-        assert_eq!(
-            result,
-            vec![vec![0], vec![1, 2], vec![3, 4, 5, 6], vec![7]]
-        );
+        assert_eq!(result, vec![vec![0], vec![1, 2], vec![3, 4, 5, 6], vec![7]]);
     }
 
     #[test]
@@ -1215,7 +1223,10 @@ mod integration_tests {
         }
 
         let gd = new_grid_diagram(&mut g, root);
-        eprintln!("rows={}, cols={}, row_directed={}", gd.rows, gd.columns, gd.row_directed);
+        eprintln!(
+            "rows={}, cols={}, row_directed={}",
+            gd.rows, gd.columns, gd.row_directed
+        );
         assert_eq!(gd.rows, 3);
         assert_eq!(gd.columns, 0);
         assert!(gd.row_directed);
@@ -1256,9 +1267,14 @@ mod integration_tests {
 
         eprintln!("root: {}x{}", g.objects[root].width, g.objects[root].height);
         for i in 1..=3 {
-            eprintln!("  item{}: ({}, {}) {}x{}", i-1,
-                g.objects[i].top_left.x, g.objects[i].top_left.y,
-                g.objects[i].width, g.objects[i].height);
+            eprintln!(
+                "  item{}: ({}, {}) {}x{}",
+                i - 1,
+                g.objects[i].top_left.x,
+                g.objects[i].top_left.y,
+                g.objects[i].width,
+                g.objects[i].height
+            );
         }
         // 3 rows, each with 1 item, v-gap=0.
         // Items should be stacked vertically, each at y=i*66.
@@ -1266,7 +1282,10 @@ mod integration_tests {
         assert_eq!(g.objects[2].top_left.y, 66.0, "item1 y");
         assert_eq!(g.objects[3].top_left.y, 132.0, "item2 y");
         // All items should be in the same column (same x)
-        assert_eq!(g.objects[1].top_left.x, g.objects[2].top_left.x, "items same x");
+        assert_eq!(
+            g.objects[1].top_left.x, g.objects[2].top_left.x,
+            "items same x"
+        );
         // Items should all be expanded to max width (66)
         assert_eq!(g.objects[1].width, 66.0, "item0 width");
         assert_eq!(g.objects[2].width, 66.0, "item1 width (was widest)");
@@ -1309,9 +1328,15 @@ mod integration_tests {
         eprintln!("root: {}x{}", g.objects[root].width, g.objects[root].height);
         // 2x2 grid of 100x100 items with gap 0 => content 200x200
         // With padding the root should be bigger
-        assert!(g.objects[root].width >= 200.0,
-            "Root width should be >= 200: {}", g.objects[root].width);
-        assert!(g.objects[root].height >= 200.0,
-            "Root height should be >= 200: {}", g.objects[root].height);
+        assert!(
+            g.objects[root].width >= 200.0,
+            "Root width should be >= 200: {}",
+            g.objects[root].width
+        );
+        assert!(
+            g.objects[root].height >= 200.0,
+            "Root height should be >= 200: {}",
+            g.objects[root].height
+        );
     }
 }

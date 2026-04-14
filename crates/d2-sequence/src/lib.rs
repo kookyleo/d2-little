@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use d2_geo::Point;
-use d2_graph::{Edge, Graph, Object, ObjId, ScalarValue, Style};
+use d2_graph::{Edge, Graph, ObjId, Object, ScalarValue, Style};
 use d2_label;
 use d2_target;
 
@@ -50,8 +50,8 @@ const NOTE_Z_INDEX: i32 = 5;
 
 struct SequenceDiagram {
     root: ObjId,
-    messages: Vec<usize>,  // edge indices
-    lifelines: Vec<Edge>,  // synthesized lifeline edges
+    messages: Vec<usize>, // edge indices
+    lifelines: Vec<Edge>, // synthesized lifeline edges
     actors: Vec<ObjId>,
     #[allow(dead_code)]
     groups: Vec<ObjId>,
@@ -205,7 +205,9 @@ fn new_sequence_diagram(
                 //   child.Shape = PAGE_TYPE
                 //   child.LabelPosition = INSIDE_MIDDLE_CENTER
                 let note = &mut g.objects[child_id];
-                note.shape = ScalarValue { value: d2_target::SHAPE_PAGE.to_owned() };
+                note.shape = ScalarValue {
+                    value: d2_target::SHAPE_PAGE.to_owned(),
+                };
                 note.label_position = Some("INSIDE_MIDDLE_CENTER".to_string());
                 sd.vertical_indices
                     .insert(note.abs_id.clone(), get_obj_earliest_line_num(note));
@@ -221,7 +223,9 @@ fn new_sequence_diagram(
                     value: String::new(),
                     map_key: span.label.map_key.take(),
                 };
-                span.shape = ScalarValue { value: "square".to_owned() };
+                span.shape = ScalarValue {
+                    value: "square".to_owned(),
+                };
                 sd.spans.push(child_id);
                 sd.object_rank.insert(child_id, rank);
             }
@@ -255,22 +259,20 @@ fn new_sequence_diagram(
         let rank_diff = (src_rank as f64 - dst_rank as f64).abs();
 
         if rank_diff != 0.0 {
-            let distributed_label_width =
-                message.label_dimensions.width as f64 / rank_diff;
+            let distributed_label_width = message.label_dimensions.width as f64 / rank_diff;
             let min_rank = src_rank.min(dst_rank);
             let max_rank = src_rank.max(dst_rank);
             for rank in min_rank..max_rank {
                 if rank < sd.actor_x_step.len() {
-                    sd.actor_x_step[rank] = sd.actor_x_step[rank]
-                        .max(distributed_label_width + LABEL_HORIZONTAL_PAD);
+                    sd.actor_x_step[rank] =
+                        sd.actor_x_step[rank].max(distributed_label_width + LABEL_HORIZONTAL_PAD);
                 }
             }
         } else {
             // Self-message
             let next_rank = src_rank;
             if next_rank < sd.actor_x_step.len() {
-                let label_adjust =
-                    message.label_dimensions.width as f64 + d2_label::PADDING * 4.0;
+                let label_adjust = message.label_dimensions.width as f64 + d2_label::PADDING * 4.0;
                 sd.actor_x_step[next_rank] = sd.actor_x_step[next_rank].max(label_adjust);
             }
         }
@@ -461,7 +463,8 @@ impl SequenceDiagram {
                 if icon_position.is_none() {
                     actor.label_position = Some("OUTSIDE_BOTTOM_CENTER".to_string());
                 }
-                y_offset = self.max_actor_height - actor_height
+                y_offset = self.max_actor_height
+                    - actor_height
                     - if has_label { label_height } else { 0.0 };
             } else {
                 let actor = &mut g.objects[actor_id];
@@ -509,9 +512,7 @@ impl SequenceDiagram {
                 if self.vertical_indices[&msg.abs_id] < vertical_index {
                     if msg.src == msg.dst {
                         y += self.y_step
-                            + (msg.label_dimensions.height as f64)
-                                .max(MIN_MESSAGE_DISTANCE)
-                                * 1.5;
+                            + (msg.label_dimensions.height as f64).max(MIN_MESSAGE_DISTANCE) * 1.5;
                     } else {
                         y += self.y_step + msg.label_dimensions.height as f64;
                     }
@@ -519,7 +520,13 @@ impl SequenceDiagram {
             }
             for &other_note_id in &self.notes {
                 let other_note = &g.objects[other_note_id];
-                if self.vertical_indices.get(&other_note.abs_id).copied().unwrap_or(0) < vertical_index {
+                if self
+                    .vertical_indices
+                    .get(&other_note.abs_id)
+                    .copied()
+                    .unwrap_or(0)
+                    < vertical_index
+                {
                     y += other_note.height + self.y_step;
                 }
             }
@@ -553,7 +560,13 @@ impl SequenceDiagram {
             let mut note_offset: f64 = 0.0;
             for &note_id in &self.notes {
                 let note = &g.objects[note_id];
-                if self.vertical_indices.get(&note.abs_id).copied().unwrap_or(0) < msg_vi {
+                if self
+                    .vertical_indices
+                    .get(&note.abs_id)
+                    .copied()
+                    .unwrap_or(0)
+                    < msg_vi
+                {
                     note_offset += note.height + self.y_step;
                 }
             }
@@ -613,8 +626,7 @@ impl SequenceDiagram {
 
             if is_self_message || is_to_descendant || is_from_descendant || is_to_sibling {
                 let mid_x = start_x
-                    + SELF_MESSAGE_HORIZONTAL_TRAVEL
-                        .max(label_w / 2.0 + d2_label::PADDING * 2.0);
+                    + SELF_MESSAGE_HORIZONTAL_TRAVEL.max(label_w / 2.0 + d2_label::PADDING * 2.0);
                 let start_y = message_offset + note_offset;
                 let end_y = start_y + label_h.max(MIN_MESSAGE_DISTANCE) * 1.5;
                 g.edges[msg_idx].route = vec![
@@ -626,16 +638,13 @@ impl SequenceDiagram {
                 message_offset = end_y + self.y_step - note_offset;
             } else {
                 let start_y = message_offset + note_offset + label_h_half;
-                g.edges[msg_idx].route = vec![
-                    Point::new(start_x, start_y),
-                    Point::new(end_x, start_y),
-                ];
+                g.edges[msg_idx].route =
+                    vec![Point::new(start_x, start_y), Point::new(end_x, start_y)];
                 message_offset = start_y + label_h_half + self.y_step - note_offset;
             }
 
             if !g.edges[msg_idx].label.value.is_empty() {
-                g.edges[msg_idx].label_position =
-                    Some("INSIDE_MIDDLE_CENTER".to_string());
+                g.edges[msg_idx].label_position = Some("INSIDE_MIDDLE_CENTER".to_string());
             }
         }
         Ok(())
@@ -705,8 +714,8 @@ impl SequenceDiagram {
             let root_level = obj_level(g, self.root);
             let span_level = obj_level(g, span_id);
             // -1 because the actors count as 1 level
-            let width =
-                SPAN_BASE_WIDTH + ((span_level as f64 - root_level as f64 - 2.0) * SPAN_DEPTH_GROWTH_FACTOR);
+            let width = SPAN_BASE_WIDTH
+                + ((span_level as f64 - root_level as f64 - 2.0) * SPAN_DEPTH_GROWTH_FACTOR);
             let rank = self.object_rank[&span_id];
             let x = rank_to_x[&rank] - (width / 2.0);
 
@@ -794,8 +803,8 @@ impl SequenceDiagram {
             if edge_contained_by(g, msg_idx, group_id) {
                 for p in &g.edges[msg_idx].route {
                     let label_height = g.edges[msg_idx].label_dimensions.height as f64 / 2.0;
-                    let edge_pad = (label_height + GROUP_CONTAINER_PADDING)
-                        .max(MIN_MESSAGE_DISTANCE / 2.0);
+                    let edge_pad =
+                        (label_height + GROUP_CONTAINER_PADDING).max(MIN_MESSAGE_DISTANCE / 2.0);
                     min_x = min_x.min(p.x - HORIZONTAL_PAD);
                     min_y = min_y.min(p.y - edge_pad);
                     max_x = max_x.max(p.x + HORIZONTAL_PAD);
@@ -842,8 +851,8 @@ impl SequenceDiagram {
             return;
         }
 
-        let height_add = g.objects[group_id].label_dimensions.height as f64
-            + EDGE_GROUP_LABEL_PADDING / 2.0;
+        let height_add =
+            g.objects[group_id].label_dimensions.height as f64 + EDGE_GROUP_LABEL_PADDING / 2.0;
         if height_add < GROUP_CONTAINER_PADDING {
             return;
         }
@@ -854,24 +863,24 @@ impl SequenceDiagram {
         // Extend stuff within this group
         for &gid in &self.groups {
             let g_obj = &g.objects[gid];
-            if g_obj.top_left.y < group_top_y
-                && g_obj.top_left.y + g_obj.height > group_top_y
-            {
+            if g_obj.top_left.y < group_top_y && g_obj.top_left.y + g_obj.height > group_top_y {
                 g.objects[gid].height += height_add;
             }
         }
         for &sid in &self.spans {
             let s_obj = &g.objects[sid];
-            if s_obj.top_left.y < group_top_y
-                && s_obj.top_left.y + s_obj.height > group_top_y
-            {
+            if s_obj.top_left.y < group_top_y && s_obj.top_left.y + s_obj.height > group_top_y {
                 g.objects[sid].height += height_add;
             }
         }
 
         // Move stuff down that's below this group
         for &msg_idx in &self.messages {
-            let route_y = g.edges[msg_idx].route.first().map(|p| p.y).unwrap_or(0.0)
+            let route_y = g.edges[msg_idx]
+                .route
+                .first()
+                .map(|p| p.y)
+                .unwrap_or(0.0)
                 .min(g.edges[msg_idx].route.last().map(|p| p.y).unwrap_or(0.0));
             if route_y > group_top_y {
                 for p in &mut g.edges[msg_idx].route {
@@ -1067,7 +1076,11 @@ fn obj_level(g: &Graph, obj_id: ObjId) -> usize {
 /// if the object has been explicitly placed by the sequence layout.
 /// Placed objects: actors (which have been positioned by place_actors).
 /// Unplaced: spans and notes (before place_spans/place_notes).
-fn get_center_x_with_placed(g: &Graph, obj_id: ObjId, placed: &std::collections::HashSet<ObjId>) -> Option<f64> {
+fn get_center_x_with_placed(
+    g: &Graph,
+    obj_id: ObjId,
+    placed: &std::collections::HashSet<ObjId>,
+) -> Option<f64> {
     if placed.contains(&obj_id) {
         let obj = &g.objects[obj_id];
         Some(obj.top_left.x + obj.width / 2.0)
@@ -1187,6 +1200,9 @@ mod tests {
             "\nshape: sequence_diagram\n\na\n\ngroup: {\n  inner_group: {\n    a -> b\n  }\n}\n",
         );
         let err = layout(&mut g).expect_err("expected missing center error");
-        assert_eq!(err, "could not find center of b. Is it declared as an actor?");
+        assert_eq!(
+            err,
+            "could not find center of b. Is it declared as an actor?"
+        );
     }
 }

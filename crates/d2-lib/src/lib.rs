@@ -718,7 +718,8 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             // `size_for_outside_labels` reserves space for them.
             let cid = *child_id;
             let was_container = !g.objects[cid].children_array.is_empty();
-            if was_container && g.objects[cid].has_icon() && g.objects[cid].icon_position.is_none() {
+            if was_container && g.objects[cid].has_icon() && g.objects[cid].icon_position.is_none()
+            {
                 g.objects[cid].icon_position = Some("OUTSIDE_TOP_LEFT".to_owned());
                 if g.objects[cid].label_position.is_none() && g.objects[cid].has_label() {
                     g.objects[cid].label_position = Some("OUTSIDE_TOP_RIGHT".to_owned());
@@ -823,8 +824,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         // Copy root properties.
         sub.objects[sub.root].grid_rows = g.objects[container_id].grid_rows.clone();
         sub.objects[sub.root].grid_columns = g.objects[container_id].grid_columns.clone();
-        sub.objects[sub.root].grid_rows_range =
-            g.objects[container_id].grid_rows_range.clone();
+        sub.objects[sub.root].grid_rows_range = g.objects[container_id].grid_rows_range.clone();
         sub.objects[sub.root].grid_columns_range =
             g.objects[container_id].grid_columns_range.clone();
         sub.objects[sub.root].grid_gap = g.objects[container_id].grid_gap.clone();
@@ -896,10 +896,8 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 let dy = new_tl.y - cur_tl.y;
                 g.objects[child_id].width = sub.objects[sub_id].width;
                 g.objects[child_id].height = sub.objects[sub_id].height;
-                g.objects[child_id].label_position =
-                    sub.objects[sub_id].label_position.clone();
-                g.objects[child_id].icon_position =
-                    sub.objects[sub_id].icon_position.clone();
+                g.objects[child_id].label_position = sub.objects[sub_id].label_position.clone();
+                g.objects[child_id].icon_position = sub.objects[sub_id].icon_position.clone();
                 if dx != 0.0 || dy != 0.0 {
                     move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
                 } else {
@@ -1059,7 +1057,10 @@ fn collect_descendants(g: &Graph, obj_id: ObjId, out: &mut HashSet<ObjId>) {
     }
 }
 
-fn route_direct_edges_for_excluded_descendants(g: &mut Graph, excluded_descendants: &HashSet<ObjId>) {
+fn route_direct_edges_for_excluded_descendants(
+    g: &mut Graph,
+    excluded_descendants: &HashSet<ObjId>,
+) {
     for ei in 0..g.edges.len() {
         let edge = &g.edges[ei];
         if !edge.route.is_empty() {
@@ -1444,8 +1445,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             // placeholder-driven sizing would be observable in rendered
             // output. An empty table with no columns degenerates to the
             // (0,0) path and matches the nil-ruler fixture.
-            let n_columns = g
-                .objects[i]
+            let n_columns = g.objects[i]
                 .sql_table
                 .as_ref()
                 .map(|t| t.columns.len())
@@ -1468,8 +1468,7 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
             // Apply INNER_LABEL_PADDING when no explicit dims were set and
             // the label is non-empty (matches Go's `withLabelPadding`: empty
             // label sets `withLabelPadding=false` in the caller).
-            let with_label_padding =
-                desired_width == 0 && desired_height == 0 && !label.is_empty();
+            let with_label_padding = desired_width == 0 && desired_height == 0 && !label.is_empty();
             let pad = if with_label_padding {
                 INNER_LABEL_PADDING as i32
             } else {

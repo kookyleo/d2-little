@@ -1130,8 +1130,7 @@ fn arrowhead_label_tl(c: &Connection, is_dst: bool) -> Option<(f64, f64)> {
     let norm_y0 = (seg_start.x - seg_end.x) / seg_len;
 
     // Shift back from the endpoint to fit the label.
-    let shift = norm_x0.abs() * (height / 2.0 + padding)
-        + norm_y0.abs() * (width / 2.0 + padding);
+    let shift = norm_x0.abs() * (height / 2.0 + padding) + norm_y0.abs() * (width / 2.0 + padding);
 
     let route = d2_geo::Route(c.route.clone());
     let total_length = route.length();
@@ -1245,7 +1244,10 @@ pub fn calculate_tooltip_position(
     let th = tooltip_height as f64;
     match position {
         "top-left" => (shape_x, shape_y - th - padding),
-        "top-center" => (shape_x + shape_width / 2.0 - tw / 2.0, shape_y - th - padding),
+        "top-center" => (
+            shape_x + shape_width / 2.0 - tw / 2.0,
+            shape_y - th - padding,
+        ),
         "top-right" => (shape_x + shape_width - tw, shape_y - th - padding),
         "center-left" => (
             shape_x - tw - padding,
@@ -1260,10 +1262,7 @@ pub fn calculate_tooltip_position(
             shape_x + shape_width / 2.0 - tw / 2.0,
             shape_y + shape_height + padding,
         ),
-        "bottom-right" => (
-            shape_x + shape_width - tw,
-            shape_y + shape_height + padding,
-        ),
+        "bottom-right" => (shape_x + shape_width - tw, shape_y + shape_height + padding),
         _ => (
             shape_x + shape_width / 2.0 - tw / 2.0,
             shape_y - th - padding,
@@ -1979,9 +1978,26 @@ pub mod go_json {
         let mut out = String::with_capacity(decoded.len() * 3);
         for &b in decoded.as_bytes() {
             if b.is_ascii_alphanumeric()
-                || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/'
-                    | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*'
-                    | b'+' | b',' | b';' | b'=' | b':' | b'@')
+                || matches!(
+                    b,
+                    b'-' | b'_'
+                        | b'.'
+                        | b'~'
+                        | b'/'
+                        | b'!'
+                        | b'$'
+                        | b'&'
+                        | b'\''
+                        | b'('
+                        | b')'
+                        | b'*'
+                        | b'+'
+                        | b','
+                        | b';'
+                        | b'='
+                        | b':'
+                        | b'@'
+                )
             {
                 out.push(b as char);
             } else {

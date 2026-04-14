@@ -1297,8 +1297,7 @@ impl Compiler {
             );
         } else {
             self.create_edge_inner(
-                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow, src_skip, dst_skip,
-                0,
+                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow, src_skip, dst_skip, 0,
             );
         }
     }
@@ -1325,13 +1324,23 @@ impl Compiler {
         if !src_path.is_empty() {
             let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
             self.ensure_field_path_with_refs_skip(
-                dst, src_path, src_kp, Some(key), kp_offset, src_skip,
+                dst,
+                src_path,
+                src_kp,
+                Some(key),
+                kp_offset,
+                src_skip,
             );
         }
         if !dst_path.is_empty() {
             let dst_kp = ast_edge_for_paths.and_then(|e| e.dst.as_ref());
             self.ensure_field_path_with_refs_skip(
-                dst, dst_path, dst_kp, Some(key), kp_offset, dst_skip,
+                dst,
+                dst_path,
+                dst_kp,
+                Some(key),
+                kp_offset,
+                dst_skip,
             );
         }
 
@@ -1653,9 +1662,7 @@ impl Compiler {
         let mut i = 0;
         while i < arr.values.len() {
             let replacement = match &arr.values[i] {
-                Value::Scalar(scalar) => {
-                    self.resolve_array_scalar_substitution(vars_stack, scalar)
-                }
+                Value::Scalar(scalar) => self.resolve_array_scalar_substitution(vars_stack, scalar),
                 _ => None,
             };
             match replacement {
@@ -1710,10 +1717,7 @@ impl Compiler {
                 return Some(ArraySubResult::Spread(Vec::new()));
             };
             let Composite::Array(resolved_arr) = comp else {
-                self.errorf(
-                    &sub.range,
-                    "cannot spread non-array into array".to_string(),
-                );
+                self.errorf(&sub.range, "cannot spread non-array into array".to_string());
                 return Some(ArraySubResult::Spread(Vec::new()));
             };
             return Some(ArraySubResult::Spread(resolved_arr.values.clone()));
