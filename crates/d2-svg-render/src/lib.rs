@@ -4581,18 +4581,19 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     // Style elements
     let mut upper_buf = String::new();
     if opts.master_id.is_empty() {
-        let font_family = diagram
-            .font_family
-            .as_ref()
-            .map_or(d2_fonts::FontFamily::SourceSansPro, |_| {
-                d2_fonts::FontFamily::SourceSansPro
-            });
-        let mono_family = diagram
-            .mono_font_family
-            .as_ref()
-            .map_or(d2_fonts::FontFamily::SourceCodePro, |_| {
-                d2_fonts::FontFamily::SourceCodePro
-            });
+        // Map the diagram's configured font family back to a `FontFamily`.
+        // Themes with `special_rules.mono` set `font_family` to
+        // `SourceCodePro`, so honouring this value keeps the embedded font
+        // subset aligned with how Go's exporter resolves mono themes.
+        let parse_family = |name: Option<&String>, default: d2_fonts::FontFamily| -> d2_fonts::FontFamily {
+            match name.map(|s| s.as_str()) {
+                Some("SourceCodePro") => d2_fonts::FontFamily::SourceCodePro,
+                Some("SourceSansPro") => d2_fonts::FontFamily::SourceSansPro,
+                _ => default,
+            }
+        };
+        let font_family = parse_family(diagram.font_family.as_ref(), d2_fonts::FontFamily::SourceSansPro);
+        let mono_family = parse_family(diagram.mono_font_family.as_ref(), d2_fonts::FontFamily::SourceCodePro);
 
         // Collect corpus (all text in diagram)
         let corpus = collect_corpus(diagram);
@@ -4812,8 +4813,13 @@ fn collect_corpus(diagram: &d2_target::Diagram) -> String {
         }
         if s.type_ == d2_target::SHAPE_SQL_TABLE {
             for col in &s.sql_table.columns {
+                // Match Go d2target.Diagram.GetCorpus: loops `c.Texts(0)`
+                // which contains [name, type, constraint_abbr], then the
+                // tail `corpus += c.ConstraintAbbr()` adds constraint_abbr
+                // a second time.
                 corpus.push_str(&col.name.label);
                 corpus.push_str(&col.type_.label);
+                corpus.push_str(&col.constraint_abbr());
                 corpus.push_str(&col.constraint_abbr());
             }
         }
