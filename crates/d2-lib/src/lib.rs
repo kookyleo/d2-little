@@ -851,15 +851,27 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         g.objects[container_id].icon_position = sub.objects[sub.root].icon_position.clone();
 
         // Copy child positions and sizes back (positions relative to container origin).
+        // For containers that hold pre-laid-out descendants (placed by
+        // layout_container_as_subgraph above with a 0,0 base offset), we must
+        // shift the entire subtree so descendants follow the cell to its grid
+        // slot — assigning top_left directly would orphan them at (0, 0).
         for &child_id in &children {
             if let Some(&sub_id) = id_map.get(&child_id) {
-                g.objects[child_id].top_left = sub.objects[sub_id].top_left;
+                let new_tl = sub.objects[sub_id].top_left;
+                let cur_tl = g.objects[child_id].top_left;
+                let dx = new_tl.x - cur_tl.x;
+                let dy = new_tl.y - cur_tl.y;
                 g.objects[child_id].width = sub.objects[sub_id].width;
                 g.objects[child_id].height = sub.objects[sub_id].height;
                 g.objects[child_id].label_position =
                     sub.objects[sub_id].label_position.clone();
                 g.objects[child_id].icon_position =
                     sub.objects[sub_id].icon_position.clone();
+                if dx != 0.0 || dy != 0.0 {
+                    move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
+                } else {
+                    g.objects[child_id].update_box();
+                }
             }
         }
 
