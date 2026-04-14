@@ -764,12 +764,27 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         })
         .collect();
 
-    // Find grid containers that need pre-layout
+    // Find grid containers that need pre-layout. Exclude grids nested inside
+    // a sequence diagram — those are handled by the sequence diagram's own
+    // nested sub-graph layout, and clearing their children here would strip
+    // descendants before the outer sub-graph can capture them.
     let grid_containers: Vec<ObjId> = (0..g.objects.len())
         .filter(|&i| {
-            i != g.root
-                && g.objects[i].is_grid_diagram()
-                && !g.objects[i].children_array.is_empty()
+            if i == g.root
+                || !g.objects[i].is_grid_diagram()
+                || g.objects[i].children_array.is_empty()
+            {
+                return false;
+            }
+            // Skip if any ancestor is a sequence diagram.
+            let mut cur = g.objects[i].parent;
+            while let Some(pid) = cur {
+                if g.objects[pid].is_sequence_diagram() {
+                    return false;
+                }
+                cur = g.objects[pid].parent;
+            }
+            true
         })
         .collect();
 

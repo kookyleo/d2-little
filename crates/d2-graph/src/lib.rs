@@ -532,6 +532,11 @@ pub type ObjId = usize;
 #[derive(Debug, Clone)]
 pub struct Object {
     pub id: String,
+    /// Unescaped ID value — mirrors Go `Object.IDVal`. Formatted id retains
+    /// source-level quoting/escaping (e.g. `"a\\yode"`); id_val holds the
+    /// scalar string a user would see (e.g. `a\yode`). Required for
+    /// child lookup parity with incoming IR field names which are raw.
+    pub id_val: String,
     pub abs_id: String,
 
     pub label: Label,
@@ -627,6 +632,7 @@ impl Default for Object {
     fn default() -> Self {
         Self {
             id: String::new(),
+            id_val: String::new(),
             abs_id: String::new(),
             label: Label::default(),
             shape: ScalarValue {
@@ -680,10 +686,15 @@ impl Object {
         &self.abs_id
     }
 
-    /// The short ID value (without dotted path), unquoted.
+    /// The short ID value (without dotted path), fully unescaped.
     /// Mirrors Go `Object.IDVal`.
     pub fn id_val(&self) -> &str {
-        unformat_key_segment(&self.id)
+        if self.id_val.is_empty() {
+            // Fallback for legacy constructors that don't set id_val.
+            unformat_key_segment(&self.id)
+        } else {
+            &self.id_val
+        }
     }
 
     /// True if this object has children.
@@ -861,23 +872,26 @@ impl Object {
         if self.is_sequence_diagram_note {
             return d2_color::N7;
         }
-        // Dynamically check IsSequenceDiagramNote: a direct child of a
-        // sequence diagram that is NOT a group, has no source-code edges, and
-        // no children. Go checks IsSequenceDiagramGroup BEFORE note.
-        if let Some(sd_id) = self.outer_sequence_diagram(graph) {
-            if self.parent == Some(sd_id)
-                && self.children_array.is_empty()
-                && !self.is_sequence_diagram_group
-            {
-                let my_id = self.abs_id();
-                let has_source_edge = graph.edges.iter().any(|e| {
-                    e.scope_obj.is_some()
-                        && (graph.objects[e.src].abs_id() == my_id
-                            || graph.objects[e.dst].abs_id() == my_id)
-                });
-                if !has_source_edge {
-                    return d2_color::N7;
-                }
+        // Dynamically check IsSequenceDiagramNote (Go d2graph/seqdiagram.go:42):
+        //   OuterSequenceDiagram() != nil && !hasEdgeRef() && !ContainsAnyEdge()
+        //   && len(ChildrenArray) == 0 && !ContainsAnyObject()
+        //
+        // For leaf objects (no children), `ContainsAnyObject` is always false
+        // since no other object's scope chain can point at us. `ContainsAnyEdge`
+        // is effectively equivalent to "any edge with this obj as src/dst in
+        // source scope", matching `hasEdgeRef` + direct edge membership.
+        if self.outer_sequence_diagram(graph).is_some()
+            && self.children_array.is_empty()
+            && !self.is_sequence_diagram_group
+        {
+            let my_id = self.abs_id();
+            let has_source_edge = graph.edges.iter().any(|e| {
+                e.scope_obj.is_some()
+                    && (graph.objects[e.src].abs_id() == my_id
+                        || graph.objects[e.dst].abs_id() == my_id)
+            });
+            if !has_source_edge {
+                return d2_color::N7;
             }
         }
         if self.is_sequence_diagram_group {
@@ -1890,6 +1904,7 @@ impl Graph {
                 let idx = self.objects.len();
                 let obj = Object {
                     id: formatted,
+                    id_val: name.clone(),
                     abs_id: abs,
                     label: Label {
                         value: name.clone(),
