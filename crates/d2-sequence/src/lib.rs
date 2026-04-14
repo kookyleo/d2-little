@@ -309,9 +309,15 @@ fn child_has_edge_ref(g: &Graph, child_id: ObjId) -> bool {
 ///
 /// Mirrors Go `Object.IsSequenceDiagramGroup()`.
 fn is_sequence_diagram_group(g: &Graph, obj_id: ObjId, message_indices: &[usize]) -> bool {
-    // Must not be directly referenced by any edge as src or dst
+    // Match Go for direct endpoints, plus treat direct-child endpoints as
+    // actors so cases like `b.1 -> b.1` still classify `b` as an actor.
     for &idx in message_indices {
-        if g.edges[idx].src == obj_id || g.edges[idx].dst == obj_id {
+        let edge = &g.edges[idx];
+        if edge.src == obj_id
+            || edge.dst == obj_id
+            || g.objects[edge.src].parent == Some(obj_id)
+            || g.objects[edge.dst].parent == Some(obj_id)
+        {
             return false;
         }
     }
@@ -558,15 +564,19 @@ impl SequenceDiagram {
             let start_x = match get_center_x_with_placed(g, src_id, &self.placed) {
                 Some(x) => x,
                 None => {
-                    log::warn!("could not find center of {} (src of {})", g.objects[src_id].abs_id, g.edges[msg_idx].abs_id);
-                    continue;
+                    return Err(format!(
+                        "could not find center of {}. Is it declared as an actor?",
+                        g.objects[src_id].id
+                    ));
                 }
             };
             let end_x = match get_center_x_with_placed(g, dst_id, &self.placed) {
                 Some(x) => x,
                 None => {
-                    log::warn!("could not find center of {} (dst of {})", g.objects[dst_id].abs_id, g.edges[msg_idx].abs_id);
-                    continue;
+                    return Err(format!(
+                        "could not find center of {}. Is it declared as an actor?",
+                        g.objects[dst_id].id
+                    ));
                 }
             };
 
@@ -1140,4 +1150,43 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compile(input: &str) -> d2_graph::Graph {
+        d2_compiler::compile("test.d2", input).expect("compile")
+    }
+
+    #[test]
+    fn root_sequence_span_cover_has_actors() {
+        let mut g = compile("shape: sequence_diagram\nb.1 -> b.1\nb.1 -> b.1\n");
+        let root = g.root;
+        let children = g.objects[root].children_array.clone();
+        let message_indices: Vec<usize> = (0..g.edges.len()).collect();
+
+        assert_eq!(children.len(), 1);
+        let b = children[0];
+        assert_eq!(g.objects[b].abs_id, "b");
+        assert!(!is_sequence_diagram_group(&g, b, &message_indices));
+        assert!(new_sequence_diagram(&mut g, root, &children, &message_indices).is_ok());
+    }
+
+    #[test]
+    fn root_sequence_nested_group_without_actors_errors() {
+        let mut g = compile("shape: sequence_diagram\ngroup.nested: {\n  a -> b\n}\n");
+        let err = layout(&mut g).expect_err("expected missing-actor error");
+        assert_eq!(err, "no actors declared in sequence diagram");
+    }
+
+    #[test]
+    fn root_sequence_missing_actor_center_errors() {
+        let mut g = compile(
+            "\nshape: sequence_diagram\n\na\n\ngroup: {\n  inner_group: {\n    a -> b\n  }\n}\n",
+        );
+        let err = layout(&mut g).expect_err("expected missing center error");
+        assert_eq!(err, "could not find center of b. Is it declared as an actor?");
+    }
 }
