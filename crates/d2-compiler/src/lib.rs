@@ -54,6 +54,7 @@ pub fn compile_with_config(
 
     c.compile_board(&mut g, &ir_map);
     c.expand_literal_star_globs(&mut g);
+    c.expand_double_glob_globs(&mut g);
     c.set_default_shapes(&mut g);
     validate_board_links(&mut g);
     c.compile_legend(&mut g, &ir_map);
@@ -93,6 +94,50 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
 /// (doesn't start with `root.`), prepend `root.` to form the absolute
 /// board path. Remote URLs (with scheme or leading `/`) and other values
 /// are passed through unchanged.
+/// Case-insensitive glob-style name match. `*` matches any run of
+/// characters (possibly empty); other characters must match literally.
+/// Used by `**` template expansion to target existing fields whose name
+/// matches a `blank*`-style pattern.
+fn name_matches_pattern(name: &str, pattern: &str) -> bool {
+    if pattern == "*" || pattern == "**" {
+        return true;
+    }
+    // Split pattern by `*`. Each segment must appear, in order, in `name`.
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let name_l = name.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        let part_l = part.to_ascii_lowercase();
+        let hay = &name_l[cursor..];
+        if i == 0 && !pattern.starts_with('*') {
+            // First part must be a prefix.
+            if !hay.starts_with(&part_l) {
+                return false;
+            }
+            cursor += part_l.len();
+        } else if i == parts.len() - 1 && !pattern.ends_with('*') {
+            // Last part must be a suffix.
+            if !hay.ends_with(&part_l) {
+                return false;
+            }
+            // Anchor: index must be `hay.len() - part_l.len()` but also
+            // at-or-after cursor (already guaranteed since we slice from
+            // cursor).
+            if hay.len() < part_l.len() {
+                return false;
+            }
+        } else if let Some(off) = hay.find(&part_l) {
+            cursor += off + part_l.len();
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
 fn normalize_board_link(val: &str) -> String {
     // Detect remote URL (scheme or leading `/`)
     if val.starts_with('/') {
@@ -534,11 +579,20 @@ impl Compiler {
     }
 
     fn expand_literal_star_globs(&mut self, g: &mut Graph) {
+        // Collect every object whose id-val is a glob pattern — `*`
+        // (single-segment) or `blank*` / `*foo*` style name patterns.
+        // `**` is handled separately by `expand_double_glob_globs`.
         let star_ids: Vec<ObjId> = g
             .objects
             .iter()
             .enumerate()
-            .filter(|(id, obj)| *id != g.root && obj.id_val() == "*")
+            .filter(|(id, obj)| {
+                if *id == g.root {
+                    return false;
+                }
+                let idv = obj.id_val();
+                idv != "**" && idv.contains('*')
+            })
             .map(|(id, _)| id)
             .collect();
         if star_ids.is_empty() {
@@ -552,11 +606,27 @@ impl Compiler {
             let Some(parent) = g.objects[star_id].parent else {
                 continue;
             };
+            let pattern = g.objects[star_id].id_val().to_owned();
+            let filters = g.objects[star_id].filters.clone();
             let targets: Vec<ObjId> = g.objects[parent]
                 .children_array
                 .iter()
                 .copied()
-                .filter(|&cid| cid != star_id && g.objects[cid].id_val() != "*")
+                .filter(|&cid| {
+                    if cid == star_id {
+                        return false;
+                    }
+                    let id = g.objects[cid].id_val();
+                    if id == "*" || id == "**" || id.contains('*') {
+                        return false;
+                    }
+                    // Plain `*` matches every sibling; `name*` / `*name`
+                    // patterns restrict to matching names.
+                    if pattern != "*" && !name_matches_pattern(id, &pattern) {
+                        return false;
+                    }
+                    Self::target_passes_filters(&g.objects[cid], &filters)
+                })
                 .collect();
             for &target in &targets {
                 self.apply_literal_star_template(g, star_id, target);
@@ -592,6 +662,157 @@ impl Compiler {
         self.compact_graph(g, &remove_ids);
     }
 
+    /// Expand `**` glob templates. Each `**`-named object's default
+    /// attributes are applied to every non-glob descendant of its parent
+    /// (recursively), subject to any `&attr: value` filters declared on
+    /// the template map. The `**` templates are then removed from the
+    /// graph. Mirrors Go `d2ir.multiGlob` / `_doubleGlob`.
+    fn expand_double_glob_globs(&mut self, g: &mut Graph) {
+        let dbl_ids: Vec<ObjId> = g
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(id, obj)| *id != g.root && obj.id_val() == "**")
+            .map(|(id, _)| id)
+            .collect();
+        if dbl_ids.is_empty() {
+            return;
+        }
+
+        let mut remove_ids = std::collections::HashSet::<ObjId>::new();
+        for &dbl_id in &dbl_ids {
+            let Some(parent) = g.objects[dbl_id].parent else {
+                continue;
+            };
+            let mut targets: Vec<ObjId> = Vec::new();
+            Self::collect_non_glob_descendants(g, parent, dbl_id, &mut targets);
+
+            let filters = g.objects[dbl_id].filters.clone();
+            for &target in &targets {
+                if !Self::target_passes_filters(&g.objects[target], &filters) {
+                    continue;
+                }
+                self.apply_literal_star_template(g, dbl_id, target);
+            }
+            self.collect_descendants(g, dbl_id, &mut remove_ids);
+        }
+
+        self.compact_graph(g, &remove_ids);
+    }
+
+    /// Recursively collect every descendant of `root` that is neither
+    /// the `skip` object itself nor a glob placeholder (`*` / `**`).
+    fn collect_non_glob_descendants(
+        g: &Graph,
+        root: ObjId,
+        skip: ObjId,
+        out: &mut Vec<ObjId>,
+    ) {
+        for &child in &g.objects[root].children_array {
+            if child == skip {
+                continue;
+            }
+            let id = g.objects[child].id_val();
+            if id == "*" || id == "**" {
+                // Skip the glob placeholder but still recurse into its
+                // children — those are real objects.
+                Self::collect_non_glob_descendants(g, child, skip, out);
+                continue;
+            }
+            out.push(child);
+            Self::collect_non_glob_descendants(g, child, skip, out);
+        }
+    }
+
+    /// Evaluate a set of `&attr: value` filters against an object.
+    /// Returns `true` if the object passes all filters (or no filters
+    /// are set), `false` otherwise.
+    fn target_passes_filters(obj: &d2_graph::Object, filters: &[d2_graph::GlobFilter]) -> bool {
+        if filters.is_empty() {
+            return true;
+        }
+        for f in filters {
+            let matched = Self::filter_attr_matches(obj, f);
+            if f.negate {
+                if matched {
+                    return false;
+                }
+            } else if !matched {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Positive-direction filter match. Handles `&class: name` as list
+    /// membership against `obj.classes`, and everything else as an
+    /// equality check on the attribute value read via `read_attribute`.
+    fn filter_attr_matches(obj: &d2_graph::Object, f: &d2_graph::GlobFilter) -> bool {
+        if f.attr.len() == 1 && f.attr[0].eq_ignore_ascii_case("class") {
+            return obj
+                .classes
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(&f.value));
+        }
+        match Self::read_attribute(obj, &f.attr) {
+            Some(a) => a.eq_ignore_ascii_case(&f.value),
+            None => false,
+        }
+    }
+
+    /// Read a dotted attribute from an object (e.g. `["shape"]`,
+    /// `["class"]`, `["label"]`, `["style", "fill"]`). Returns `None` when
+    /// the attribute is unset or unsupported.
+    fn read_attribute(obj: &d2_graph::Object, path: &[String]) -> Option<String> {
+        match path {
+            [seg] => match seg.to_lowercase().as_str() {
+                "shape" => Some(obj.shape.value.clone()),
+                "label" => Some(obj.label.value.clone()),
+                "class" => {
+                    // `&class: foo` matches objects whose `classes` list
+                    // contains `foo`. The legacy single-class form is
+                    // tracked in `obj.classes` in our port, so we test
+                    // the list for membership rather than returning a
+                    // single scalar. Return `""` when there is no class.
+                    Some(obj.classes.join(","))
+                }
+                "direction" => Some(obj.direction.value.clone()),
+                "near" => obj.near_key.clone(),
+                "icon" => obj.icon.clone(),
+                "tooltip" => obj.tooltip.as_ref().map(|s| s.value.clone()),
+                "link" => obj.link.as_ref().map(|s| s.value.clone()),
+                _ => None,
+            },
+            [head, tail @ ..] if head.eq_ignore_ascii_case("style") => {
+                if tail.len() != 1 {
+                    return None;
+                }
+                let key = tail[0].to_lowercase();
+                let s = &obj.style;
+                macro_rules! pick {
+                    ($field:ident) => {
+                        s.$field.as_ref().map(|v| v.value.clone())
+                    };
+                }
+                match key.as_str() {
+                    "opacity" => pick!(opacity),
+                    "stroke" => pick!(stroke),
+                    "fill" => pick!(fill),
+                    "fill-pattern" => pick!(fill_pattern),
+                    "stroke-dash" => pick!(stroke_dash),
+                    "stroke-width" => pick!(stroke_width),
+                    "shadow" => pick!(shadow),
+                    "3d" => pick!(three_dee),
+                    "multiple" => pick!(multiple),
+                    "border-radius" => pick!(border_radius),
+                    "font-color" => pick!(font_color),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn collect_descendants(
         &self,
         g: &Graph,
@@ -612,10 +833,30 @@ impl Compiler {
 
         let child_templates = template.children_array.clone();
         for child_template in child_templates {
-            if g.objects[child_template].id_val() == "*" {
+            let child_id = g.objects[child_template].id_val().to_owned();
+            if child_id == "*" || child_id == "**" {
                 continue;
             }
-            let child_name = g.objects[child_template].id_val().to_owned();
+            // Pattern-name child template (e.g. `blank*`): apply to every
+            // existing child of `target_id` whose id matches the pattern
+            // rather than materialising a literal `blank*` object.
+            if child_id.contains('*') {
+                let pattern = child_id.clone();
+                let matches: Vec<ObjId> = g.objects[target_id]
+                    .children_array
+                    .iter()
+                    .copied()
+                    .filter(|&cid| {
+                        let name = g.objects[cid].id_val();
+                        name != "*" && name != "**" && name_matches_pattern(name, &pattern)
+                    })
+                    .collect();
+                for m in matches {
+                    self.apply_literal_star_template(g, child_template, m);
+                }
+                continue;
+            }
+            let child_name = child_id;
             let child = g.ensure_child_of(target_id, &[child_name]);
             if g.objects[child].references.is_empty() {
                 let inherited_scope = g.objects[child].parent;

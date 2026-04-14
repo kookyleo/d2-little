@@ -1668,37 +1668,55 @@ impl Graph {
         let mut order: Vec<ObjId> = (0..self.objects.len()).collect();
         // Skip root in the comparison so it stays put.
         let root = self.root;
-        order.sort_by(|&a, &b| {
+        // Precompute sort keys so the comparator is a pure total order.
+        // For each object, find a non-var AST range if any. If only var
+        // (spread substitution) references exist, walk up the parent
+        // chain to inherit the closest non-var range — this keeps
+        // spread-materialised children grouped under their parent's
+        // source position, preserving transitivity.
+        struct SortKey {
+            range: Option<ast::Range>,
+            id: ObjId,
+        }
+        let mut keys: Vec<SortKey> = (0..self.objects.len())
+            .map(|i| {
+                let obj = &self.objects[i];
+                let r = obj
+                    .references
+                    .iter()
+                    .find(|r| !r.is_var)
+                    .and_then(|r| r.key.path.get(r.key_path_index))
+                    .map(|sb| sb.get_range().clone());
+                SortKey { range: r, id: i }
+            })
+            .collect();
+        // Inherit parent range for var-only nodes so they sort with their
+        // parent rather than with insertion-order outliers.
+        for i in 0..self.objects.len() {
+            if keys[i].range.is_some() {
+                continue;
+            }
+            let mut cur = self.objects[i].parent;
+            while let Some(p) = cur {
+                if let Some(ref r) = keys[p].range {
+                    keys[i].range = Some(r.clone());
+                    break;
+                }
+                cur = self.objects[p].parent;
+            }
+        }
+        let cmp = |&a: &ObjId, &b: &ObjId| -> std::cmp::Ordering {
             if a == root || b == root {
                 return a.cmp(&b);
             }
-            let oa = &self.objects[a];
-            let ob = &self.objects[b];
-            // No reference → leave order unchanged.
-            if oa.references.is_empty() || ob.references.is_empty() {
-                return a.cmp(&b);
+            let ka = &keys[a];
+            let kb = &keys[b];
+            match (&ka.range, &kb.range) {
+                (Some(ra), Some(rb)) => range_cmp(ra, rb).then_with(|| ka.id.cmp(&kb.id)),
+                _ => ka.id.cmp(&kb.id),
             }
-            let ra = &oa.references[0];
-            let rb = &ob.references[0];
-            // Variable/spread substitution references point at the var
-            // definition, not the substitution site, so they don't
-            // reflect this object's real source position. Match Go
-            // SortObjectsByAST: skip them and fall back to insertion
-            // order.
-            if ra.is_var || rb.is_var {
-                return a.cmp(&b);
-            }
-            let pa = ra.key.path.get(ra.key_path_index);
-            let pb = rb.key.path.get(rb.key_path_index);
-            match (pa, pb) {
-                (Some(sa), Some(sb)) => {
-                    let range_a = sa.get_range();
-                    let range_b = sb.get_range();
-                    range_cmp(&range_a, &range_b)
-                }
-                _ => a.cmp(&b),
-            }
-        });
+        };
+        order.sort_by(cmp);
 
         // No-op if already sorted.
         if order.iter().enumerate().all(|(i, &j)| i == j) {
