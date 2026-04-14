@@ -1009,6 +1009,62 @@ fn draw_connection(
     let path = path_data(connection, &src_adj, &dst_adj);
     let mask = format!(r#"mask="url(#{})""#, diagram_hash);
 
+    // Connection icon is rendered AFTER markers but BEFORE the path,
+    // matching Go d2svg.go drawConnection order.
+    if let Some(ref icon_url) = connection.icon {
+        let route = &connection.route;
+        if !route.is_empty() {
+            let icon_pos = if !connection.text.label.is_empty() {
+                let label_pos = d2_label::Position::from_string(&connection.label_position);
+                let r = d2_geo::Route(route.clone());
+                label_pos.get_point_on_route(
+                    &r,
+                    connection.stroke_width as f64,
+                    connection.label_percentage,
+                    connection.text.label_width as f64,
+                    connection.text.label_height as f64,
+                ).map(|(tl, _)| {
+                    d2_geo::Point::new(
+                        tl.x - d2_target::CONNECTION_ICON_LABEL_GAP as f64
+                            - d2_target::DEFAULT_ICON_SIZE as f64,
+                        tl.y + connection.text.label_height as f64 / 2.0
+                            - d2_target::DEFAULT_ICON_SIZE as f64 / 2.0,
+                    )
+                })
+            } else {
+                let icon_label_pos = if connection.icon_position.is_empty() {
+                    d2_label::Position::InsideMiddleCenter
+                } else {
+                    d2_label::Position::from_string(&connection.icon_position)
+                };
+                let r = d2_geo::Route(route.clone());
+                icon_label_pos.get_point_on_route(
+                    &r,
+                    connection.stroke_width as f64,
+                    -1.0,
+                    d2_target::DEFAULT_ICON_SIZE as f64,
+                    d2_target::DEFAULT_ICON_SIZE as f64,
+                ).map(|(pt, _)| pt)
+            };
+            if let Some(pos) = icon_pos {
+                let clip = if connection.icon_border_radius != 0.0 {
+                    format!(r#" clip-path="inset(0 round {:.6}px)""#, connection.icon_border_radius)
+                } else {
+                    String::new()
+                };
+                write!(
+                    buf,
+                    r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}"{} />"#,
+                    d2_svg_path::escape_text(icon_url),
+                    pos.x, pos.y,
+                    d2_target::DEFAULT_ICON_SIZE,
+                    d2_target::DEFAULT_ICON_SIZE,
+                    clip,
+                ).unwrap();
+            }
+        }
+    }
+
     let animated_class = if connection.animated {
         " animated-connection"
     } else {
@@ -1064,62 +1120,6 @@ fn draw_connection(
         path_el.style = connection_css_style(connection);
         path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
         buf.push_str(&path_el.render());
-    }
-
-    // Connection icon
-    if let Some(ref icon_url) = connection.icon {
-        let route = &connection.route;
-        if !route.is_empty() {
-            // GetIconPosition: if label exists, position icon to the left of label
-            let icon_pos = if !connection.text.label.is_empty() {
-                let label_pos = d2_label::Position::from_string(&connection.label_position);
-                let r = d2_geo::Route(route.clone());
-                label_pos.get_point_on_route(
-                    &r,
-                    connection.stroke_width as f64,
-                    connection.label_percentage,
-                    connection.text.label_width as f64,
-                    connection.text.label_height as f64,
-                ).map(|(tl, _)| {
-                    d2_geo::Point::new(
-                        tl.x - d2_target::CONNECTION_ICON_LABEL_GAP as f64
-                            - d2_target::DEFAULT_ICON_SIZE as f64,
-                        tl.y + connection.text.label_height as f64 / 2.0
-                            - d2_target::DEFAULT_ICON_SIZE as f64 / 2.0,
-                    )
-                })
-            } else {
-                let icon_label_pos = if connection.icon_position.is_empty() {
-                    d2_label::Position::InsideMiddleCenter
-                } else {
-                    d2_label::Position::from_string(&connection.icon_position)
-                };
-                let r = d2_geo::Route(route.clone());
-                icon_label_pos.get_point_on_route(
-                    &r,
-                    connection.stroke_width as f64,
-                    -1.0,
-                    d2_target::DEFAULT_ICON_SIZE as f64,
-                    d2_target::DEFAULT_ICON_SIZE as f64,
-                ).map(|(pt, _)| pt)
-            };
-            if let Some(pos) = icon_pos {
-                let clip = if connection.icon_border_radius != 0.0 {
-                    format!(r#" clip-path="inset(0 round {:.6}px)""#, connection.icon_border_radius)
-                } else {
-                    String::new()
-                };
-                write!(
-                    buf,
-                    r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}"{} />"#,
-                    d2_svg_path::escape_text(icon_url),
-                    pos.x, pos.y,
-                    d2_target::DEFAULT_ICON_SIZE,
-                    d2_target::DEFAULT_ICON_SIZE,
-                    clip,
-                ).unwrap();
-            }
-        }
     }
 
     // Connection label

@@ -4,9 +4,11 @@
 //! Ported from Go `d2compiler/compile.go`.
 
 use d2_ast::{self as ast};
+use d2_color;
 use d2_graph::{self as graph, Graph, ObjId, ScalarValue};
 use d2_ir::{self as ir};
 use d2_target;
+use d2_themes;
 use roxmltree::Document;
 
 fn block_string_language(scalar: &ir::Scalar) -> Option<String> {
@@ -33,19 +35,24 @@ fn validate_markdown_xml(markdown: &str) -> Result<(), String> {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Compile d2 source text into a Graph.
-pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
+/// Compile d2 source text into a Graph plus any root `vars.d2-config`.
+pub fn compile_with_config(
+    path: &str,
+    input: &str,
+) -> Result<(Graph, Option<d2_target::Config>), CompileError> {
     let (ast_map, parse_err) = d2_parser::parse(path, input);
     if let Some(e) = parse_err {
         return Err(CompileError { errors: e.errors });
     }
 
     let ir_map = ir::compile(&ast_map).map_err(|e| CompileError { errors: e.errors })?;
+    let config = compile_config(&ir_map);
 
     let mut c = Compiler::new();
     let mut g = Graph::new();
 
     c.compile_board(&mut g, &ir_map);
+    c.expand_literal_star_globs(&mut g);
     c.set_default_shapes(&mut g);
 
     // Match Go d2compiler: if there are no user objects (only the implicit root),
@@ -66,9 +73,100 @@ pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
     g.sort_edges_by_ast();
 
     if c.errors.is_empty() {
-        Ok(g)
+        Ok((g, config))
     } else {
         Err(CompileError { errors: c.errors })
+    }
+}
+
+/// Compile d2 source text into a Graph.
+pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
+    let (g, _) = compile_with_config(path, input)?;
+    Ok(g)
+}
+
+fn compile_config(ir: &ir::Map) -> Option<d2_target::Config> {
+    let config_field = ir.get_field_path(&["vars", "d2-config"])?;
+    let config_map = config_field.map()?;
+
+    let mut config = d2_target::Config::default();
+
+    if let Some(field) = config_map.get_field("sketch") {
+        config.sketch = field.primary_string().and_then(|s| s.parse::<bool>().ok());
+    }
+    if let Some(field) = config_map.get_field("theme-id") {
+        config.theme_id = field.primary_string().and_then(|s| s.parse::<i64>().ok());
+    }
+    if let Some(field) = config_map.get_field("dark-theme-id") {
+        config.dark_theme_id = field.primary_string().and_then(|s| s.parse::<i64>().ok());
+    }
+    if let Some(field) = config_map.get_field("pad") {
+        config.pad = field.primary_string().and_then(|s| s.parse::<i64>().ok());
+    }
+    if let Some(field) = config_map.get_field("layout-engine") {
+        config.layout_engine = field.primary_string();
+    }
+    if let Some(field) = config_map.get_field("center") {
+        config.center = field.primary_string().and_then(|s| s.parse::<bool>().ok());
+    }
+    if let Some(field) = config_map.get_field("theme-overrides") {
+        config.theme_overrides = compile_theme_overrides(field.map());
+    }
+    if let Some(field) = config_map.get_field("dark-theme-overrides") {
+        config.dark_theme_overrides = compile_theme_overrides(field.map());
+    }
+    if let Some(field) = config_map.get_field("data").and_then(|f| f.map()) {
+        for field in &field.fields {
+            if let Some(value) = field.primary_string() {
+                config.data.insert(field.name.clone(), value);
+            }
+        }
+    }
+
+    Some(config)
+}
+
+fn compile_theme_overrides(map: Option<&ir::Map>) -> Option<d2_themes::ThemeOverrides> {
+    let map = map?;
+    let mut out = d2_themes::ThemeOverrides::default();
+
+    for field in &map.fields {
+        let Some(value) = field.primary_string() else {
+            continue;
+        };
+        let slot = match field.name.to_ascii_uppercase().as_str() {
+            "N1" => &mut out.n1,
+            "N2" => &mut out.n2,
+            "N3" => &mut out.n3,
+            "N4" => &mut out.n4,
+            "N5" => &mut out.n5,
+            "N6" => &mut out.n6,
+            "N7" => &mut out.n7,
+            "B1" => &mut out.b1,
+            "B2" => &mut out.b2,
+            "B3" => &mut out.b3,
+            "B4" => &mut out.b4,
+            "B5" => &mut out.b5,
+            "B6" => &mut out.b6,
+            "AA2" => &mut out.aa2,
+            "AA4" => &mut out.aa4,
+            "AA5" => &mut out.aa5,
+            "AB4" => &mut out.ab4,
+            "AB5" => &mut out.ab5,
+            _ => continue,
+        };
+
+        if d2_color::NAMED_COLORS.contains(&value.to_ascii_lowercase().as_str())
+            || d2_color::is_color_hex(&value)
+        {
+            *slot = Some(value);
+        }
+    }
+
+    if out == d2_themes::ThemeOverrides::default() {
+        None
+    } else {
+        Some(out)
     }
 }
 
@@ -262,6 +360,349 @@ impl Compiler {
             if g.objects.len() <= 1 && g.edges.is_empty() {
                 g.is_folder_only = true;
             }
+        }
+    }
+
+    fn expand_literal_star_globs(&mut self, g: &mut Graph) {
+        let star_ids: Vec<ObjId> = g
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(id, obj)| *id != g.root && obj.id_val() == "*")
+            .map(|(id, _)| id)
+            .collect();
+        if star_ids.is_empty() {
+            return;
+        }
+
+        let mut star_targets = std::collections::HashMap::<ObjId, Vec<ObjId>>::new();
+        let mut remove_ids = std::collections::HashSet::<ObjId>::new();
+
+        for &star_id in &star_ids {
+            let Some(parent) = g.objects[star_id].parent else {
+                continue;
+            };
+            let targets: Vec<ObjId> = g.objects[parent]
+                .children_array
+                .iter()
+                .copied()
+                .filter(|&cid| cid != star_id && g.objects[cid].id_val() != "*")
+                .collect();
+            for &target in &targets {
+                self.apply_literal_star_template(g, star_id, target);
+            }
+            star_targets.insert(star_id, targets);
+            self.collect_descendants(g, star_id, &mut remove_ids);
+        }
+
+        let edges_snapshot = g.edges.clone();
+        for edge in &edges_snapshot {
+            let srcs = star_targets
+                .get(&edge.src)
+                .cloned()
+                .unwrap_or_else(|| vec![edge.src]);
+            let dsts = star_targets
+                .get(&edge.dst)
+                .cloned()
+                .unwrap_or_else(|| vec![edge.dst]);
+            if srcs.len() == 1 && dsts.len() == 1 && srcs[0] == edge.src && dsts[0] == edge.dst {
+                continue;
+            }
+            for &src in &srcs {
+                for &dst in &dsts {
+                    if src == dst {
+                        continue;
+                    }
+                    let idx = self.clone_edge_with_endpoints(g, edge, src, dst);
+                    g.edges[idx].scope_obj = edge.scope_obj;
+                }
+            }
+        }
+
+        self.compact_graph(g, &remove_ids);
+    }
+
+    fn collect_descendants(
+        &self,
+        g: &Graph,
+        obj: ObjId,
+        remove_ids: &mut std::collections::HashSet<ObjId>,
+    ) {
+        if !remove_ids.insert(obj) {
+            return;
+        }
+        for &child in &g.objects[obj].children_array {
+            self.collect_descendants(g, child, remove_ids);
+        }
+    }
+
+    fn apply_literal_star_template(&self, g: &mut Graph, template_id: ObjId, target_id: ObjId) {
+        let template = g.objects[template_id].clone();
+        Self::merge_object_defaults(&template, &mut g.objects[target_id]);
+
+        let child_templates = template.children_array.clone();
+        for child_template in child_templates {
+            if g.objects[child_template].id_val() == "*" {
+                continue;
+            }
+            let child_name = g.objects[child_template].id_val().to_owned();
+            let child = g.ensure_child_of(target_id, &[child_name]);
+            if g.objects[child].references.is_empty() {
+                let inherited_scope = g.objects[child].parent;
+                let template_refs = g.objects[child_template].references.clone();
+                g.objects[child]
+                    .references
+                    .extend(template_refs.into_iter().map(|mut r| {
+                        r.scope_obj = inherited_scope;
+                        r
+                    }));
+            }
+            self.apply_literal_star_template(g, child_template, child);
+        }
+    }
+
+    fn merge_object_defaults(template: &graph::Object, target: &mut graph::Object) {
+        if target.label.value.is_empty() && !template.label.value.is_empty() {
+            target.label = template.label.clone();
+        }
+        if target.shape.value.eq_ignore_ascii_case("rectangle")
+            && !template.shape.value.eq_ignore_ascii_case("rectangle")
+        {
+            target.shape = template.shape.clone();
+        }
+        if target.direction.value.is_empty() && !template.direction.value.is_empty() {
+            target.direction = template.direction.clone();
+        }
+        if target.language.is_empty() && !template.language.is_empty() {
+            target.language = template.language.clone();
+        }
+
+        Self::merge_style_defaults(&template.style, &mut target.style);
+        if target.icon_style.border_radius.is_none() {
+            target.icon_style.border_radius = template.icon_style.border_radius.clone();
+        }
+
+        if target.icon.is_none() {
+            target.icon = template.icon.clone();
+        }
+        if target.icon_position.is_none() {
+            target.icon_position = template.icon_position.clone();
+        }
+        if target.label_position.is_none() {
+            target.label_position = template.label_position.clone();
+        }
+        if target.tooltip_position.is_none() {
+            target.tooltip_position = template.tooltip_position.clone();
+        }
+        if target.tooltip.is_none() {
+            target.tooltip = template.tooltip.clone();
+        }
+        if target.link.is_none() {
+            target.link = template.link.clone();
+        }
+        if target.class.is_none() {
+            target.class = template.class.clone();
+        }
+        if target.sql_table.is_none() {
+            target.sql_table = template.sql_table.clone();
+        }
+        if target.content_aspect_ratio.is_none() {
+            target.content_aspect_ratio = template.content_aspect_ratio;
+        }
+        if target.width_attr.is_none() {
+            target.width_attr = template.width_attr.clone();
+        }
+        if target.height_attr.is_none() {
+            target.height_attr = template.height_attr.clone();
+        }
+        if target.top.is_none() {
+            target.top = template.top.clone();
+        }
+        if target.left.is_none() {
+            target.left = template.left.clone();
+        }
+        if target.near_key.is_none() {
+            target.near_key = template.near_key.clone();
+        }
+        if target.grid_rows.is_none() {
+            target.grid_rows = template.grid_rows.clone();
+        }
+        if target.grid_columns.is_none() {
+            target.grid_columns = template.grid_columns.clone();
+        }
+        if target.grid_gap.is_none() {
+            target.grid_gap = template.grid_gap.clone();
+        }
+        if target.vertical_gap.is_none() {
+            target.vertical_gap = template.vertical_gap.clone();
+        }
+        if target.horizontal_gap.is_none() {
+            target.horizontal_gap = template.horizontal_gap.clone();
+        }
+
+        for class in &template.classes {
+            if !target.classes.contains(class) {
+                target.classes.push(class.clone());
+            }
+        }
+    }
+
+    fn merge_style_defaults(template: &graph::Style, target: &mut graph::Style) {
+        macro_rules! merge {
+            ($field:ident) => {
+                if target.$field.is_none() {
+                    target.$field = template.$field.clone();
+                }
+            };
+        }
+        merge!(opacity);
+        merge!(stroke);
+        merge!(fill);
+        merge!(fill_pattern);
+        merge!(stroke_dash);
+        merge!(stroke_width);
+        merge!(shadow);
+        merge!(three_dee);
+        merge!(multiple);
+        merge!(border_radius);
+        merge!(font_color);
+        merge!(font_size);
+        merge!(italic);
+        merge!(bold);
+        merge!(underline);
+        merge!(font);
+        merge!(double_border);
+        merge!(animated);
+        merge!(filled);
+        merge!(text_transform);
+    }
+
+    fn clone_edge_with_endpoints(
+        &self,
+        g: &mut Graph,
+        template: &graph::Edge,
+        src: ObjId,
+        dst: ObjId,
+    ) -> usize {
+        let mut edge = template.clone();
+        edge.src = src;
+        edge.dst = dst;
+        edge.abs_id = Self::edge_abs_id(g, src, dst, edge.src_arrow, edge.dst_arrow);
+        edge.route.clear();
+        edge.is_curve = false;
+        edge.src_table_column_index = None;
+        edge.dst_table_column_index = None;
+        let idx = g.edges.len();
+        g.edges.push(edge);
+        idx
+    }
+
+    fn edge_abs_id(
+        g: &Graph,
+        src: ObjId,
+        dst: ObjId,
+        src_arrow: bool,
+        dst_arrow: bool,
+    ) -> String {
+        let arrow_str = if src_arrow && dst_arrow {
+            "<->"
+        } else if src_arrow {
+            "<-"
+        } else if dst_arrow {
+            "->"
+        } else {
+            "--"
+        };
+        let index = g
+            .edges
+            .iter()
+            .filter(|e| {
+                e.src == src && e.dst == dst && e.src_arrow == src_arrow && e.dst_arrow == dst_arrow
+            })
+            .count();
+        let src_ida: Vec<String> = g.objects[src].abs_id.split('.').map(str::to_owned).collect();
+        let dst_ida: Vec<String> = g.objects[dst].abs_id.split('.').map(str::to_owned).collect();
+        let mut common: Vec<String> = Vec::new();
+        let mut s_idx = 0usize;
+        let mut d_idx = 0usize;
+        while src_ida.len() - s_idx > 1 && dst_ida.len() - d_idx > 1 {
+            if !src_ida[s_idx].eq_ignore_ascii_case(&dst_ida[d_idx]) {
+                break;
+            }
+            common.push(src_ida[s_idx].clone());
+            s_idx += 1;
+            d_idx += 1;
+        }
+        let common_key = if common.is_empty() {
+            String::new()
+        } else {
+            format!("{}.", common.join("."))
+        };
+        let src_tail = src_ida[s_idx..].join(".");
+        let dst_tail = dst_ida[d_idx..].join(".");
+        format!(
+            "{}({} {} {})[{}]",
+            common_key, src_tail, arrow_str, dst_tail, index
+        )
+    }
+
+    fn compact_graph(
+        &self,
+        g: &mut Graph,
+        remove_ids: &std::collections::HashSet<ObjId>,
+    ) {
+        if remove_ids.is_empty() {
+            return;
+        }
+
+        let mut order: Vec<ObjId> = Vec::with_capacity(g.objects.len());
+        for id in 0..g.objects.len() {
+            if id == g.root || !remove_ids.contains(&id) {
+                order.push(id);
+            }
+        }
+
+        let mut old_to_new = vec![usize::MAX; g.objects.len()];
+        for (new_idx, &old_idx) in order.iter().enumerate() {
+            old_to_new[old_idx] = new_idx;
+        }
+
+        let mut new_objects = Vec::with_capacity(order.len());
+        for &old_idx in &order {
+            new_objects.push(std::mem::take(&mut g.objects[old_idx]));
+        }
+        g.objects = new_objects;
+
+        for obj in &mut g.objects {
+            obj.parent = obj.parent.and_then(|p| {
+                let mapped = old_to_new[p];
+                (mapped != usize::MAX).then_some(mapped)
+            });
+            obj.children.retain(|c| old_to_new[*c] != usize::MAX);
+            for c in &mut obj.children {
+                *c = old_to_new[*c];
+            }
+            obj.children_array.retain(|c| old_to_new[*c] != usize::MAX);
+            for c in &mut obj.children_array {
+                *c = old_to_new[*c];
+            }
+            for r in &mut obj.references {
+                r.scope_obj = r.scope_obj.and_then(|s| {
+                    let mapped = old_to_new[s];
+                    (mapped != usize::MAX).then_some(mapped)
+                });
+            }
+        }
+
+        g.root = old_to_new[g.root];
+        g.edges.retain(|e| old_to_new[e.src] != usize::MAX && old_to_new[e.dst] != usize::MAX);
+        for e in &mut g.edges {
+            e.src = old_to_new[e.src];
+            e.dst = old_to_new[e.dst];
+            e.scope_obj = e.scope_obj.and_then(|s| {
+                let mapped = old_to_new[s];
+                (mapped != usize::MAX).then_some(mapped)
+            });
         }
     }
 
@@ -658,7 +1099,7 @@ impl Compiler {
                     for sub in &fmap.fields {
                         if sub.name == "style" && sub.name_is_unquoted {
                             if let Some(style_map) = sub.map() {
-                                self.compile_style(g, obj, style_map, false);
+                                self.compile_icon_style(g, obj, style_map);
                             }
                         }
                     }
@@ -832,6 +1273,35 @@ impl Compiler {
         }
     }
 
+    /// Compile an `icon.style` map, which only supports a small subset
+    /// (currently `border-radius`). Matches Go's icon style handling.
+    fn compile_icon_style(&mut self, g: &mut Graph, obj: ObjId, m: &ir::Map) {
+        for f in &m.fields {
+            let keyword = f.name.to_lowercase();
+            if !f.name_is_unquoted || f.primary.is_none() {
+                continue;
+            }
+            let val = f.primary_string().unwrap_or_default();
+            if keyword == "border-radius" {
+                g.objects[obj].icon_style.border_radius = Some(ScalarValue { value: val });
+            }
+        }
+    }
+
+    fn compile_edge_icon_style(&mut self, g: &mut Graph, edge_idx: usize, m: &ir::Map) {
+        for f in &m.fields {
+            let keyword = f.name.to_lowercase();
+            if !f.name_is_unquoted || f.primary.is_none() {
+                continue;
+            }
+            let val = f.primary_string().unwrap_or_default();
+            if keyword == "border-radius" {
+                g.edges[edge_idx].icon_style.border_radius =
+                    Some(ScalarValue { value: val });
+            }
+        }
+    }
+
     fn compile_edge_style(&mut self, g: &mut Graph, edge_idx: usize, m: &ir::Map) {
         for f in &m.fields {
             let keyword = f.name.to_lowercase();
@@ -982,6 +1452,15 @@ impl Compiler {
             "icon" => {
                 if let Some(val) = primary_str {
                     g.edges[edge_idx].icon = Some(val);
+                }
+                if let Some(fmap) = f.map() {
+                    for sub in &fmap.fields {
+                        if sub.name == "style" && sub.name_is_unquoted {
+                            if let Some(style_map) = sub.map() {
+                                self.compile_edge_icon_style(g, edge_idx, style_map);
+                            }
+                        }
+                    }
                 }
             }
             "tooltip" => {
@@ -1154,6 +1633,70 @@ mod tests {
 
     fn compile_err(input: &str) -> CompileError {
         compile("test.d2", input).expect_err("should produce compile error")
+    }
+
+    #[test]
+    fn test_compile_with_config_extracts_theme_overrides() {
+        let (_, config) = compile_with_config(
+            "test.d2",
+            r##"
+vars: {
+  d2-config: {
+    sketch: true
+    theme-id: 300
+    dark-theme-id: 200
+    theme-overrides: {
+      B1: "#2E7D32"
+      N7: "#DCDCDC"
+    }
+  }
+}
+a -> b
+"##,
+        )
+        .expect("should compile with config");
+
+        let config = config.expect("config should be present");
+        assert_eq!(config.sketch, Some(true));
+        assert_eq!(config.theme_id, Some(300));
+        assert_eq!(config.dark_theme_id, Some(200));
+        let overrides = config.theme_overrides.expect("theme overrides");
+        assert_eq!(overrides.b1.as_deref(), Some("#2E7D32"));
+        assert_eq!(overrides.n7.as_deref(), Some("#DCDCDC"));
+    }
+
+    #[test]
+    fn test_literal_star_node_is_not_emitted_and_applies_style() {
+        let g = compile_ok(
+            r#"
+x
+y
+*.style.multiple: true
+"#,
+        );
+
+        assert_eq!(g.objects.len(), 3);
+        assert!(g.objects.iter().all(|o| o.id_val() != "*"));
+        assert_eq!(g.objects[1].style.multiple.as_ref().map(|v| v.value.as_str()), Some("true"));
+        assert_eq!(g.objects[2].style.multiple.as_ref().map(|v| v.value.as_str()), Some("true"));
+    }
+
+    #[test]
+    fn test_literal_star_edge_expands_to_real_edges() {
+        let g = compile_ok(
+            r#"
+container: {
+  a
+  b
+  *.style.multiple: true
+  * -> sink
+}
+"#,
+        );
+
+        let edge_ids: Vec<_> = g.edges.iter().map(|e| e.abs_id.as_str()).collect();
+        assert_eq!(edge_ids, vec!["container.(a -> sink)[0]", "container.(b -> sink)[0]"]);
+        assert!(g.objects.iter().all(|o| o.id_val() != "*"));
     }
 
     // --- Test 1: basic_shape ---
