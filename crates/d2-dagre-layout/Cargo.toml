@@ -11,4 +11,4 @@ d2-geo = { path = "../d2-geo" }
 d2-label = { path = "../d2-label" }
 d2-shape = { path = "../d2-shape" }
 d2-target = { path = "../d2-target" }
-dagre = { path = "../../../dagre" }
+dagre = { path = "../../vendor/dagre" }
