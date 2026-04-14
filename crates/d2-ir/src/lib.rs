@@ -346,6 +346,35 @@ pub fn overlay_map(base: &mut Map, overlay: &Map) {
     }
 }
 
+fn expand_substitution(base: &mut Map, resolved: &Map, placeholder_idx: usize) {
+    let mut insert_at = placeholder_idx;
+    for of in &resolved.fields {
+        if let Some(bf) = base.get_field_mut(&of.name) {
+            overlay_field(bf, of);
+        } else {
+            base.fields.insert(insert_at, of.clone());
+            insert_at += 1;
+        }
+    }
+
+    // Match Go d2ir.ExpandSubstitution: edges are appended, not inserted in place.
+    for oe in &resolved.edges {
+        let existing: Vec<usize> = base
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.id.matches(&oe.id))
+            .map(|(i, _)| i)
+            .collect();
+        if existing.is_empty() {
+            base.edges.push(oe.clone());
+        } else {
+            let idx = existing[0];
+            overlay_edge(&mut base.edges[idx], oe);
+        }
+    }
+}
+
 fn overlay_field(bf: &mut Field, of: &Field) {
     if of.primary.is_some() {
         bf.primary = of.primary.clone();
@@ -412,11 +441,65 @@ impl std::error::Error for CompileError {}
 
 struct Compiler {
     errors: Vec<ast::Error>,
+    /// Stack of parent Maps. The top of stack is the parent of the current
+    /// scope, enabling `_.foo` (parent reference) resolution in paths.
+    /// Empty when compiling at root scope.
+    scope_stack: Vec<*mut Map>,
+    /// Parallel stack of scope field names (the names of fields traversed
+    /// to enter each nested map). Used to prepend scope prefixes when
+    /// placing edges at a higher scope via `_` references.
+    scope_name_stack: Vec<String>,
 }
 
 impl Compiler {
     fn new() -> Self {
-        Self { errors: Vec::new() }
+        Self {
+            errors: Vec::new(),
+            scope_stack: Vec::new(),
+            scope_name_stack: Vec::new(),
+        }
+    }
+
+    /// Resolve a KeyPath that may start with `_` (parent references).
+    /// Returns the effective scope map and the tail path (with `_`s stripped).
+    /// If `_` is used without an available parent, returns an error and
+    /// falls back to the current scope with the original path.
+    ///
+    /// # Safety
+    /// The returned map pointer is only valid while the scope stack remains
+    /// stable. Callers must not modify the stack while using the pointer.
+    unsafe fn resolve_underscore_scope<'a, 'b>(
+        &mut self,
+        current: &'a mut Map,
+        path: &'b [ast::StringBox],
+    ) -> (*mut Map, &'b [ast::StringBox]) {
+        let mut scope: *mut Map = current as *mut Map;
+        let mut rest = path;
+        let mut stack_idx = self.scope_stack.len();
+        while let Some(first) = rest.first() {
+            if first.scalar_string() == "_" && first.as_unquoted().is_some() {
+                if stack_idx == 0 {
+                    self.errorf(
+                        first.get_range(),
+                        "invalid underscore: no parent".to_owned(),
+                    );
+                    return (current as *mut Map, path);
+                }
+                stack_idx -= 1;
+                scope = self.scope_stack[stack_idx];
+                rest = &rest[1..];
+                if rest.is_empty() {
+                    self.errorf(
+                        first.get_range(),
+                        "field key must contain more than underscores".to_owned(),
+                    );
+                    return (current as *mut Map, path);
+                }
+            } else {
+                break;
+            }
+        }
+        (scope, rest)
     }
 
     fn errorf(&mut self, range: &ast::Range, msg: String) {
@@ -493,15 +576,23 @@ impl Compiler {
     }
 
     fn compile_field(&mut self, dst: &mut Map, kp: &ast::KeyPath, key: &ast::Key) {
-        // Handle underscores at the beginning (skip in simplified version --
-        // we don't track parent pointers)
-        let path: Vec<&ast::StringBox> = kp.path.iter().collect();
-        if path.is_empty() {
+        if kp.path.is_empty() {
             return;
         }
 
+        // Resolve any leading `_` (parent scope references). Matches Go
+        // d2ir.Map.EnsureField, which pops up to ParentMap for each leading
+        // underscore.
+        let (scope_ptr, rest_path) = unsafe {
+            self.resolve_underscore_scope(dst, &kp.path)
+        };
+        if rest_path.is_empty() {
+            return;
+        }
+        let path: Vec<&ast::StringBox> = rest_path.iter().collect();
+
         // Walk/create the field path
-        let mut cur_map = dst as *mut Map;
+        let mut cur_map: *mut Map = scope_ptr;
         for (i, sb) in path.iter().enumerate() {
             let name = sb.scalar_string().to_string();
             let is_unquoted = matches!(sb, ast::StringBox::Unquoted(_));
@@ -537,7 +628,7 @@ impl Compiler {
                         scope_map_idx: None,
                     },
                 });
-                self.apply_field_value(f, key);
+                self.apply_field_value(f, key, cur_map);
                 return;
             }
 
@@ -600,7 +691,7 @@ impl Compiler {
         m.fields.last_mut().unwrap()
     }
 
-    fn apply_field_value(&mut self, f: &mut Field, key: &ast::Key) {
+    fn apply_field_value(&mut self, f: &mut Field, key: &ast::Key, parent_map_ptr: *mut Map) {
         // Check for null -> delete (simplified: just skip)
         if let Some(ref v) = key.value {
             if matches!(v, ast::ValueBox::Null(_)) {
@@ -634,9 +725,18 @@ impl Compiler {
                     if f.composite.is_none() || !matches!(f.composite, Some(Composite::Map(_))) {
                         f.composite = Some(Composite::Map(Map::new()));
                     }
+                    // Save the outer scope (dst's parent chain + dst) on the
+                    // stack so nested `_.x` references can resolve upward.
+                    // Also record the field name so edge paths that move
+                    // up via `_` can rebuild the crossed scope prefix.
+                    let outer_ptr: *mut Map = parent_map_ptr;
+                    self.scope_stack.push(outer_ptr);
+                    self.scope_name_stack.push(f.name.clone());
                     if let Some(Composite::Map(ref mut fm)) = f.composite {
                         self.compile_map(fm, m);
                     }
+                    self.scope_name_stack.pop();
+                    self.scope_stack.pop();
                 }
                 ast::ValueBox::Null(_) | ast::ValueBox::Suspension(_) => {}
                 _ => {
@@ -654,13 +754,17 @@ impl Compiler {
     fn compile_edges(&mut self, dst: &mut Map, key: &ast::Key) {
         // If there's a common key prefix, ensure those fields first
         if let Some(ref common_kp) = key.key {
-            let path: Vec<String> = common_kp
-                .path
+            // Resolve leading `_`s to parent scope before walking
+            let (scope_ptr, rest) = unsafe {
+                self.resolve_underscore_scope(dst, &common_kp.path)
+            };
+            let path: Vec<String> = rest
                 .iter()
                 .map(|sb| sb.scalar_string().to_string())
                 .collect();
-            let scope = self.ensure_field_path(dst, &path);
-            self.compile_edges_inner(scope, key);
+            let scope = unsafe { &mut *scope_ptr };
+            let inner = self.ensure_field_path(scope, &path);
+            self.compile_edges_inner(inner, key);
         } else {
             self.compile_edges_inner(dst, key);
         }
@@ -715,26 +819,114 @@ impl Compiler {
 
     fn compile_edges_inner(&mut self, dst: &mut Map, key: &ast::Key) {
         for (i, ast_edge) in key.edges.iter().enumerate() {
-            let src_path: Vec<String> = ast_edge
+            // Count leading `_`s in src/dst and strip them. The edge is
+            // placed in the scope max(src_up, dst_up) levels above `dst`.
+            // Paths that were NOT shifted get the intervening scope names
+            // prepended (matches Go: `a: { f.g -> _.s.n }` becomes edge
+            // `a.f.g -> s.n` at root).
+            let count_underscores = |path: &[ast::StringBox]| -> usize {
+                path.iter()
+                    .take_while(|sb| {
+                        sb.scalar_string() == "_" && sb.as_unquoted().is_some()
+                    })
+                    .count()
+            };
+            let src_up = ast_edge
                 .src
                 .as_ref()
-                .map(|kp| {
-                    kp.path
-                        .iter()
-                        .map(|sb| sb.scalar_string().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let dst_path: Vec<String> = ast_edge
+                .map(|kp| count_underscores(&kp.path))
+                .unwrap_or(0);
+            let dst_up = ast_edge
                 .dst
                 .as_ref()
-                .map(|kp| {
-                    kp.path
+                .map(|kp| count_underscores(&kp.path))
+                .unwrap_or(0);
+            let edge_up = src_up.max(dst_up);
+            if edge_up > self.scope_stack.len() {
+                // More `_`s than available parents: report error and skip
+                if let Some(first_kp) = ast_edge.src.as_ref().or(ast_edge.dst.as_ref()) {
+                    if let Some(first_underscore) = first_kp
+                        .path
                         .iter()
+                        .find(|sb| sb.scalar_string() == "_")
+                    {
+                        self.errorf(
+                            first_underscore.get_range(),
+                            "invalid underscore: no parent".to_owned(),
+                        );
+                    }
+                }
+                continue;
+            }
+            // Build src/dst relative paths for the edge, rooted at edge_scope.
+            // For a path with N underscores, its tail starts at (edge_up - N)
+            // levels below edge_scope; we prepend the names of those levels.
+            let current_tail: Vec<String> = self
+                .scope_stack
+                .iter()
+                .rev()
+                .take(edge_up)
+                .map(|p| unsafe { &**p })
+                .filter_map(|_| None::<String>) // placeholder; see below
+                .collect();
+            // We don't track scope names in the stack, so fall back: for
+            // the shifted side, paths have `_`s stripped; for the non-shifted
+            // side, prepend the last `edge_up - their_up` scope names.
+            // Since we don't have names, derive them from the KeyPath trail
+            // in the current compile context via key.edges[i].src/dst range —
+            // too brittle; instead, accept the limitation that cross-scope
+            // prefix is not reconstructed, and only apply scope_shift when
+            // BOTH sides share the same underscore count (most common case
+            // in the dagre_spacing corpus where edges like `a -> b` at
+            // various levels use `_` consistently).
+            let _ = current_tail;
+            let build_path = |opt: Option<&ast::KeyPath>, ups: usize| -> Vec<String> {
+                match opt {
+                    Some(kp) => kp
+                        .path
+                        .iter()
+                        .skip(ups)
                         .map(|sb| sb.scalar_string().to_string())
+                        .collect(),
+                    None => Vec::new(),
+                }
+            };
+            let src_tail = build_path(ast_edge.src.as_ref(), src_up);
+            let dst_tail = build_path(ast_edge.dst.as_ref(), dst_up);
+            // If one side was shifted more than the other, prepend the
+            // scope names the less-shifted side would otherwise cross.
+            // Scope names are recovered from the most-recent field names
+            // the compiler placed on the stack when descending. For now,
+            // we use ids_to_edge_scope to capture this info.
+            let shift_prefix = |side_up: usize| -> Vec<String> {
+                // Need scope_name_stack (parallel to scope_stack). See
+                // scope_name_stack field on Compiler.
+                let diff = edge_up - side_up;
+                if diff == 0 {
+                    Vec::new()
+                } else {
+                    self.scope_name_stack
+                        .iter()
+                        .rev()
+                        .take(diff)
+                        .rev()
+                        .cloned()
                         .collect()
-                })
-                .unwrap_or_default();
+                }
+            };
+            let mut src_path: Vec<String> = shift_prefix(src_up);
+            src_path.extend(src_tail);
+            let mut dst_path: Vec<String> = shift_prefix(dst_up);
+            dst_path.extend(dst_tail);
+
+            // Redirect `dst` (the map the edge gets stored in) to the
+            // scope `edge_up` levels above the current dst.
+            let edge_scope_ptr: *mut Map = if edge_up == 0 {
+                dst as *mut Map
+            } else {
+                self.scope_stack[self.scope_stack.len() - edge_up]
+            };
+            let dst: &mut Map = unsafe { &mut *edge_scope_ptr };
 
             let src_arrow = ast_edge.src_arrow == "<";
             let dst_arrow = ast_edge.dst_arrow == ">";
@@ -1024,8 +1216,14 @@ impl Compiler {
             vars_stack
         };
 
-        // Process fields
-        for i in 0..m.fields.len() {
+        // Process fields. Spread substitutions can remove placeholder fields,
+        // so this loop has to be index-based rather than `for field in ...`.
+        let mut i = 0;
+        while i < m.fields.len() {
+            if self.expand_field_spread_substitution(stack, m, i) {
+                continue;
+            }
+
             if m.fields[i].primary.is_some() {
                 self.resolve_substitutions(stack, &mut m.fields[i]);
             }
@@ -1039,6 +1237,7 @@ impl Compiler {
                 }
                 m.fields[i].composite = comp;
             }
+            i += 1;
         }
 
         // Process edges
@@ -1055,6 +1254,38 @@ impl Compiler {
                 m.edges[i].map = emap;
             }
         }
+    }
+
+    fn expand_field_spread_substitution(
+        &mut self,
+        vars_stack: &[&Map],
+        m: &mut Map,
+        field_idx: usize,
+    ) -> bool {
+        let Some(primary) = m.fields[field_idx].primary.as_ref() else {
+            return false;
+        };
+        let Some(sub) = extract_single_substitution(&primary.value) else {
+            return false;
+        };
+        if !sub.spread || !m.fields[field_idx].name.is_empty() {
+            return false;
+        }
+
+        let resolved = match self.resolve_substitution_field(vars_stack, sub) {
+            Some(field) => field,
+            None => return false,
+        };
+
+        let Some(resolved_map) = resolved.map() else {
+            self.errorf(&sub.range, "cannot spread non-composite".to_string());
+            return false;
+        };
+
+        let resolved_map = resolved_map.clone();
+        m.fields.remove(field_idx);
+        expand_substitution(m, &resolved_map, field_idx);
+        true
     }
 
     fn resolve_substitutions(&mut self, vars_stack: &[&Map], f: &mut Field) {
@@ -1132,7 +1363,9 @@ impl Compiler {
             .collect();
 
         for vars in vars_stack {
-            if let Some(val) = self.lookup_var(vars, &path) {
+            if let Some(field) = self.lookup_var_field(vars, &path)
+                && let Some(val) = field.primary_string()
+            {
                 return Some(val);
             }
         }
@@ -1143,16 +1376,52 @@ impl Compiler {
         None
     }
 
-    fn lookup_var(&self, vars: &Map, path: &[String]) -> Option<String> {
+    fn resolve_substitution_field(
+        &mut self,
+        vars_stack: &[&Map],
+        sub: &ast::Substitution,
+    ) -> Option<Field> {
+        let path: Vec<String> = sub
+            .path
+            .iter()
+            .map(|sb| sb.scalar_string().to_string())
+            .collect();
+
+        for vars in vars_stack {
+            if let Some(field) = self.lookup_var_field(vars, &path) {
+                return Some(field.clone());
+            }
+        }
+
+        self.errorf(
+            &sub.range,
+            format!("could not resolve variable \"{}\"", path.join(".")),
+        );
+        None
+    }
+
+    fn lookup_var_field<'a>(&self, vars: &'a Map, path: &[String]) -> Option<&'a Field> {
         if path.is_empty() {
             return None;
         }
         let f = vars.get_field(&path[0])?;
         if path.len() == 1 {
-            return f.primary_string();
+            return Some(f);
         }
         let inner = f.map()?;
-        self.lookup_var(inner, &path[1..])
+        self.lookup_var_field(inner, &path[1..])
+    }
+}
+
+fn extract_single_substitution(value: &ast::ScalarBox) -> Option<&ast::Substitution> {
+    match value {
+        ast::ScalarBox::UnquotedString(us) if us.value.len() == 1 => {
+            us.value[0].substitution.as_ref()
+        }
+        ast::ScalarBox::DoubleQuotedString(dqs) if dqs.value.len() == 1 => {
+            dqs.value[0].substitution.as_ref()
+        }
+        _ => None,
     }
 }
 
@@ -1280,6 +1549,33 @@ mod tests {
         let m = compile_str("vars: {\n  color: red\n}\nx: ${color}").unwrap();
         let x = m.get_field("x").unwrap();
         assert_eq!(x.primary_string(), Some("red".to_string()));
+    }
+
+    #[test]
+    fn test_vars_spread_in_place() {
+        let m = compile_str(
+            "vars: {\n  person-shape: {\n    grid-columns: 1\n    grid-rows: 2\n    grid-gap: 0\n    head\n    body\n  }\n}\n\ndora: {\n  ...${person-shape}\n  body\n}\n",
+        )
+        .unwrap();
+
+        let dora = m.get_field("dora").unwrap().map().unwrap();
+        assert_eq!(dora.fields[0].name, "grid-columns");
+        assert!(dora.get_field("body").is_some());
+    }
+
+    #[test]
+    fn test_vars_spread_hyphenated_name() {
+        let m = compile_str(
+            "vars: {\n  dog1: Frido {\n    shape: circle\n  }\n  my-house: {\n    label: Home\n  }\n}\n\nok: {\n  ...${my-house}\n  dog1: {\n    ...${dog1}\n  }\n  dog1 -> dog3\n}\n",
+        )
+        .unwrap();
+
+        let ok = m.get_field("ok").unwrap().map().unwrap();
+        let label = ok.get_field("label").unwrap();
+        assert_eq!(label.primary_string(), Some("Home".to_string()));
+        let dog1 = ok.get_field("dog1").unwrap().map().unwrap();
+        let shape = dog1.get_field("shape").unwrap();
+        assert_eq!(shape.primary_string(), Some("circle".to_string()));
     }
 
     #[test]
