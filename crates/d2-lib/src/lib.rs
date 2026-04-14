@@ -360,6 +360,22 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
 
     layout_nested(&mut sub_g)?;
 
+    // For non-grid, non-sequence containers, dagre's fit_container_padding
+    // does not size the root container (it only walks `root.ChildrenArray`).
+    // Mirror Go `LayoutNested` line 227 `FitToGraph(curr, nestedGraph, ...)`
+    // by growing the root to enclose its children + DEFAULT_PADDING and
+    // shifting the children so they sit inside the new root box. Must run
+    // BEFORE we snapshot obj_results so callers see post-shift positions.
+    {
+        let root_obj = &sub_g.objects[sub_g.root];
+        let needs_fit = !root_obj.is_grid_diagram()
+            && !root_obj.is_sequence_diagram()
+            && !sub_g.objects[sub_g.root].children_array.is_empty();
+        if needs_fit {
+            fit_root_to_children(&mut sub_g);
+        }
+    }
+
     let mut obj_results = HashMap::new();
     for (&main_id, &sub_id) in &id_map {
         if main_id == container_id {
@@ -426,6 +442,64 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
         container_label_position: root.label_position.clone(),
         container_icon_position: root.icon_position.clone(),
     })
+}
+
+/// Grow the root container so its bounding box encloses all direct children
+/// plus DEFAULT_PADDING. Children are shifted so they lie inside the new box
+/// starting at (pad_left, pad_top); root.top_left is reset to (0, 0).
+/// Mirrors Go `LayoutNested -> FitToGraph` for non-grid/non-seq containers.
+fn fit_root_to_children(g: &mut Graph) {
+    const DEFAULT_PADDING: f64 = 30.0;
+    let root = g.root;
+    let children: Vec<ObjId> = g.objects[root].children_array.clone();
+    if children.is_empty() {
+        return;
+    }
+    // Padding from container's own spacing (label/icon overhead) clamped to default.
+    let (_, own_pad) = g.objects[root].spacing();
+    let pad_top = own_pad.top.max(DEFAULT_PADDING);
+    let pad_bottom = own_pad.bottom.max(DEFAULT_PADDING);
+    let pad_left = own_pad.left.max(DEFAULT_PADDING);
+    let pad_right = own_pad.right.max(DEFAULT_PADDING);
+
+    let mut tl_x = f64::INFINITY;
+    let mut tl_y = f64::INFINITY;
+    let mut br_x = f64::NEG_INFINITY;
+    let mut br_y = f64::NEG_INFINITY;
+    for &cid in &children {
+        let c = &g.objects[cid];
+        let (margin, _) = c.spacing();
+        tl_x = tl_x.min(c.top_left.x - margin.left.max(pad_left));
+        tl_y = tl_y.min(c.top_left.y - margin.top.max(pad_top));
+        br_x = br_x.max(c.top_left.x + c.width + margin.right.max(pad_right));
+        br_y = br_y.max(c.top_left.y + c.height + margin.bottom.max(pad_bottom));
+    }
+    if !tl_x.is_finite() {
+        return;
+    }
+    let new_w = (br_x - tl_x).max(g.objects[root].width);
+    let new_h = (br_y - tl_y).max(g.objects[root].height);
+    // Shift descendants so the inner bbox starts at (0, 0) of the new root.
+    let dx = -tl_x;
+    let dy = -tl_y;
+    if dx != 0.0 || dy != 0.0 {
+        for &cid in &children {
+            move_obj_with_descendants_and_boxes(g, cid, dx, dy);
+        }
+        // Move edge routes contained in this subgraph.
+        for ei in 0..g.edges.len() {
+            let route_in = !g.edges[ei].route.is_empty();
+            let src_in = g.objects[g.edges[ei].src].is_descendant_of(g.edges[ei].src, root, g);
+            let dst_in = g.objects[g.edges[ei].dst].is_descendant_of(g.edges[ei].dst, root, g);
+            if route_in && src_in && dst_in {
+                g.edges[ei].move_route(dx, dy);
+            }
+        }
+    }
+    g.objects[root].width = new_w;
+    g.objects[root].height = new_h;
+    g.objects[root].top_left = Point::new(0.0, 0.0);
+    g.objects[root].update_box();
 }
 
 fn apply_nested_object_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
@@ -512,8 +586,6 @@ fn move_obj_with_descendants_and_boxes(g: &mut Graph, obj_id: ObjId, dx: f64, dy
 /// fit them to their containers, then run the main dagre layout, and finally
 /// offset nested contents to their container positions.
 fn layout_nested(g: &mut Graph) -> Result<(), String> {
-    eprintln!("DBG layout_nested: root_level={} root.shape={} is_sd={} is_grid={}",
-        g.root_level, g.root_obj().shape.value, g.root_obj().is_sequence_diagram(), g.root_obj().is_grid_diagram());
     if g.root_obj().is_sequence_diagram() {
         let root = g.root;
         let nested_children: Vec<ObjId> = g.objects[root]
@@ -637,6 +709,20 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         }
 
         for (child_id, _, _) in &saved_children {
+            // Mirror Go d2grid layout's container-default OUTSIDE_TOP_CENTER
+            // label position. Once we clear `children_array` so grid layout
+            // treats the cell as a leaf, layout_grid no longer detects it as
+            // a container and would default to INSIDE_MIDDLE_CENTER, which
+            // shrinks the grid cell because the OUTSIDE label margin is lost.
+            // Set the position before clearing so `size_for_outside_labels`
+            // reserves vertical space for the label.
+            let was_container = !g.objects[*child_id].children_array.is_empty();
+            if was_container
+                && g.objects[*child_id].label_position.is_none()
+                && g.objects[*child_id].has_label()
+            {
+                g.objects[*child_id].label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
+            }
             g.objects[*child_id].children.clear();
             g.objects[*child_id].children_array.clear();
         }
