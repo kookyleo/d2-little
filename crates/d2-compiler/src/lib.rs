@@ -1215,6 +1215,15 @@ impl Compiler {
         // - Otherwise (normal case), the sub-map's scope is the newly
         //   created child itself (it owns the sub-map).
         if let Some(fmap) = f.map() {
+            // Propagate `&attr: value` filters from the IR map onto the
+            // graph object so the glob-expansion pass can consult them.
+            for filt in &fmap.filters {
+                g.objects[child].filters.push(d2_graph::GlobFilter {
+                    attr: filt.attr.clone(),
+                    value: filt.value.clone(),
+                    negate: filt.negate,
+                });
+            }
             let child_scope = if g.objects[child].parent == Some(obj) {
                 child  // Normal: child owns the sub-map
             } else {

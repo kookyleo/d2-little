@@ -502,6 +502,23 @@ impl ArrowheadInfo {
 }
 
 // ---------------------------------------------------------------------------
+// GlobFilter
+// ---------------------------------------------------------------------------
+
+/// `&attr: value` (or `!&attr: value`) filter declared inside a glob
+/// template map. Used by the compiler to narrow which fields receive
+/// the template's values when expanding `*` / `**`.
+#[derive(Debug, Clone)]
+pub struct GlobFilter {
+    /// Dotted attribute path (e.g. `shape`, `class`, `style.fill`, `label`).
+    pub attr: Vec<String>,
+    /// Expected value (lowercase-compared).
+    pub value: String,
+    /// `true` when declared with `!&`.
+    pub negate: bool,
+}
+
+// ---------------------------------------------------------------------------
 // ObjId
 // ---------------------------------------------------------------------------
 
@@ -564,6 +581,11 @@ pub struct Object {
 
     pub z_index: i32,
     pub classes: Vec<String>,
+
+    /// `&attr: value` filters declared on this object's map. Used by the
+    /// compiler when expanding glob (`*` / `**`) templates to restrict
+    /// which targets receive the template's values.
+    pub filters: Vec<GlobFilter>,
 
     /// Set to `true` by the sequence layout for note objects. Used by
     /// `get_fill` to return the correct note fill color (N7).
@@ -644,6 +666,7 @@ impl Default for Object {
             horizontal_gap: None,
             z_index: 0,
             classes: Vec::new(),
+            filters: Vec::new(),
             is_sequence_diagram_note: false,
             is_sequence_diagram_group: false,
             references: Vec::new(),
