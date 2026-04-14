@@ -716,87 +716,94 @@ fn get_best_layout(
     let mut threshold_attempts = (sd.ceil() as usize).max(MIN_THRESHOLD_ATTEMPTS).min(MAX_THRESHOLD_ATTEMPTS);
     let mut ok_threshold = STARTING_THRESHOLD;
 
-    for i in 0..threshold_attempts.max(1) {
+    let mut attempt = 0;
+    while attempt < threshold_attempts || state.best_layout.is_none() {
         state.count = 0;
         state.skip_count = 0;
-        state.starting_cache.clear();
 
         iter_divisions_search(
-            &gd.objects,
+            &sizes,
             n_cuts,
+            &mut Vec::new(),
             g,
             gd,
             target_size,
             columns,
             gap,
             ok_threshold,
-            &sizes,
             &mut state,
         );
+
+        ok_threshold += THRESHOLD_STEP_SIZE;
+        state.starting_cache.clear();
 
         if state.skip_count == 0 {
             break;
         }
-        ok_threshold += THRESHOLD_STEP_SIZE;
         if state.count == 0 && threshold_attempts < MAX_THRESHOLD_ATTEMPTS {
             threshold_attempts += 1;
         }
-        if i + 1 >= threshold_attempts && state.best_layout.is_some() {
-            break;
-        }
+        attempt += 1;
     }
 
     state.best_layout.unwrap_or_else(|| vec![gd.objects.clone()])
 }
 
-/// Wrapper for iter_divisions that uses mutable SearchState.
+/// Port of Go `iterDivisions`, carrying pending outer cuts in reverse order.
 fn iter_divisions_search(
-    objects: &[ObjId],
+    sizes: &[f64],
     n_cuts: usize,
+    pending_suffix: &mut Vec<usize>,
     g: &Graph,
     gd: &GridDiagram,
     target_size: f64,
     columns: bool,
     gap: f64,
     ok_threshold: f64,
-    sizes: &[f64],
     state: &mut SearchState,
-) {
-    if objects.len() < 2 || n_cuts == 0 {
-        return;
+) -> bool {
+    if sizes.len() < 2 || n_cuts == 0 {
+        return false;
     }
-    let last_obj = objects.len() - 1;
+    let last_obj = sizes.len() - 1;
     for index in (n_cuts..=last_obj).rev() {
-        // Check cut
-        if !check_cut(objects, index, objects.len(), false, gap, ok_threshold, target_size, sizes, gd, state) {
+        if !check_cut(&sizes[index..], false, gap, ok_threshold, target_size, state) {
             continue;
         }
         if n_cuts > 1 {
-            let saved_len = state.best_layout.as_ref().map(|l| l.len());
-            iter_divisions_inner(
-                &objects[..index],
+            pending_suffix.push(index - 1);
+            let done = iter_divisions_search(
+                &sizes[..index],
                 n_cuts - 1,
-                index,
+                pending_suffix,
                 g,
                 gd,
                 target_size,
                 columns,
                 gap,
                 ok_threshold,
-                sizes,
                 state,
             );
-            if state.count >= ATTEMPT_LIMIT || state.skip_count >= SKIP_LIMIT {
-                return;
+            pending_suffix.pop();
+            if done {
+                return true;
             }
         } else {
-            if !check_cut(objects, 0, index, true, gap, ok_threshold, target_size, sizes, gd, state) {
+            if !check_cut(&sizes[..index], true, gap, ok_threshold, target_size, state) {
                 continue;
             }
-            // Try this division
-            let division = vec![index - 1];
+            let mut division = Vec::with_capacity(pending_suffix.len() + 1);
+            division.push(index - 1);
+            division.extend(pending_suffix.iter().rev().copied());
             let layout = gen_layout(&gd.objects, &division);
-            let dist = get_dist_to_target(g, &layout, target_size, gd.horizontal_gap as f64, gd.vertical_gap as f64, columns);
+            let dist = get_dist_to_target(
+                g,
+                &layout,
+                target_size,
+                gd.horizontal_gap as f64,
+                gd.vertical_gap as f64,
+                columns,
+            );
             if dist < state.best_dist || (state.fast_is_best && dist == state.best_dist) {
                 state.best_layout = Some(layout);
                 state.best_dist = dist;
@@ -804,102 +811,34 @@ fn iter_divisions_search(
             }
             state.count += 1;
             if state.count >= ATTEMPT_LIMIT || state.skip_count >= SKIP_LIMIT {
-                return;
+                return true;
             }
         }
     }
-}
-
-fn iter_divisions_inner(
-    objects: &[ObjId],
-    n_cuts: usize,
-    outer_index: usize,
-    g: &Graph,
-    gd: &GridDiagram,
-    target_size: f64,
-    columns: bool,
-    gap: f64,
-    ok_threshold: f64,
-    sizes: &[f64],
-    state: &mut SearchState,
-) {
-    if objects.len() < 2 || n_cuts == 0 {
-        return;
-    }
-    let last_obj = objects.len() - 1;
-    for index in (n_cuts..=last_obj).rev() {
-        if !check_cut(objects, index, objects.len(), false, gap, ok_threshold, target_size, sizes, gd, state) {
-            continue;
-        }
-        if n_cuts > 1 {
-            iter_divisions_inner(
-                &objects[..index],
-                n_cuts - 1,
-                index,
-                g,
-                gd,
-                target_size,
-                columns,
-                gap,
-                ok_threshold,
-                sizes,
-                state,
-            );
-            if state.count >= ATTEMPT_LIMIT || state.skip_count >= SKIP_LIMIT {
-                return;
-            }
-        } else {
-            if !check_cut(objects, 0, index, true, gap, ok_threshold, target_size, sizes, gd, state) {
-                continue;
-            }
-            // Build full division from inner cuts + outer_index
-            let mut division = vec![index - 1, outer_index - 1];
-            let layout = gen_layout(&gd.objects, &division);
-            let dist = get_dist_to_target(g, &layout, target_size, gd.horizontal_gap as f64, gd.vertical_gap as f64, columns);
-            if dist < state.best_dist || (state.fast_is_best && dist == state.best_dist) {
-                state.best_layout = Some(layout);
-                state.best_dist = dist;
-                state.fast_is_best = false;
-            }
-            state.count += 1;
-            if state.count >= ATTEMPT_LIMIT || state.skip_count >= SKIP_LIMIT {
-                return;
-            }
-        }
-    }
+    false
 }
 
 fn check_cut(
-    objects: &[ObjId],
-    start: usize,
-    end: usize,
+    row_sizes: &[f64],
     starting: bool,
     gap: f64,
     ok_threshold: f64,
     target_size: f64,
-    sizes: &[f64],
-    gd: &GridDiagram,
     state: &mut SearchState,
 ) -> bool {
-    let row = &objects[start..end];
     if starting {
-        if let Some(&cached) = state.starting_cache.get(&row.len()) {
+        if let Some(&cached) = state.starting_cache.get(&row_sizes.len()) {
             return cached;
         }
     }
-    let mut row_size = 0.0;
-    for &oid in row {
-        if let Some(pos) = gd.objects.iter().position(|&x| x == oid) {
-            row_size += sizes[pos];
-        }
-    }
-    if row.len() > 1 {
-        row_size += gap * (row.len() as f64 - 1.0);
+    let mut row_size: f64 = row_sizes.iter().sum();
+    if row_sizes.len() > 1 {
+        row_size += gap * (row_sizes.len() as f64 - 1.0);
         if row_size > ok_threshold * target_size {
             state.skip_count += 1;
             let ok = state.skip_count >= SKIP_LIMIT;
             if starting {
-                state.starting_cache.insert(row.len(), ok);
+                state.starting_cache.insert(row_sizes.len(), ok);
             }
             return ok;
         }
@@ -908,12 +847,12 @@ fn check_cut(
         state.skip_count += 1;
         let ok = state.skip_count >= SKIP_LIMIT;
         if starting {
-            state.starting_cache.insert(row.len(), ok);
+            state.starting_cache.insert(row_sizes.len(), ok);
         }
         return ok;
     }
     if starting {
-        state.starting_cache.insert(row.len(), true);
+        state.starting_cache.insert(row_sizes.len(), true);
     }
     true
 }
