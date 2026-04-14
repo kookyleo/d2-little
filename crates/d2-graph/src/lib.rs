@@ -124,7 +124,7 @@ pub fn unformat_key_segment(formatted: &str) -> &str {
 
 /// Compare two AST source ranges by start position. Mirrors Go's
 /// `Range.Before` ordering used in `SortObjectsByAST`.
-fn range_cmp(a: &ast::Range, b: &ast::Range) -> std::cmp::Ordering {
+pub fn range_cmp(a: &ast::Range, b: &ast::Range) -> std::cmp::Ordering {
     a.start
         .byte
         .cmp(&b.start.byte)

@@ -832,7 +832,16 @@ impl Compiler {
 
     fn apply_literal_star_template(&self, g: &mut Graph, template_id: ObjId, target_id: ObjId) {
         let template = g.objects[template_id].clone();
-        Self::merge_object_defaults(&template, &mut g.objects[target_id]);
+        // When the glob declaration (`**: {...}`) appears in the source
+        // after the target's last explicit reference, Go's d2ir re-applies
+        // the glob as a non-lazy write that overrides existing style
+        // values. Otherwise the target's explicit style wins. Approximate
+        // that by comparing source ranges: only style attributes follow
+        // override semantics; identity-like fields (label, shape, etc.)
+        // always use merge-defaults to avoid leaking the `**` placeholder
+        // label onto matched objects.
+        let override_mode = Self::template_is_after_target(&template, &g.objects[target_id]);
+        Self::merge_object_defaults(&template, &mut g.objects[target_id], override_mode);
 
         let child_templates = template.children_array.clone();
         for child_template in child_templates {
@@ -875,7 +884,53 @@ impl Compiler {
         }
     }
 
-    fn merge_object_defaults(template: &graph::Object, target: &mut graph::Object) {
+    /// Return `true` when the template's earliest non-var reference range
+    /// is strictly after every one of the target's non-var reference
+    /// ranges. Used to decide whether a `**` glob should override existing
+    /// style attributes (source-after glob wins) or merely provide
+    /// defaults.
+    fn template_is_after_target(template: &graph::Object, target: &graph::Object) -> bool {
+        let tmpl_range = template
+            .references
+            .iter()
+            .filter(|r| !r.is_var)
+            .filter_map(|r| {
+                r.key
+                    .path
+                    .get(r.key_path_index)
+                    .map(|s| s.get_range().clone())
+            })
+            .min_by(|a, b| graph::range_cmp(a, b));
+        let Some(tmpl_range) = tmpl_range else {
+            return false;
+        };
+        let mut saw_any = false;
+        for r in &target.references {
+            if r.is_var {
+                continue;
+            }
+            let Some(sb) = r.key.path.get(r.key_path_index) else {
+                continue;
+            };
+            let tr = sb.get_range();
+            saw_any = true;
+            if graph::range_cmp(&tmpl_range, tr) != std::cmp::Ordering::Greater {
+                return false;
+            }
+        }
+        saw_any
+    }
+
+    fn merge_object_defaults(
+        template: &graph::Object,
+        target: &mut graph::Object,
+        override_existing: bool,
+    ) {
+        // Identity-like fields (label, shape, language, etc.) only fill in
+        // when the target is blank. Override mode is reserved for style
+        // attributes — Go's d2ir re-applies globs as lazy writes that
+        // update style values but never clobbers identity defaults with
+        // the `**` placeholder values.
         if target.label.value.is_empty() && !template.label.value.is_empty() {
             target.label = template.label.clone();
         }
@@ -891,7 +946,7 @@ impl Compiler {
             target.language = template.language.clone();
         }
 
-        Self::merge_style_defaults(&template.style, &mut target.style);
+        Self::merge_style_defaults(&template.style, &mut target.style, override_existing);
         if target.icon_style.border_radius.is_none() {
             target.icon_style.border_radius = template.icon_style.border_radius.clone();
         }
@@ -963,10 +1018,14 @@ impl Compiler {
         }
     }
 
-    fn merge_style_defaults(template: &graph::Style, target: &mut graph::Style) {
+    fn merge_style_defaults(
+        template: &graph::Style,
+        target: &mut graph::Style,
+        override_existing: bool,
+    ) {
         macro_rules! merge {
             ($field:ident) => {
-                if target.$field.is_none() {
+                if template.$field.is_some() && (override_existing || target.$field.is_none()) {
                     target.$field = template.$field.clone();
                 }
             };
