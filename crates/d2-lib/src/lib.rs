@@ -709,22 +709,29 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         }
 
         for (child_id, _, _) in &saved_children {
-            // Mirror Go d2grid layout's container-default OUTSIDE_TOP_CENTER
-            // label position. Once we clear `children_array` so grid layout
+            // Mirror Go d2grid layout's container-default label/icon
+            // positions. Once we clear `children_array` so grid layout
             // treats the cell as a leaf, layout_grid no longer detects it as
             // a container and would default to INSIDE_MIDDLE_CENTER, which
-            // shrinks the grid cell because the OUTSIDE label margin is lost.
-            // Set the position before clearing so `size_for_outside_labels`
-            // reserves vertical space for the label.
-            let was_container = !g.objects[*child_id].children_array.is_empty();
-            if was_container
-                && g.objects[*child_id].label_position.is_none()
-                && g.objects[*child_id].has_label()
-            {
-                g.objects[*child_id].label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
+            // shrinks the grid cell because the OUTSIDE label/icon margin
+            // is lost. Set the positions before clearing so
+            // `size_for_outside_labels` reserves space for them.
+            let cid = *child_id;
+            let was_container = !g.objects[cid].children_array.is_empty();
+            if was_container && g.objects[cid].has_icon() && g.objects[cid].icon_position.is_none() {
+                g.objects[cid].icon_position = Some("OUTSIDE_TOP_LEFT".to_owned());
+                if g.objects[cid].label_position.is_none() && g.objects[cid].has_label() {
+                    g.objects[cid].label_position = Some("OUTSIDE_TOP_RIGHT".to_owned());
+                }
             }
-            g.objects[*child_id].children.clear();
-            g.objects[*child_id].children_array.clear();
+            if was_container
+                && g.objects[cid].label_position.is_none()
+                && g.objects[cid].has_label()
+            {
+                g.objects[cid].label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
+            }
+            g.objects[cid].children.clear();
+            g.objects[cid].children_array.clear();
         }
 
         let saved_edges = remove_edges_touching_descendants(g, &excluded_descendants);
@@ -829,10 +836,17 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             child_copy.parent = Some(sub.root);
             let was_container = !child_copy.children_array.is_empty();
             child_copy.children_array.clear();
-            // Preserve container knowledge for label positioning. Only set
-            // this for containers with a non-empty label; Go's grid layout
-            // guards the same defaulting with `o.HasLabel()`, so containers
-            // like `TALA: ""` must stay without a label position.
+            // Mirror d2grid layout_grid container-default label/icon
+            // positioning. After clearing children_array, the cell looks
+            // like a leaf to layout_grid, so it would default to
+            // INSIDE_MIDDLE_CENTER and lose the OUTSIDE label/icon
+            // margin contribution to the cell's row/column size.
+            if was_container && child_copy.has_icon() && child_copy.icon_position.is_none() {
+                child_copy.icon_position = Some("OUTSIDE_TOP_LEFT".to_owned());
+                if child_copy.label_position.is_none() && child_copy.has_label() {
+                    child_copy.label_position = Some("OUTSIDE_TOP_RIGHT".to_owned());
+                }
+            }
             if was_container && child_copy.label_position.is_none() && child_copy.has_label() {
                 child_copy.label_position = Some("OUTSIDE_TOP_CENTER".to_owned());
             }
