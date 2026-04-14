@@ -1353,7 +1353,6 @@ impl Diagram {
             }
 
             if s.icon.is_some()
-                && s.type_ != SHAPE_IMAGE
                 && !s.icon_position.is_empty()
                 && s.icon_position.contains("OUTSIDE")
             {
