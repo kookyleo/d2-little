@@ -3880,6 +3880,9 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
         if d2_color::is_gradient(&s.stroke) {
             define_gradients(&mut buf, &s.stroke);
         }
+        if d2_color::is_gradient(&s.text.color) {
+            define_gradients(&mut buf, &s.text.color);
+        }
     }
     for c in &diagram.connections {
         if d2_color::is_gradient(&c.stroke) {
