@@ -186,6 +186,50 @@ impl Theme {
 }
 
 // ---------------------------------------------------------------------------
+// ResolvedTheme
+// ---------------------------------------------------------------------------
+
+/// A theme value suitable for inline SVG color resolution.
+///
+/// Catalog themes can be used directly, while themes with runtime overrides
+/// need an owned palette so inline `fill`/`stroke` attributes match the CSS
+/// rules generated from those same overrides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedTheme {
+    Catalog(Theme),
+    Overridden {
+        is_dark: bool,
+        colors: OwnedColorPalette,
+    },
+}
+
+impl ResolvedTheme {
+    pub fn from_theme(theme: &Theme, overrides: Option<&ThemeOverrides>) -> Self {
+        match overrides {
+            Some(ov) => Self::Overridden {
+                is_dark: theme.is_dark(),
+                colors: theme.apply_overrides(ov),
+            },
+            None => Self::Catalog(theme.clone()),
+        }
+    }
+
+    pub fn is_dark(&self) -> bool {
+        match self {
+            Self::Catalog(theme) => theme.is_dark(),
+            Self::Overridden { is_dark, .. } => *is_dark,
+        }
+    }
+
+    pub fn resolve_color<'a>(&'a self, code: &'a str) -> &'a str {
+        match self {
+            Self::Catalog(theme) => resolve_theme_color(theme, code),
+            Self::Overridden { colors, .. } => resolve_owned_color(colors, code),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OwnedColorPalette  (for runtime overrides)
 // ---------------------------------------------------------------------------
 
@@ -347,11 +391,11 @@ pub struct ThemableElement {
     pub fill_pattern: String,
 
     /// When set, theme colors are resolved inline instead of via CSS class.
-    inline_theme: Option<Theme>,
+    inline_theme: Option<ResolvedTheme>,
 }
 
 impl ThemableElement {
-    pub fn new(tag: &str, inline_theme: Option<&Theme>) -> Self {
+    pub fn new(tag: &str, inline_theme: Option<&ResolvedTheme>) -> Self {
         let xmlns = if tag == "div" {
             "http://www.w3.org/1999/xhtml".to_owned()
         } else {
@@ -489,7 +533,7 @@ impl ThemableElement {
         if d2_color::is_theme_color(&self.stroke) {
             class += &format!(" stroke-{}", self.stroke);
             if let Some(ref theme) = self.inline_theme {
-                out += &format!(r#" stroke="{}""#, resolve_theme_color(theme, &self.stroke));
+                out += &format!(r#" stroke="{}""#, theme.resolve_color(&self.stroke));
             }
         } else if !self.stroke.is_empty() {
             let s = if d2_color::is_gradient(&self.stroke) {
@@ -503,7 +547,7 @@ impl ThemableElement {
         if d2_color::is_theme_color(&self.fill) {
             class += &format!(" fill-{}", self.fill);
             if let Some(ref theme) = self.inline_theme {
-                out += &format!(r#" fill="{}""#, resolve_theme_color(theme, &self.fill));
+                out += &format!(r#" fill="{}""#, theme.resolve_color(&self.fill));
             }
         } else if !self.fill.is_empty() {
             let s = if d2_color::is_gradient(&self.fill) {
@@ -519,7 +563,7 @@ impl ThemableElement {
             if let Some(ref theme) = self.inline_theme {
                 out += &format!(
                     r#" background-color="{}""#,
-                    resolve_theme_color(theme, &self.background_color)
+                    theme.resolve_color(&self.background_color)
                 );
             }
         } else if !self.background_color.is_empty() {
@@ -529,7 +573,7 @@ impl ThemableElement {
         if d2_color::is_theme_color(&self.color) {
             class += &format!(" color-{}", self.color);
             if let Some(ref theme) = self.inline_theme {
-                out += &format!(r#" color="{}""#, resolve_theme_color(theme, &self.color));
+                out += &format!(r#" color="{}""#, theme.resolve_color(&self.color));
             }
         } else if !self.color.is_empty() {
             out += &format!(r#" color="{}""#, self.color);
