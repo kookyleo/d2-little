@@ -297,11 +297,30 @@ pub struct IREdge {
     pub references: Vec<EdgeReference>,
 }
 
+/// A single `&attr: value` (or `!&attr: value`) filter entry recorded
+/// on a map. Used by the compiler to narrow `**` / `*` glob expansion
+/// to only fields whose attribute matches (or does not match, when
+/// `negate` is set).
+#[derive(Debug, Clone)]
+pub struct Filter {
+    /// Dotted attribute path, e.g. `shape`, `class`, `style.fill`, `label`.
+    pub attr: Vec<String>,
+    /// Expected scalar value (lowercase-compared).
+    pub value: String,
+    /// Set for `!&` — negated filters.
+    pub negate: bool,
+}
+
 /// The resolved map of fields and edges.
 #[derive(Debug, Clone)]
 pub struct Map {
     pub fields: Vec<Field>,
     pub edges: Vec<IREdge>,
+    /// `&attr: value` filter entries declared directly inside this map.
+    /// When the map is used as a `**` / `*` glob template, the compiler
+    /// only applies its non-filter fields to targets that satisfy every
+    /// filter listed here.
+    pub filters: Vec<Filter>,
 }
 
 impl Map {
@@ -309,6 +328,7 @@ impl Map {
         Self {
             fields: Vec::new(),
             edges: Vec::new(),
+            filters: Vec::new(),
         }
     }
 
@@ -686,8 +706,34 @@ impl Compiler {
     }
 
     fn compile_key(&mut self, dst: &mut Map, key: &ast::Key) {
-        // Skip ampersand / filter keys
+        // Ampersand / filter keys: record as Filter on the enclosing map
+        // rather than as a regular field. The compiler consults these when
+        // expanding `**` (and `*`) templates so only fields whose attribute
+        // matches (or doesn't match, for `!&`) receive the template values.
         if key.ampersand || key.not_ampersand {
+            if let Some(ref kp) = key.key {
+                if !kp.path.is_empty() {
+                    let attr: Vec<String> = kp
+                        .path
+                        .iter()
+                        .map(|sb| sb.scalar_string().to_string())
+                        .collect();
+                    let value = if let Some(ref p) = key.primary {
+                        p.scalar_string().to_string()
+                    } else if let Some(ref v) = key.value {
+                        v.scalar_box()
+                            .map(|sb| sb.scalar_string().to_string())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    dst.filters.push(Filter {
+                        attr,
+                        value,
+                        negate: key.not_ampersand,
+                    });
+                }
+            }
             return;
         }
 
