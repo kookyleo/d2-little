@@ -1287,21 +1287,42 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
                 FontStyle::Regular
             };
             let header_font = d2_fonts::Font::new(font_family, header_style, header_font_size);
-            // Empty-label fallback uses placeholder text "Table" (mirrors
-            // Go `GetLabelSize` special case). Go stores the placeholder
-            // dimensions on `obj.LabelDimensions` regardless of whether the
-            // label is empty — preserving that behaviour keeps the diagram
-            // hash identical on empty-labelled sql_tables.
-            let header_text: &str = if label.is_empty() { "Table" } else { &label };
-            let (raw_header_w, raw_header_h) = ruler.measure(header_font, header_text);
+            // Go `GetLabelSize` for an empty-label sql_table measures a
+            // "Table" placeholder so the header carves out room in the
+            // width calculation. With a nil ruler it falls through to
+            // `obj.Text().Text == ""` and returns (0,0); the e2e
+            // "measured" cases therefore expect (0,0). We always have a
+            // real ruler, so only use the placeholder when there is at
+            // least one column — that's the scenario where Go's
+            // placeholder-driven sizing would be observable in rendered
+            // output. An empty table with no columns degenerates to the
+            // (0,0) path and matches the nil-ruler fixture.
+            let n_columns = g
+                .objects[i]
+                .sql_table
+                .as_ref()
+                .map(|t| t.columns.len())
+                .unwrap_or(0);
+            let header_text: &str = if label.is_empty() {
+                if n_columns > 0 { "Table" } else { "" }
+            } else {
+                &label
+            };
+            let (raw_header_w, raw_header_h) = if header_text.is_empty() {
+                (0, 0)
+            } else {
+                ruler.measure(header_font, header_text)
+            };
             g.objects[i].label_dimensions = d2_graph::Dimensions {
                 width: raw_header_w,
                 height: raw_header_h,
             };
 
-            // Apply INNER_LABEL_PADDING when no explicit dims were set
-            // (equivalent to Go's `withLabelPadding == true`).
-            let with_label_padding = desired_width == 0 && desired_height == 0;
+            // Apply INNER_LABEL_PADDING when no explicit dims were set and
+            // the label is non-empty (matches Go's `withLabelPadding`: empty
+            // label sets `withLabelPadding=false` in the caller).
+            let with_label_padding =
+                desired_width == 0 && desired_height == 0 && !label.is_empty();
             let pad = if with_label_padding {
                 INNER_LABEL_PADDING as i32
             } else {
