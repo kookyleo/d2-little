@@ -1471,7 +1471,24 @@ impl Compiler {
                         value: ast::ScalarBox::BlockString(s.clone()),
                     }));
                 }
-                _ => {} // Comments, substitutions, imports - skip
+                ast::ArrayNode::Substitution(subst) => {
+                    // Preserve the substitution as a placeholder scalar so the
+                    // later compile_substitutions pass can expand/resolve it
+                    // against the vars stack. Mirrors Go d2ir.compileArray
+                    // which wraps substitutions in a Scalar/UnquotedString.
+                    dst.values.push(Value::Scalar(Scalar {
+                        value: ast::ScalarBox::UnquotedString(ast::UnquotedString {
+                            range: subst.range.clone(),
+                            value: vec![ast::InterpolationBox {
+                                string: None,
+                                string_raw: None,
+                                substitution: Some(subst.clone()),
+                            }],
+                            pattern: None,
+                        }),
+                    }));
+                }
+                _ => {} // Comments, imports - skip
             }
         }
     }
@@ -1594,16 +1611,19 @@ impl Compiler {
             if m.fields[i].primary.is_some() {
                 self.resolve_substitutions(stack, &mut m.fields[i]);
             }
-            // Recurse into composite
-            let should_recurse = m.fields[i].map().is_some();
-            if should_recurse {
-                // Extract the map, process, put back
-                let mut comp = m.fields[i].composite.take();
-                if let Some(Composite::Map(ref mut inner)) = comp {
+            // Recurse into composite. Arrays also need substitution processing
+            // (e.g. `constraint: [PK; ...${base-constraints}]`).
+            let mut comp = m.fields[i].composite.take();
+            match comp.as_mut() {
+                Some(Composite::Map(inner)) => {
                     self.compile_substitutions(inner, stack);
                 }
-                m.fields[i].composite = comp;
+                Some(Composite::Array(inner)) => {
+                    self.compile_substitutions_array(inner, stack);
+                }
+                None => {}
             }
+            m.fields[i].composite = comp;
             i += 1;
         }
 
@@ -1621,6 +1641,119 @@ impl Compiler {
                 m.edges[i].map = emap;
             }
         }
+    }
+
+    /// Resolve substitutions appearing inside an IR array. Mirrors the
+    /// `*Scalar` (array value) branch of Go `d2ir.resolveSubstitutions`:
+    ///
+    ///  * `...${var}` spreads another array in-place.
+    ///  * `${var}` or `"pre ${var} post"` is replaced by the var's primary
+    ///    value (or value of the wrapping string).
+    fn compile_substitutions_array(&mut self, arr: &mut Array, vars_stack: &[&Map]) {
+        let mut i = 0;
+        while i < arr.values.len() {
+            let replacement = match &arr.values[i] {
+                Value::Scalar(scalar) => {
+                    self.resolve_array_scalar_substitution(vars_stack, scalar)
+                }
+                _ => None,
+            };
+            match replacement {
+                Some(ArraySubResult::Spread(values)) => {
+                    // Replace arr.values[i] with the spread values.
+                    let tail = arr.values.split_off(i + 1);
+                    arr.values.pop();
+                    let inserted = values.len();
+                    arr.values.extend(values);
+                    arr.values.extend(tail);
+                    i += inserted;
+                }
+                Some(ArraySubResult::Scalar(s)) => {
+                    arr.values[i] = Value::Scalar(s);
+                    i += 1;
+                }
+                None => {
+                    // Recurse into nested composites.
+                    match &mut arr.values[i] {
+                        Value::Map(m) => self.compile_substitutions(m, vars_stack),
+                        Value::Array(a) => self.compile_substitutions_array(a, vars_stack),
+                        Value::Scalar(_) => {}
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    /// Inspect an array-element Scalar for substitutions. Returns
+    /// `Some(Spread)` when the element is solely a spread `...${var}`
+    /// (caller must splice the resolved values in), `Some(Scalar)` when
+    /// an interpolated scalar substitution resolved to a new scalar
+    /// value, or `None` when no substitution is present.
+    fn resolve_array_scalar_substitution(
+        &mut self,
+        vars_stack: &[&Map],
+        scalar: &Scalar,
+    ) -> Option<ArraySubResult> {
+        let us = match &scalar.value {
+            ast::ScalarBox::UnquotedString(us) => us,
+            _ => return None,
+        };
+        // Sole spread: `...${var}`.
+        if us.value.len() == 1
+            && let Some(sub) = us.value[0].substitution.as_ref()
+            && sub.spread
+        {
+            let resolved = self.resolve_substitution_field(vars_stack, sub)?;
+            let Some(comp) = resolved.composite.as_ref() else {
+                self.errorf(&sub.range, "cannot spread non-composite".to_string());
+                return Some(ArraySubResult::Spread(Vec::new()));
+            };
+            let Composite::Array(resolved_arr) = comp else {
+                self.errorf(
+                    &sub.range,
+                    "cannot spread non-array into array".to_string(),
+                );
+                return Some(ArraySubResult::Spread(Vec::new()));
+            };
+            return Some(ArraySubResult::Spread(resolved_arr.values.clone()));
+        }
+
+        // Any interpolation boxes to resolve?
+        let has_any_sub = us.value.iter().any(|b| b.substitution.is_some());
+        if !has_any_sub {
+            return None;
+        }
+
+        // Exactly one box that is a substitution with a composite value →
+        // replace the scalar with that composite's primary string. Only
+        // scalar-primary replacements are supported here (matches how
+        // constraint/class arrays consume scalar values downstream).
+        if us.value.len() == 1
+            && let Some(sub) = us.value[0].substitution.as_ref()
+        {
+            let resolved = self.resolve_substitution_field(vars_stack, sub)?;
+            if let Some(primary) = resolved.primary.as_ref() {
+                return Some(ArraySubResult::Scalar(Scalar {
+                    value: primary.value.clone(),
+                }));
+            }
+            return None;
+        }
+
+        // Mixed interpolation: build a flat string.
+        let mut flat = String::new();
+        for box_ in &us.value {
+            if let Some(ref s) = box_.string {
+                flat.push_str(s);
+            } else if let Some(ref sub) = box_.substitution {
+                let resolved_val = self.resolve_substitution(vars_stack, sub)?;
+                flat.push_str(&resolved_val);
+            }
+        }
+        Some(ArraySubResult::Scalar(Scalar {
+            value: ast::ScalarBox::UnquotedString(ast::flat_unquoted_string(&flat)),
+        }))
     }
 
     fn expand_field_spread_substitution(
@@ -1901,6 +2034,14 @@ fn replace_substitutions_line(
         out.push(bytes[i] as char);
         i += 1;
     }
+}
+
+/// Result of resolving a substitution inside an array element.
+enum ArraySubResult {
+    /// The element was a solo `...${var}` spread; splice these values in.
+    Spread(Vec<Value>),
+    /// The element was a scalar-valued substitution; replace with this.
+    Scalar(Scalar),
 }
 
 fn extract_single_substitution(value: &ast::ScalarBox) -> Option<&ast::Substitution> {
