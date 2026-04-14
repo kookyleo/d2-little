@@ -945,9 +945,11 @@ impl Compiler {
         }
         if target.grid_rows.is_none() {
             target.grid_rows = template.grid_rows.clone();
+            target.grid_rows_range = template.grid_rows_range.clone();
         }
         if target.grid_columns.is_none() {
             target.grid_columns = template.grid_columns.clone();
+            target.grid_columns_range = template.grid_columns_range.clone();
         }
         if target.grid_gap.is_none() {
             target.grid_gap = template.grid_gap.clone();
@@ -1631,6 +1633,13 @@ impl Compiler {
                     if let Ok(v) = val.parse::<i32>() {
                         if v > 0 {
                             g.objects[obj].grid_rows = Some(ScalarValue { value: val });
+                            // Track source range so grid layout can
+                            // determine row- vs column-directed order.
+                            if let Some(fr) = f.references.first() {
+                                if let Some(ref kp) = fr.key_path {
+                                    g.objects[obj].grid_rows_range = Some(kp.range.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -1640,6 +1649,11 @@ impl Compiler {
                     if let Ok(v) = val.parse::<i32>() {
                         if v > 0 {
                             g.objects[obj].grid_columns = Some(ScalarValue { value: val });
+                            if let Some(fr) = f.references.first() {
+                                if let Some(ref kp) = fr.key_path {
+                                    g.objects[obj].grid_columns_range = Some(kp.range.clone());
+                                }
+                            }
                         }
                     }
                 }

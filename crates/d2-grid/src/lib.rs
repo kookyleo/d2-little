@@ -58,10 +58,19 @@ fn new_grid_diagram(g: &mut Graph, root: ObjId) -> GridDiagram {
     let mut row_directed = false;
 
     if rows != 0 && columns != 0 {
-        // Determine direction from source order.
-        // Simplified: default to row_directed when both are specified.
-        // TODO: track AST ranges on ScalarValue to determine precise order.
-        row_directed = true;
+        // Mirror Go d2grid: if the `grid-rows` key appears before
+        // `grid-columns` in source order, the layout is row-directed.
+        // Otherwise it is column-directed.
+        if let (Some(ref rr), Some(ref cr)) = (
+            obj.grid_rows_range.as_ref(),
+            obj.grid_columns_range.as_ref(),
+        ) {
+            row_directed = rr.start.before(&cr.start);
+        } else {
+            // Fallback: default to row_directed when source ranges are
+            // not available (e.g. programmatic construction in tests).
+            row_directed = true;
+        }
 
         // Expand grid to fit all objects
         let mut capacity = rows * columns;

@@ -580,6 +580,11 @@ pub struct Object {
     pub constraint: Vec<String>,
     pub grid_rows: Option<ScalarValue>,
     pub grid_columns: Option<ScalarValue>,
+    /// Source range of the `grid-rows` key, used to determine direction
+    /// precedence when both `grid-rows` and `grid-columns` are set.
+    pub grid_rows_range: Option<ast::Range>,
+    /// Source range of the `grid-columns` key.
+    pub grid_columns_range: Option<ast::Range>,
     pub grid_gap: Option<ScalarValue>,
     pub vertical_gap: Option<ScalarValue>,
     pub horizontal_gap: Option<ScalarValue>,
@@ -667,6 +672,8 @@ impl Default for Object {
             constraint: Vec::new(),
             grid_rows: None,
             grid_columns: None,
+            grid_rows_range: None,
+            grid_columns_range: None,
             grid_gap: None,
             vertical_gap: None,
             horizontal_gap: None,

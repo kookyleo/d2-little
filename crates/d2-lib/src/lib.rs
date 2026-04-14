@@ -823,6 +823,10 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         // Copy root properties.
         sub.objects[sub.root].grid_rows = g.objects[container_id].grid_rows.clone();
         sub.objects[sub.root].grid_columns = g.objects[container_id].grid_columns.clone();
+        sub.objects[sub.root].grid_rows_range =
+            g.objects[container_id].grid_rows_range.clone();
+        sub.objects[sub.root].grid_columns_range =
+            g.objects[container_id].grid_columns_range.clone();
         sub.objects[sub.root].grid_gap = g.objects[container_id].grid_gap.clone();
         sub.objects[sub.root].vertical_gap = g.objects[container_id].vertical_gap.clone();
         sub.objects[sub.root].horizontal_gap = g.objects[container_id].horizontal_gap.clone();
