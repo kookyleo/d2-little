@@ -767,7 +767,15 @@ impl Compiler {
         match path {
             [seg] => match seg.to_lowercase().as_str() {
                 "shape" => Some(obj.shape.value.clone()),
-                "label" => Some(obj.label.value.clone()),
+                "label" => {
+                    // Go d2ir _ampersandPropertyFilter falls back to the
+                    // field's name when no label primary is set.
+                    if obj.label.value.is_empty() {
+                        Some(obj.id_val().to_owned())
+                    } else {
+                        Some(obj.label.value.clone())
+                    }
+                }
                 "class" => {
                     // `&class: foo` matches objects whose `classes` list
                     // contains `foo`. The legacy single-class form is
