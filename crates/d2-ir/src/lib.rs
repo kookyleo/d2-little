@@ -174,35 +174,110 @@ pub struct EdgeID {
     pub glob: bool,
 }
 
+/// Returns true if `seg` is a glob segment (`*` or `**`).
+fn is_glob_segment(seg: &str) -> bool {
+    seg == "*" || seg == "**"
+}
+
+/// Walk `map` and all descendant maps, appending `(map, edge_idx)` tuples
+/// for every edge whose id matches `eid`. Used by glob edge application
+/// so a pattern like `(** -> **)[*]` also hits edges that common-prefix
+/// stripping placed in nested scopes.
+fn collect_matching_edges_recursive(map: &mut Map, eid: &EdgeID, out: &mut Vec<(*mut Map, usize)>) {
+    let map_ptr = map as *mut Map;
+    for (idx, e) in map.edges.iter().enumerate() {
+        if e.id.matches(eid) {
+            out.push((map_ptr, idx));
+        }
+    }
+    for f in &mut map.fields {
+        if let Some(Composite::Map(ref mut inner)) = f.composite {
+            collect_matching_edges_recursive(inner, eid, out);
+        }
+    }
+}
+
+/// Match a single path segment (glob-aware). When either side is `*` or
+/// `**`, the segment pair is accepted — caller is responsible for path-
+/// length handling. Used by `EdgeID::matches` and the glob-edge application
+/// path.
+fn segment_matches(lhs: &str, rhs: &str) -> bool {
+    if is_glob_segment(lhs) || is_glob_segment(rhs) {
+        return true;
+    }
+    lhs.eq_ignore_ascii_case(rhs)
+}
+
+/// Match two path segment sequences, honouring `*` (single segment) and
+/// `**` (zero or more segments) wildcards on either side. Used by
+/// `EdgeID::matches` for glob-edge lookup.
+fn path_matches(a: &[String], b: &[String]) -> bool {
+    // Fast path: no globs on either side ⇒ classic segment-wise equality.
+    let has_glob_a = a.iter().any(|s| is_glob_segment(s));
+    let has_glob_b = b.iter().any(|s| is_glob_segment(s));
+    if !has_glob_a && !has_glob_b {
+        if a.len() != b.len() {
+            return false;
+        }
+        return a
+            .iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.eq_ignore_ascii_case(y));
+    }
+    // Recursive matcher with `**` = zero-or-more segments.
+    fn rec(a: &[String], b: &[String]) -> bool {
+        if a.is_empty() && b.is_empty() {
+            return true;
+        }
+        if a.is_empty() {
+            return b.iter().all(|s| s == "**");
+        }
+        if b.is_empty() {
+            return a.iter().all(|s| s == "**");
+        }
+        let (ah, at) = (&a[0], &a[1..]);
+        let (bh, bt) = (&b[0], &b[1..]);
+        // `**` on either side: try matching zero or more.
+        if ah == "**" {
+            // Skip the `**` (match zero segments) OR consume one segment of b.
+            return rec(at, b) || rec(a, bt);
+        }
+        if bh == "**" {
+            return rec(a, bt) || rec(at, b);
+        }
+        if !segment_matches(ah, bh) {
+            return false;
+        }
+        rec(at, bt)
+    }
+    rec(a, b)
+}
+
 impl EdgeID {
     /// Check if two EdgeIDs match (for lookup).
+    ///
+    /// When either side contains glob segments (`*` or `**`) they act as
+    /// wildcards: `*` matches any single path segment and `**` matches
+    /// zero or more segments. This mirrors the glob expansion in Go's
+    /// `d2ir` where `(* -> *)[*]` and `(** -> **)[*]` style declarations
+    /// apply to every matching edge.
     pub fn matches(&self, other: &EdgeID) -> bool {
         if self.index.is_some() && other.index.is_some() {
             if self.index != other.index {
                 return false;
             }
         }
-        if self.src_path.len() != other.src_path.len() {
-            return false;
-        }
         if self.src_arrow != other.src_arrow {
-            return false;
-        }
-        for (a, b) in self.src_path.iter().zip(other.src_path.iter()) {
-            if !a.eq_ignore_ascii_case(b) {
-                return false;
-            }
-        }
-        if self.dst_path.len() != other.dst_path.len() {
             return false;
         }
         if self.dst_arrow != other.dst_arrow {
             return false;
         }
-        for (a, b) in self.dst_path.iter().zip(other.dst_path.iter()) {
-            if !a.eq_ignore_ascii_case(b) {
-                return false;
-            }
+        if !path_matches(&self.src_path, &other.src_path) {
+            return false;
+        }
+        if !path_matches(&self.dst_path, &other.dst_path) {
+            return false;
         }
         true
     }
@@ -439,6 +514,17 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+/// A deferred glob-edge application: the `Key` holds a pattern like
+/// `(** -> **)[*].style.X: v`, `scope_map` is the IR map it was declared
+/// in, and `edge_idx` is its index inside `Key.edges`. After the first
+/// compile pass, `apply_pending_globs` re-visits each entry so the
+/// pattern hits edges that were declared textually after it.
+struct PendingGlob {
+    scope_map: *mut Map,
+    key: ast::Key,
+    edge_idx: usize,
+}
+
 struct Compiler {
     errors: Vec<ast::Error>,
     /// Stack of parent Maps. The top of stack is the parent of the current
@@ -449,6 +535,10 @@ struct Compiler {
     /// to enter each nested map). Used to prepend scope prefixes when
     /// placing edges at a higher scope via `_` references.
     scope_name_stack: Vec<String>,
+    /// Glob-edge style declarations that must be re-applied once the whole
+    /// map has been compiled, so they hit edges declared later in source
+    /// order. Mirrors Go's `globContexts` / `lazyGlobBeingApplied` loop.
+    pending_globs: Vec<PendingGlob>,
 }
 
 impl Compiler {
@@ -457,6 +547,7 @@ impl Compiler {
             errors: Vec::new(),
             scope_stack: Vec::new(),
             scope_name_stack: Vec::new(),
+            pending_globs: Vec::new(),
         }
     }
 
@@ -517,6 +608,10 @@ pub fn compile(ast_map: &ast::Map) -> Result<Map, CompileError> {
 
     c.compile_map(&mut m, ast_map);
     c.compile_substitutions(&mut m, &[]);
+    // Re-apply glob edge declarations now that every edge has been created.
+    // In Go this is done implicitly via `lazyGlobBeingApplied`; we mirror
+    // it with an explicit deferred queue.
+    c.apply_pending_globs();
 
     if c.errors.is_empty() {
         Ok(m)
@@ -583,9 +678,7 @@ impl Compiler {
         // Resolve any leading `_` (parent scope references). Matches Go
         // d2ir.Map.EnsureField, which pops up to ParentMap for each leading
         // underscore.
-        let (scope_ptr, rest_path) = unsafe {
-            self.resolve_underscore_scope(dst, &kp.path)
-        };
+        let (scope_ptr, rest_path) = unsafe { self.resolve_underscore_scope(dst, &kp.path) };
         if rest_path.is_empty() {
             return;
         }
@@ -755,9 +848,7 @@ impl Compiler {
         // If there's a common key prefix, ensure those fields first
         if let Some(ref common_kp) = key.key {
             // Resolve leading `_`s to parent scope before walking
-            let (scope_ptr, rest) = unsafe {
-                self.resolve_underscore_scope(dst, &common_kp.path)
-            };
+            let (scope_ptr, rest) = unsafe { self.resolve_underscore_scope(dst, &common_kp.path) };
             let path: Vec<String> = rest
                 .iter()
                 .map(|sb| sb.scalar_string().to_string())
@@ -874,9 +965,7 @@ impl Compiler {
             // `a.f.g -> s.n` at root).
             let count_underscores = |path: &[ast::StringBox]| -> usize {
                 path.iter()
-                    .take_while(|sb| {
-                        sb.scalar_string() == "_" && sb.as_unquoted().is_some()
-                    })
+                    .take_while(|sb| sb.scalar_string() == "_" && sb.as_unquoted().is_some())
                     .count()
             };
             let src_up = ast_edge
@@ -893,10 +982,8 @@ impl Compiler {
             if edge_up > self.scope_stack.len() {
                 // More `_`s than available parents: report error and skip
                 if let Some(first_kp) = ast_edge.src.as_ref().or(ast_edge.dst.as_ref()) {
-                    if let Some(first_underscore) = first_kp
-                        .path
-                        .iter()
-                        .find(|sb| sb.scalar_string() == "_")
+                    if let Some(first_underscore) =
+                        first_kp.path.iter().find(|sb| sb.scalar_string() == "_")
                     {
                         self.errorf(
                             first_underscore.get_range(),
@@ -1000,23 +1087,54 @@ impl Compiler {
                     index: edge_index,
                     glob: key.edge_index.as_ref().map(|ei| ei.glob).unwrap_or(false),
                 };
-                let existing: Vec<usize> = dst
-                    .edges
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, e)| e.id.matches(&eid))
-                    .map(|(idx, _)| idx)
-                    .collect();
 
-                if existing.is_empty() {
+                // Collect matches. For glob edges with `**` in either path
+                // segment, also walk descendant maps — the edge may have
+                // been stored at a nested scope (e.g. common-prefix
+                // stripping placed `Libreria.t1 -> Libreria.t1` in
+                // `Libreria`'s map, not root). Non-glob indexed edges must
+                // exist at the exact scope, so we skip recursion there.
+                let has_double_glob =
+                    src_path.iter().any(|s| s == "**") || dst_path.iter().any(|s| s == "**");
+                let mut match_locations: Vec<(*mut Map, usize)> = Vec::new();
+                if eid.glob && has_double_glob {
+                    collect_matching_edges_recursive(dst, &eid, &mut match_locations);
+                } else {
+                    let dst_ptr = dst as *mut Map;
+                    for (idx, e) in dst.edges.iter().enumerate() {
+                        if e.id.matches(&eid) {
+                            match_locations.push((dst_ptr, idx));
+                        }
+                    }
+                }
+
+                // Record glob edges so they are re-applied after every
+                // edge has been created — otherwise a pattern declared
+                // before its target edges (e.g. `(* -> *)[*].style…` at
+                // the top of a file) would silently do nothing.
+                if eid.glob {
+                    self.pending_globs.push(PendingGlob {
+                        scope_map: edge_scope_ptr,
+                        key: key.clone(),
+                        edge_idx: i,
+                    });
+                }
+
+                if match_locations.is_empty() {
                     if !eid.glob {
                         self.errorf(&ast_edge.range, "indexed edge does not exist".to_string());
                     }
                     continue;
                 }
 
-                for &eidx in &existing {
-                    let e = &mut dst.edges[eidx];
+                for (map_ptr, eidx) in &match_locations {
+                    // SAFETY: we hold an exclusive borrow on `dst`'s tree;
+                    // each location is a distinct (map, edge_idx) pair and
+                    // we only touch one at a time. The compiler cannot track
+                    // this, so we use raw pointers — matching the pattern
+                    // already used by `scope_stack` / `ensure_field_path`.
+                    let m = unsafe { &mut **map_ptr };
+                    let e = &mut m.edges[*eidx];
                     e.references.push(EdgeReference {
                         context: RefContext {
                             key: key.clone(),
@@ -1034,8 +1152,7 @@ impl Compiler {
                 let src_skip = edge_up.saturating_sub(src_up);
                 let dst_skip = edge_up.saturating_sub(dst_up);
                 self.create_edge(
-                    dst, key, i, &src_path, &dst_path, src_arrow, dst_arrow,
-                    src_skip, dst_skip,
+                    dst, key, i, &src_path, &dst_path, src_arrow, dst_arrow, src_skip, dst_skip,
                 );
             }
         }
@@ -1073,13 +1190,19 @@ impl Compiler {
             let src_skip_inner = src_skip.saturating_sub(common_len);
             let dst_skip_inner = dst_skip.saturating_sub(common_len);
             self.create_edge_inner(
-                scope, key, edge_idx, inner_src, inner_dst, src_arrow, dst_arrow,
-                src_skip_inner, dst_skip_inner,
+                scope,
+                key,
+                edge_idx,
+                inner_src,
+                inner_dst,
+                src_arrow,
+                dst_arrow,
+                src_skip_inner,
+                dst_skip_inner,
             );
         } else {
             self.create_edge_inner(
-                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow,
-                src_skip, dst_skip,
+                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow, src_skip, dst_skip,
             );
         }
     }
@@ -1108,15 +1231,11 @@ impl Compiler {
         };
         if !src_path.is_empty() {
             let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
-            self.ensure_field_path_with_refs_skip(
-                dst, src_path, src_kp, Some(key), 0, src_skip,
-            );
+            self.ensure_field_path_with_refs_skip(dst, src_path, src_kp, Some(key), 0, src_skip);
         }
         if !dst_path.is_empty() {
             let dst_kp = ast_edge_for_paths.and_then(|e| e.dst.as_ref());
-            self.ensure_field_path_with_refs_skip(
-                dst, dst_path, dst_kp, Some(key), 0, dst_skip,
-            );
+            self.ensure_field_path_with_refs_skip(dst, dst_path, dst_kp, Some(key), 0, dst_skip);
         }
         let _ = common_offset; // reserved for future common-prefix sharing
 
@@ -1257,6 +1376,88 @@ impl Compiler {
                     }));
                 }
                 _ => {} // Comments, substitutions, imports - skip
+            }
+        }
+    }
+
+    // ----- Deferred glob edge application -----
+
+    /// Re-apply every recorded glob edge pattern against the final map.
+    /// Mirrors Go's `lazyGlobBeingApplied` loop: after the first pass,
+    /// re-walk each `(* -> *)[*].…` / `(** -> **)[*].…` declaration and
+    /// apply its value to every matching edge. Using a raw scope pointer
+    /// is safe here because the root `Map` lives on the caller's stack
+    /// for the duration of `compile()` and we never add new fields during
+    /// this pass (only mutate existing edges' maps/references).
+    fn apply_pending_globs(&mut self) {
+        // Drain so each pending is applied at most once per pass. Globs
+        // themselves do not register new globs in this code path.
+        let pendings = std::mem::take(&mut self.pending_globs);
+        for pg in pendings {
+            let scope_map: &mut Map = unsafe { &mut *pg.scope_map };
+            let ast_edge = match pg.key.edges.get(pg.edge_idx).cloned() {
+                Some(e) => e,
+                None => continue,
+            };
+            let src_path: Vec<String> = ast_edge
+                .src
+                .as_ref()
+                .map(|kp| {
+                    kp.path
+                        .iter()
+                        .map(|sb| sb.scalar_string().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let dst_path: Vec<String> = ast_edge
+                .dst
+                .as_ref()
+                .map(|kp| {
+                    kp.path
+                        .iter()
+                        .map(|sb| sb.scalar_string().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let src_arrow = ast_edge.src_arrow == "<";
+            let dst_arrow = ast_edge.dst_arrow == ">";
+            let edge_index = pg
+                .key
+                .edge_index
+                .as_ref()
+                .and_then(|ei| ei.int.map(|v| v as usize));
+            let eid = EdgeID {
+                src_path: src_path.clone(),
+                dst_path: dst_path.clone(),
+                src_arrow,
+                dst_arrow,
+                index: edge_index,
+                glob: true,
+            };
+            let has_double_glob =
+                src_path.iter().any(|s| s == "**") || dst_path.iter().any(|s| s == "**");
+            let mut locs: Vec<(*mut Map, usize)> = Vec::new();
+            if has_double_glob {
+                collect_matching_edges_recursive(scope_map, &eid, &mut locs);
+            } else {
+                let p = scope_map as *mut Map;
+                for (idx, e) in scope_map.edges.iter().enumerate() {
+                    if e.id.matches(&eid) {
+                        locs.push((p, idx));
+                    }
+                }
+            }
+            for (map_ptr, eidx) in &locs {
+                let m = unsafe { &mut **map_ptr };
+                let e = &mut m.edges[*eidx];
+                e.references.push(EdgeReference {
+                    context: RefContext {
+                        key: pg.key.clone(),
+                        edge_ast: Some(ast_edge.clone()),
+                        scope_map_idx: None,
+                    },
+                });
+                self.apply_edge_value(e, &pg.key, pg.edge_idx);
             }
         }
     }
