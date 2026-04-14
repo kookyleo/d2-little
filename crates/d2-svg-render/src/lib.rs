@@ -1135,17 +1135,28 @@ fn draw_connection(
         ) {
             let label_tl = d2_geo::Point::new(label_tl.x.round(), label_tl.y.round());
 
+            // When connection also has an icon, expand mask to cover both
+            // icon + gap + label, matching Go drawConnection behavior.
+            let mut mask_tl = label_tl.clone();
+            let mut mask_width = connection.text.label_width;
+            if connection.icon.is_some() {
+                mask_width += d2_target::CONNECTION_ICON_LABEL_GAP as i32
+                    + d2_target::DEFAULT_ICON_SIZE;
+                mask_tl.x -= d2_target::CONNECTION_ICON_LABEL_GAP
+                    + d2_target::DEFAULT_ICON_SIZE as f64;
+            }
+
             if label_pos.is_on_edge() {
                 label_mask = make_label_mask(
-                    &label_tl,
-                    connection.text.label_width,
+                    &mask_tl,
+                    mask_width,
                     connection.text.label_height,
                     1.0,
                 );
             } else {
                 label_mask = make_label_mask(
-                    &label_tl,
-                    connection.text.label_width,
+                    &mask_tl,
+                    mask_width,
                     connection.text.label_height,
                     0.75,
                 );
@@ -1348,6 +1359,37 @@ fn draw_connection(
                     text_el.fill = connection.get_font_color().to_owned();
                     buf.push_str(&text_el.render());
                 }
+            }
+        }
+    }
+
+    // Icon-only connections (no label): add a mask rect for the icon so
+    // the connection line doesn't cross through it. Matches Go
+    // drawConnection at d2svg.go line 1083-1096.
+    if connection.text.label.is_empty() && connection.icon.is_some() {
+        let route = &connection.route;
+        if !route.is_empty() {
+            let icon_label_pos = if connection.icon_position.is_empty() {
+                d2_label::Position::InsideMiddleCenter
+            } else {
+                d2_label::Position::from_string(&connection.icon_position)
+            };
+            let r = d2_geo::Route(route.clone());
+            if let Some((pt, _)) = icon_label_pos.get_point_on_route(
+                &r,
+                connection.stroke_width as f64,
+                -1.0,
+                d2_target::DEFAULT_ICON_SIZE as f64,
+                d2_target::DEFAULT_ICON_SIZE as f64,
+            ) {
+                let mask_tl = d2_geo::Point::new(pt.x, pt.y);
+                let opacity = if icon_label_pos.is_on_edge() { 1.0 } else { 0.75 };
+                label_mask = make_label_mask(
+                    &mask_tl,
+                    d2_target::DEFAULT_ICON_SIZE,
+                    d2_target::DEFAULT_ICON_SIZE,
+                    opacity,
+                );
             }
         }
     }
