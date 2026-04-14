@@ -1653,6 +1653,23 @@ fn draw_shape(
         buf.push_str(&clip_path_for_border_radius(diagram_hash, target_shape));
     }
 
+    // Icon clip-path for image shapes with icon.style.border-radius.
+    // Go: d2svg.go ~1620, `applyIconBorderRadius` — clamps radius to min(W,H)/2
+    // and emits a `<clipPath>` with a rounded-corner path, which is then
+    // referenced via `clip-path="url(#...-icon)"` on the `<image>` element.
+    let mut icon_clip_path_id = String::new();
+    if target_shape.icon_border_radius != 0 && target_shape.type_ == d2_target::SHAPE_IMAGE {
+        let clamp = target_shape.width.min(target_shape.height) / 2;
+        let effective_radius = target_shape.icon_border_radius.min(clamp);
+        let svg_id = d2_svg_path::svg_id(&target_shape.id);
+        icon_clip_path_id = format!("{}-{}-icon", diagram_hash, svg_id);
+        buf.push_str(&apply_icon_border_radius(
+            &icon_clip_path_id,
+            target_shape,
+            effective_radius as f64,
+        ));
+    }
+
     let id_encoded = base64_url_encode(&d2_svg_path::escape_text(&target_shape.id));
     let mut classes = vec![id_encoded];
     if target_shape.animated {
@@ -1761,6 +1778,9 @@ fn draw_shape(
             el.fill = fill.clone();
             el.stroke = stroke.clone();
             el.style = style.clone();
+            if !icon_clip_path_id.is_empty() {
+                el.clip_path = icon_clip_path_id.clone();
+            }
             buf.push_str(&el.render());
         }
         d2_target::SHAPE_RECTANGLE
@@ -3076,6 +3096,85 @@ fn clip_path_for_border_radius(diagram_hash: &str, shape: &d2_target::Shape) -> 
         write!(out, "L {:.6} {:.6}", x, y + r).unwrap();
     }
 
+    write!(out, r#"Z {:.6} {:.6}" "#, x, y).unwrap();
+    out.push_str(r#"fill="none" /> </clipPath>"#);
+    out
+}
+
+/// Port of Go `d2svg.go applyIconBorderRadius` — emits a `<clipPath>` whose
+/// rounded-corner path is used to clip `<image>` shapes that have
+/// `icon.style.border-radius` set.
+fn apply_icon_border_radius(
+    clip_path_id: &str,
+    shape: &d2_target::Shape,
+    icon_border_radius: f64,
+) -> String {
+    let x = shape.pos.x as f64;
+    let y = shape.pos.y as f64;
+    let w = shape.width as f64;
+    let h = shape.height as f64;
+    let r = icon_border_radius;
+    let top_x = x + w;
+    let top_y = y;
+
+    let mut out = format!(r#"<clipPath id="{}">"#, clip_path_id);
+    // Top-left corner — Go formats `box.TopLeft.X, box.TopLeft.Y+r` twice,
+    // matching the existing `clipPathForBorderRadius` quirk.
+    write!(
+        out,
+        r#"<path d="M {:.6} {:.6} L {:.6} {:.6} S {:.6} {:.6} {:.6} {:.6} "#,
+        x,
+        y + r,
+        x,
+        y + r,
+        x,
+        y,
+        x + r,
+        y,
+    )
+    .unwrap();
+    // Top-right corner — again duplicated, matching Go.
+    write!(
+        out,
+        "L {:.6} {:.6} L {:.6} {:.6} ",
+        x + w - r,
+        y,
+        top_x - r,
+        top_y,
+    )
+    .unwrap();
+    write!(
+        out,
+        "S {:.6} {:.6} {:.6} {:.6} ",
+        top_x,
+        top_y,
+        top_x,
+        top_y + r,
+    )
+    .unwrap();
+    write!(out, "L {:.6} {:.6} ", top_x, top_y + h - r).unwrap();
+    // Bottom-right corner uses Go's `% f` flag on the second value, prefixing
+    // non-negative numbers with a space and producing a double-space after `S`.
+    let v = top_y + h;
+    let space_v = if v >= 0.0 {
+        format!(" {:.6}", v)
+    } else {
+        format!("{:.6}", v)
+    };
+    write!(
+        out,
+        "S {:.6} {} {:.6} {:.6} ",
+        top_x,
+        space_v,
+        top_x - r,
+        top_y + h,
+    )
+    .unwrap();
+    write!(out, "L {:.6} {:.6} ", x + r, y + h).unwrap();
+    // Bottom-left corner — Go omits the trailing space here, so the next
+    // segment's `L` runs right up against the preceding coordinate.
+    write!(out, "S {:.6} {:.6} {:.6} {:.6}", x, y + h, x, y + h - r).unwrap();
+    write!(out, "L {:.6} {:.6}", x, y + r).unwrap();
     write!(out, r#"Z {:.6} {:.6}" "#, x, y).unwrap();
     out.push_str(r#"fill="none" /> </clipPath>"#);
     out
