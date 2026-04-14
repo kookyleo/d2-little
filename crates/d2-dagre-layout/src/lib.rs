@@ -74,6 +74,10 @@ impl ObjectMapper {
         &self.obj_to_id[&obj_id]
     }
 
+    fn dagre_id(&self, obj_id: ObjId) -> Option<&str> {
+        self.obj_to_id.get(&obj_id).map(String::as_str)
+    }
+
     #[allow(dead_code)]
     fn to_obj_id(&self, dagre_id: &str) -> ObjId {
         self.id_to_obj[dagre_id]
@@ -330,7 +334,8 @@ fn position_labels_icons(obj: &mut d2_graph::Object) {
 #[derive(Clone)]
 struct ConstantNearSubgraph {
     root_orig: ObjId,
-    edge_indices: Vec<usize>,
+    internal_edge_indices: Vec<usize>,
+    external_edge_indices: Vec<usize>,
     orig_to_temp: HashMap<ObjId, ObjId>,
     temp: Graph,
 }
@@ -376,15 +381,6 @@ fn build_constant_near_subgraphs(
         let mut subtree = HashSet::new();
         collect_subtree_ids(g, root_obj, &mut subtree);
 
-        let has_external_edges = g.edges.iter().any(|edge| {
-            let src_in = subtree.contains(&edge.src);
-            let dst_in = subtree.contains(&edge.dst);
-            src_in ^ dst_in
-        });
-        if has_external_edges {
-            continue;
-        }
-
         let mut temp = Graph::new();
         temp.theme = g.theme.clone();
 
@@ -408,23 +404,29 @@ fn build_constant_near_subgraphs(
             orig_to_temp.insert(*orig_id, temp_id);
         }
 
-        let mut edge_indices = Vec::new();
+        let mut internal_edge_indices = Vec::new();
+        let mut external_edge_indices = Vec::new();
         for (edge_idx, edge) in g.edges.iter().enumerate() {
-            if !(subtree.contains(&edge.src) && subtree.contains(&edge.dst)) {
-                continue;
+            let src_in = subtree.contains(&edge.src);
+            let dst_in = subtree.contains(&edge.dst);
+            if src_in && dst_in {
+                let mut cloned = edge.clone();
+                cloned.src = orig_to_temp[&edge.src];
+                cloned.dst = orig_to_temp[&edge.dst];
+                temp.add_edge(cloned);
+                internal_edge_indices.push(edge_idx);
+            } else if src_in || dst_in {
+                external_edge_indices.push(edge_idx);
             }
-            let mut cloned = edge.clone();
-            cloned.src = orig_to_temp[&edge.src];
-            cloned.dst = orig_to_temp[&edge.dst];
-            temp.add_edge(cloned);
-            edge_indices.push(edge_idx);
         }
 
         excluded_objects.extend(subtree.iter().copied());
-        excluded_edges.extend(edge_indices.iter().copied());
+        excluded_edges.extend(internal_edge_indices.iter().copied());
+        excluded_edges.extend(external_edge_indices.iter().copied());
         subgraphs.push(ConstantNearSubgraph {
             root_orig: root_obj,
-            edge_indices,
+            internal_edge_indices,
+            external_edge_indices,
             orig_to_temp,
             temp,
         });
@@ -643,7 +645,7 @@ fn apply_constant_near_subgraphs(
             }
 
             for (edge_idx, temp_edge) in subgraph
-                .edge_indices
+                .internal_edge_indices
                 .iter()
                 .copied()
                 .zip(subgraph.temp.edges.iter())
@@ -657,7 +659,57 @@ fn apply_constant_near_subgraphs(
         }
     }
 
+    let mut routed_external_edges = HashSet::new();
+    for subgraph in subgraphs.iter() {
+        for &edge_idx in &subgraph.external_edge_indices {
+            if !routed_external_edges.insert(edge_idx) {
+                continue;
+            }
+            route_constant_near_external_edge(g, edge_idx);
+        }
+    }
+
     Ok(())
+}
+
+fn route_constant_near_external_edge(g: &mut Graph, edge_idx: usize) {
+    if edge_idx >= g.edges.len() {
+        return;
+    }
+
+    let src = g.objects[g.edges[edge_idx].src].center();
+    let dst = g.objects[g.edges[edge_idx].dst].center();
+    let mut points = vec![src, dst];
+
+    let (new_start, new_end) = {
+        let edge = &g.edges[edge_idx];
+        edge.trace_to_shape(&points, 0, 1, g)
+    };
+    points = points[new_start..=new_end].to_vec();
+
+    let src_id = g.edges[edge_idx].src;
+    let dst_id = g.edges[edge_idx].dst;
+
+    if points.len() >= 2 {
+        let last = points.len() - 1;
+        let src_box = g.objects[src_id].box_;
+        let dst_box = g.objects[dst_id].box_;
+        let starting_segment = Segment::new(points[1], points[0]);
+        let ending_segment = Segment::new(points[last - 1], points[last]);
+
+        if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
+            points[0] = p;
+        }
+        if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
+            points[last] = p;
+        }
+    }
+
+    g.edges[edge_idx].route = points;
+    g.edges[edge_idx].is_curve = false;
+    if !g.edges[edge_idx].label.value.is_empty() {
+        g.edges[edge_idx].label_position = Some("INSIDE_MIDDLE_CENTER".to_owned());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -774,13 +826,17 @@ pub fn layout_with_exclude(
 
     // Set parents for compound graph
     for &obj_id in &obj_ids {
-        let parent = g.objects[obj_id].parent;
-        if let Some(parent_id) = parent {
-            if parent_id != g.root {
-                let child_dagre = mapper.to_dagre_id(obj_id).to_owned();
-                let parent_dagre = mapper.to_dagre_id(parent_id).to_owned();
-                dagre_g.set_parent(&child_dagre, Some(&parent_dagre));
+        let mut parent = g.objects[obj_id].parent;
+        while let Some(parent_id) = parent {
+            if parent_id == g.root {
+                break;
             }
+            if let Some(parent_dagre) = mapper.dagre_id(parent_id) {
+                let child_dagre = mapper.to_dagre_id(obj_id).to_owned();
+                dagre_g.set_parent(&child_dagre, Some(&parent_dagre));
+                break;
+            }
+            parent = g.objects[parent_id].parent;
         }
     }
 
@@ -794,8 +850,11 @@ pub fn layout_with_exclude(
             let dst = g.edges[ei].dst;
             !excluded_objects.contains(&src) && !excluded_objects.contains(&dst)
         })
-        .map(|ei| {
+        .filter_map(|ei| {
             let (src, dst) = get_edge_endpoints(g, ei);
+            if mapper.dagre_id(src).is_none() || mapper.dagre_id(dst).is_none() {
+                return None;
+            }
             let edge = &g.edges[ei];
             let mut width = edge.label_dimensions.width;
             let mut height = edge.label_dimensions.height;
@@ -817,7 +876,7 @@ pub fn layout_with_exclude(
             }
 
             let abs_id = edge.abs_id.clone();
-            (ei, src, dst, width, height, abs_id)
+            Some((ei, src, dst, width, height, abs_id))
         })
         .collect();
 
@@ -1006,7 +1065,6 @@ pub fn layout_with_exclude(
         // border tracing is still TODO — for rectangles the box
         // intersection is what Go's `TraceToShapeBorder` returns.
         if points.len() >= 2 {
-            let last = points.len() - 1;
             // `shape.TraceToShapeBorder` in Go rounds the final point to
             // the nearest integer for any non-rectangular shape (after
             // tracing the true perimeter). We don't yet implement the
@@ -1017,14 +1075,24 @@ pub fn layout_with_exclude(
             let src_is_rect = g.objects[src_id].is_rectangular_shape();
             let dst_is_rect = g.objects[dst_id].is_rectangular_shape();
 
+            // Go `Edge.TraceToShape` operates on `(startIndex, endIndex)`
+            // into `points` and may advance / retreat them when merging
+            // short segments or walking past outside-label points. We
+            // mirror that with plain indices and truncate the vec at the
+            // end so downstream curve generation sees only the live
+            // range.
+            let mut start_idx: usize = 0;
+            let mut end_idx: usize = points.len() - 1;
+
             // Source side.
-            let starting_segment = Segment::new(points[1], points[0]);
-            let src_label_hit = outside_label_box(&g.objects[src_id]).and_then(|(b, pos)| {
+            let src_label_box = outside_label_box(&g.objects[src_id]);
+            let starting_segment = Segment::new(points[start_idx + 1], points[start_idx]);
+            let src_label_hit = src_label_box.as_ref().and_then(|(b, pos)| {
                 let ints = b.intersections(&starting_segment);
                 if ints.is_empty() {
                     None
                 } else {
-                    Some(find_outer_intersection(pos, &ints))
+                    Some(find_outer_intersection(*pos, &ints))
                 }
             });
             // Track whether a 3d/multiple modifier shift was applied so the
@@ -1033,7 +1101,18 @@ pub fn layout_with_exclude(
             // `d2dagrelayout.Layout`).
             let mut src_trace_box: Option<d2_geo::Box2D> = None;
             if let Some(p) = src_label_hit {
-                points[0] = p;
+                points[start_idx] = p;
+                // Merge a too-short starting segment with the next one
+                // (mirror Go lines 449-452): if the freshly clipped
+                // segment is shorter than `MIN_SEGMENT_LEN`, collapse
+                // `points[start_idx+1]` onto the endpoint and advance.
+                if start_idx + 1 < end_idx {
+                    let seg = Segment::new(points[start_idx + 1], points[start_idx]);
+                    if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                        points[start_idx + 1] = points[start_idx];
+                        start_idx += 1;
+                    }
+                }
             } else {
                 // Mirror Go `Edge.TraceToShape`'s 3D/multiple handling:
                 // when the segment start sits inside the visual offset
@@ -1042,8 +1121,8 @@ pub fn layout_with_exclude(
                 // lands on the offset shape border.
                 let (dx, dy) = g.objects[src_id].get_modifier_element_adjustments();
                 let trace_box = if (dx != 0.0 || dy != 0.0)
-                    && points[0].x > src_box.top_left.x + dx
-                    && points[0].y < src_box.top_left.y + src_box.height - dy
+                    && points[start_idx].x > src_box.top_left.x + dx
+                    && points[start_idx].y < src_box.top_left.y + src_box.height - dy
                 {
                     let mut b = src_box;
                     b.top_left.x += dx;
@@ -1055,7 +1134,14 @@ pub fn layout_with_exclude(
                 };
                 let ints = trace_box.intersections(&starting_segment);
                 if let Some(p) = ints.first() {
-                    points[0] = *p;
+                    points[start_idx] = *p;
+                    if start_idx + 1 < end_idx {
+                        let seg = Segment::new(points[start_idx + 1], points[start_idx]);
+                        if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                            points[start_idx + 1] = points[start_idx];
+                            start_idx += 1;
+                        }
+                    }
                 }
             }
             if src_label_hit.is_none() && !src_is_rect {
@@ -1068,30 +1154,56 @@ pub fn layout_with_exclude(
                 let traced = trace_to_shape_border_with_box(
                     &g.objects[src_id],
                     bbox,
-                    points[0],
-                    points[1],
+                    points[start_idx],
+                    points[start_idx + 1],
                 );
-                points[0] = traced;
+                points[start_idx] = traced;
             }
 
             // Destination side.
-            let ending_segment = Segment::new(points[last - 1], points[last]);
-            let dst_label_hit = outside_label_box(&g.objects[dst_id]).and_then(|(b, pos)| {
+            let dst_label_box = outside_label_box(&g.objects[dst_id]);
+            // Walk back `end_idx` while the segment START (the pre-endpoint
+            // point on the incoming side) still sits inside the outside-
+            // label box. This mirrors Go d2graph/layout.go lines 516-520:
+            // when dagre emits an intermediate kink that actually lives
+            // inside the label rectangle, we drop it so the final segment
+            // starts from a point that is outside the label, which in turn
+            // lets `labelBox.Intersections` find a proper clip point.
+            if let Some((label_box, _)) = dst_label_box.as_ref() {
+                while end_idx - 1 > start_idx
+                    && label_box.contains(&points[end_idx - 1])
+                {
+                    end_idx -= 1;
+                }
+            }
+            let ending_segment = Segment::new(points[end_idx - 1], points[end_idx]);
+            let dst_label_hit = dst_label_box.as_ref().and_then(|(b, pos)| {
                 let ints = b.intersections(&ending_segment);
                 if ints.is_empty() {
                     None
                 } else {
-                    Some(find_outer_intersection(pos, &ints))
+                    Some(find_outer_intersection(*pos, &ints))
                 }
             });
             let mut dst_trace_box: Option<d2_geo::Box2D> = None;
             if let Some(p) = dst_label_hit {
-                points[last] = p;
+                points[end_idx] = p;
+                // Merge a too-short ending segment with the previous one
+                // (mirror Go lines 531-534): if the freshly clipped
+                // segment is shorter than `MIN_SEGMENT_LEN`, collapse
+                // `points[end_idx-1]` onto the endpoint and retreat.
+                if end_idx - 1 > start_idx {
+                    let seg = Segment::new(points[end_idx - 1], points[end_idx]);
+                    if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                        points[end_idx - 1] = points[end_idx];
+                        end_idx -= 1;
+                    }
+                }
             } else {
                 let (dx, dy) = g.objects[dst_id].get_modifier_element_adjustments();
                 let trace_box = if (dx != 0.0 || dy != 0.0)
-                    && points[last].x > dst_box.top_left.x + dx
-                    && points[last].y < dst_box.top_left.y + dst_box.height - dy
+                    && points[end_idx].x > dst_box.top_left.x + dx
+                    && points[end_idx].y < dst_box.top_left.y + dst_box.height - dy
                 {
                     let mut b = dst_box;
                     b.top_left.x += dx;
@@ -1103,7 +1215,14 @@ pub fn layout_with_exclude(
                 };
                 let ints = trace_box.intersections(&ending_segment);
                 if let Some(p) = ints.first() {
-                    points[last] = *p;
+                    points[end_idx] = *p;
+                    if end_idx - 1 > start_idx {
+                        let seg = Segment::new(points[end_idx - 1], points[end_idx]);
+                        if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                            points[end_idx - 1] = points[end_idx];
+                            end_idx -= 1;
+                        }
+                    }
                 }
             }
             if dst_label_hit.is_none() && !dst_is_rect {
@@ -1116,10 +1235,19 @@ pub fn layout_with_exclude(
                 let traced = trace_to_shape_border_with_box(
                     &g.objects[dst_id],
                     bbox,
-                    points[last],
-                    points[last - 1],
+                    points[end_idx],
+                    points[end_idx - 1],
                 );
-                points[last] = traced;
+                points[end_idx] = traced;
+            }
+
+            // Prune any points outside the live `[start_idx, end_idx]`
+            // range so curve generation only sees the merged route.
+            if end_idx + 1 < points.len() {
+                points.truncate(end_idx + 1);
+            }
+            if start_idx > 0 {
+                points.drain(0..start_idx);
             }
         }
         // Build curved path from route points. Mirror Go d2dagrelayout
@@ -2809,5 +2937,66 @@ mod tests {
             g.edges[0].label_position.as_deref(),
             Some("INSIDE_MIDDLE_CENTER")
         );
+    }
+
+    #[test]
+    fn build_constant_near_subgraph_keeps_external_edges_out_of_main_layout() {
+        let mut g = Graph::new();
+        let a = g.add_object(Object {
+            id: "a".into(),
+            abs_id: "a".into(),
+            width: 53.0,
+            height: 66.0,
+            ..Default::default()
+        });
+        let b = g.add_object(Object {
+            id: "b".into(),
+            abs_id: "b".into(),
+            width: 53.0,
+            height: 66.0,
+            near_key: Some("center-left".into()),
+            ..Default::default()
+        });
+        g.add_edge(Edge {
+            abs_id: "(b -> a)[0]".into(),
+            src: b,
+            dst: a,
+            ..Default::default()
+        });
+
+        let (subgraphs, excluded_objects, excluded_edges) = build_constant_near_subgraphs(&g);
+        assert_eq!(subgraphs.len(), 1);
+        assert!(excluded_objects.contains(&b));
+        assert!(excluded_edges.contains(&0));
+        assert_eq!(subgraphs[0].external_edge_indices, vec![0]);
+    }
+
+    #[test]
+    fn layout_constant_near_with_external_edge_places_object_left_of_main_graph() {
+        let mut g = Graph::new();
+        let a = g.add_object(Object {
+            id: "a".into(),
+            abs_id: "a".into(),
+            width: 53.0,
+            height: 66.0,
+            ..Default::default()
+        });
+        let b = g.add_object(Object {
+            id: "b".into(),
+            abs_id: "b".into(),
+            width: 53.0,
+            height: 66.0,
+            near_key: Some("center-left".into()),
+            ..Default::default()
+        });
+        g.add_edge(Edge {
+            abs_id: "(b -> a)[0]".into(),
+            src: b,
+            dst: a,
+            ..Default::default()
+        });
+
+        layout(&mut g, None).expect("layout");
+        assert!(g.objects[b].top_left.x < g.objects[a].top_left.x);
     }
 }
