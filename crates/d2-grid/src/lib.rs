@@ -259,7 +259,15 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
             g.objects[root].width,
             g.objects[root].height,
         );
-        let s = d2_shape::Shape::new(shape_type, bbox);
+        let mut s = d2_shape::Shape::new(shape_type, bbox);
+        // Mirror Go's `obj.ToShape()` — propagate ContentAspectRatio so the
+        // cloud's inner box uses the actor's aspect ratio (otherwise children
+        // are placed using the bbox aspect, shifting them by tens of pixels).
+        if shape_type == d2_shape::CLOUD_TYPE {
+            if let Some(ar) = g.objects[root].content_aspect_ratio {
+                s.set_inner_box_aspect_ratio(ar);
+            }
+        }
         let inner_tl = s.get_inside_placement(total_w, total_h, 0.0, 0.0);
         let inner_box = s.get_inner_box();
         let resize_dx = if inner_box.width > total_w {

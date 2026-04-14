@@ -1352,6 +1352,18 @@ impl Object {
             self.width = side;
             self.height = side;
         }
+
+        // Mirror Go: cloud shapes record the content aspect ratio so
+        // downstream callers (grid layout, renderer) place children using
+        // the original content's aspect, not the bbox aspect.
+        if shape_type == d2_shape::CLOUD_TYPE {
+            let inner = d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h);
+            if let Some(inner) = inner {
+                if inner.height > 0.0 {
+                    self.content_aspect_ratio = Some(inner.width / inner.height);
+                }
+            }
+        }
     }
 }
 
