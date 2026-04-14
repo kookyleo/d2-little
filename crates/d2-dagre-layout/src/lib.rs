@@ -814,11 +814,14 @@ pub fn layout_with_exclude(
     for &obj_id in &obj_ids {
         let obj = &g.objects[obj_id];
         let dagre_id = mapper.to_dagre_id(obj_id).to_owned();
+        // Match Go's `int(obj.Width)` truncation when feeding into dagre.
+        // Without this, fractional widths from sequence-diagram containers
+        // pass through dagre and emerge ceil'd one pixel wider than Go.
         dagre_g.set_node(
             dagre_id,
             Some(dagre::NodeLabel {
-                width: obj.width,
-                height: obj.height,
+                width: (obj.width as i64) as f64,
+                height: (obj.height as i64) as f64,
                 ..Default::default()
             }),
         );
