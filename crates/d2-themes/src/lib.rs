@@ -1358,7 +1358,8 @@ mod tests {
 
     #[test]
     fn themable_element_with_theme_stroke() {
-        let mut el = ThemableElement::new("rect", Some(&catalog::NEUTRAL_DEFAULT));
+        let resolved = ResolvedTheme::from_theme(&catalog::NEUTRAL_DEFAULT, None);
+        let mut el = ThemableElement::new("rect", Some(&resolved));
         el.stroke = "N1".to_owned();
         el.x = Some(10.0);
         el.y = Some(20.0);

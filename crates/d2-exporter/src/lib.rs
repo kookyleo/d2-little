@@ -64,7 +64,9 @@ pub fn export(
         .collect();
 
     // Convert edges to connections (skip edges with no route, e.g. unresolved group edges)
-    diagram.connections = g.edges.iter()
+    diagram.connections = g
+        .edges
+        .iter()
         .filter(|edge| edge.route.len() >= 2)
         .map(|edge| to_connection(edge, g))
         .collect();

@@ -19,3 +19,4 @@ d2-textmeasure = { path = "../d2-textmeasure" }
 d2-ast = { path = "../d2-ast" }
 d2-chroma = { path = "../d2-chroma" }
 d2-latex = { path = "../d2-latex" }
+d2-sketch = { path = "../d2-sketch" }

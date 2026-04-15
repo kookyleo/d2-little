@@ -28,7 +28,6 @@ const SKIP_LIMIT: usize = 10_000_000;
 // ---------------------------------------------------------------------------
 
 struct GridDiagram {
-    root: ObjId,
     objects: Vec<ObjId>,
     edges: Vec<usize>, // edge indices into Graph.edges
     rows: usize,
@@ -120,7 +119,6 @@ fn new_grid_diagram(g: &mut Graph, root: ObjId) -> GridDiagram {
     }
 
     GridDiagram {
-        root,
         objects: children,
         edges: Vec::new(),
         rows,
@@ -152,7 +150,7 @@ impl GridDiagram {
 /// Mirrors Go `d2grid.Layout`.
 pub fn layout(g: &mut Graph) -> Result<(), String> {
     let root = g.root;
-    let gd = layout_grid(g, root)?;
+    let mut gd = layout_grid(g, root)?;
 
     // Set default label/icon positions on root
     if g.objects[root].has_label() && g.objects[root].label_position.is_none() {
@@ -296,7 +294,15 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
         }
     }
 
-    // Simple edge routing between grid children
+    // Simple edge routing between grid children. Mirrors Go `d2grid.Layout`
+    // which registers every edge whose endpoint parent is a descendant of the
+    // grid root in `gd.edges`, so the final `gd.shift` (below) — applied when
+    // this grid is nested (root_level > 0) and moves the whole grid off (0,0)
+    // by `(top_left + h_pad, top_left + v_pad)` — carries the edge routes
+    // along with the cells. Without this, routes for edges whose src/dst sit
+    // inside a grid cell (e.g. a 3-row inner-inner grid's `1 -> 2 -> 3`) keep
+    // their pre-shift coordinates and end up `(-h_pad, -v_pad)` off their
+    // shape endpoints after the outer layout translates the grid container.
     let edge_indices: Vec<usize> = (0..g.edges.len()).collect();
     let mut grid_edge_indices = Vec::new();
     for ei in edge_indices {
@@ -316,22 +322,42 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
             continue;
         }
         grid_edge_indices.push(ei);
+        gd.edges.push(ei);
 
         // Only do simple routing for direct children of the grid
         if src_parent != Some(root) || dst_parent != Some(root) {
             continue;
         }
 
-        let src_center = g.objects[g.edges[ei].src].center();
-        let dst_center = g.objects[g.edges[ei].dst].center();
-        g.edges[ei].route = vec![src_center, dst_center];
+        let src_id = g.edges[ei].src;
+        let dst_id = g.edges[ei].dst;
+        let src_center = g.objects[src_id].center();
+        let dst_center = g.objects[dst_id].center();
+        let mut points = vec![src_center, dst_center];
 
-        // Trace to shape boundaries
-        let route_clone = g.edges[ei].route.clone();
-        let (new_start, new_end) = g.edges[ei].trace_to_shape(&route_clone, 0, 1, g);
-        if new_start > 0 || new_end < 1 {
-            g.edges[ei].route = route_clone[new_start..=new_end].to_vec();
+        // Trim endpoints to shape boundaries. Mirrors Go
+        // `Edge.TraceToShape(points, 0, 1)` which mutates `points` in place.
+        // For grid children the boxes are rectangles; we intersect the
+        // center-to-center segment with each box and snap to the border.
+        let src_box = d2_geo::Box2D::new(
+            g.objects[src_id].top_left,
+            g.objects[src_id].width,
+            g.objects[src_id].height,
+        );
+        let dst_box = d2_geo::Box2D::new(
+            g.objects[dst_id].top_left,
+            g.objects[dst_id].width,
+            g.objects[dst_id].height,
+        );
+        let starting_segment = d2_geo::Segment::new(points[1], points[0]);
+        if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
+            points[0] = p;
         }
+        let ending_segment = d2_geo::Segment::new(points[0], points[1]);
+        if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
+            points[1] = p;
+        }
+        g.edges[ei].route = points;
 
         if !g.edges[ei].label.value.is_empty() {
             g.edges[ei].label_position = Some("INSIDE_MIDDLE_CENTER".to_owned());
@@ -425,7 +451,7 @@ fn layout_grid(g: &mut Graph, root: ObjId) -> Result<GridDiagram, String> {
     }
 
     // Revert outside label adjustments
-    revert_outside_labels(g, &gd.objects, &margins);
+    revert_outside_labels(g, &margins);
 
     Ok(gd)
 }
@@ -999,7 +1025,7 @@ fn size_for_outside_labels(g: &mut Graph, objects: &[ObjId]) -> Vec<(ObjId, Spac
     margins
 }
 
-fn revert_outside_labels(g: &mut Graph, objects: &[ObjId], margins: &[(ObjId, Spacing)]) {
+fn revert_outside_labels(g: &mut Graph, margins: &[(ObjId, Spacing)]) {
     for &(oid, m) in margins {
         let dy = m.top + m.bottom;
         let dx = m.left + m.right;

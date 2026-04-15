@@ -23,31 +23,90 @@ impl Lexer for PythonLexer {
 fn build_python_lexer() -> StateMachineLexer {
     // Note: "def" and "class" are handled by ByGroups rules to capture the
     // following name as NameFunction, so they are NOT in this keyword list.
-    let keywords = words("", r"\b", &[
-        "assert", "async", "await", "break", "continue",
-        "del", "elif", "else", "except", "finally", "for", "global", "if",
-        "lambda", "pass", "raise", "return", "try", "while", "with", "yield",
-    ]);
+    let keywords = words(
+        "",
+        r"\b",
+        &[
+            "assert", "async", "await", "break", "continue", "del", "elif", "else", "except",
+            "finally", "for", "global", "if", "lambda", "pass", "raise", "return", "try", "while",
+            "with", "yield",
+        ],
+    );
 
-    let keyword_constants = words("", r"\b", &[
-        "True", "False", "None",
-    ]);
+    let keyword_constants = words("", r"\b", &["True", "False", "None"]);
 
-    let keyword_namespace = words("", r"\b", &[
-        "import", "from",
-    ]);
+    let keyword_namespace = words("", r"\b", &["import", "from"]);
 
     let builtins = &[
-        "abs", "all", "any", "ascii", "bin", "bool", "breakpoint", "bytearray",
-        "bytes", "callable", "chr", "classmethod", "compile", "complex",
-        "delattr", "dict", "dir", "divmod", "enumerate", "eval", "exec",
-        "filter", "float", "format", "frozenset", "getattr", "globals",
-        "hasattr", "hash", "help", "hex", "id", "input", "int",
-        "isinstance", "issubclass", "iter", "len", "list", "locals", "map",
-        "max", "memoryview", "min", "next", "object", "oct", "open", "ord",
-        "pow", "print", "property", "range", "repr", "reversed", "round",
-        "set", "setattr", "slice", "sorted", "staticmethod", "str", "sum",
-        "super", "tuple", "type", "vars", "zip", "__import__",
+        "abs",
+        "all",
+        "any",
+        "ascii",
+        "bin",
+        "bool",
+        "breakpoint",
+        "bytearray",
+        "bytes",
+        "callable",
+        "chr",
+        "classmethod",
+        "compile",
+        "complex",
+        "delattr",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "eval",
+        "exec",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "getattr",
+        "globals",
+        "hasattr",
+        "hash",
+        "help",
+        "hex",
+        "id",
+        "input",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "locals",
+        "map",
+        "max",
+        "memoryview",
+        "min",
+        "next",
+        "object",
+        "oct",
+        "open",
+        "ord",
+        "pow",
+        "print",
+        "property",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "staticmethod",
+        "str",
+        "sum",
+        "super",
+        "tuple",
+        "type",
+        "vars",
+        "zip",
+        "__import__",
     ];
     let builtin_words = words("", r"\b", builtins);
 

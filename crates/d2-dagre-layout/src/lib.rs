@@ -383,6 +383,12 @@ fn build_constant_near_subgraphs(
 
         let mut temp = Graph::new();
         temp.theme = g.theme.clone();
+        // Mirror Go ExtractSubgraph (line 379): nestedGraph.Root.Attributes
+        // = container.Attributes — the constant-near subgraph's virtual
+        // root inherits the near container's attributes (most notably
+        // Direction) so a `direction: right` on the near container is seen
+        // by dagre layout when it reads `root_obj().direction`.
+        temp.objects[temp.root].direction = g.objects[root_obj].direction.clone();
 
         let mut subtree_ids: Vec<ObjId> = subtree.iter().copied().collect();
         subtree_ids.sort_unstable();
@@ -456,6 +462,15 @@ fn constant_near_bounding_box(g: &Graph, placed_constant_nears: &HashSet<ObjId>)
     let mut x2 = f64::NEG_INFINITY;
     let mut y2 = f64::NEG_INFINITY;
 
+    // Mirrors Go d2near.boundingBox: it iterates every object in the graph
+    // and uses each object's absolute TopLeft. In d2-little the dagre
+    // pipeline has not yet shifted grid/sequence-diagram descendants into
+    // their container's coordinate frame at this point (that happens in
+    // d2-lib AFTER `layout_with_exclude` returns), so descendants' top_left
+    // is still cell-local. Including those would corrupt the bbox. Restrict
+    // to top-level (root-children) objects: their boxes already encompass
+    // all descendants in absolute coords, so the resulting bbox matches Go.
+    let top_level: HashSet<ObjId> = g.objects[g.root].children_array.iter().copied().collect();
     for obj_id in 0..g.objects.len() {
         if obj_id == g.root {
             continue;
@@ -479,6 +494,11 @@ fn constant_near_bounding_box(g: &Graph, placed_constant_nears: &HashSet<ObjId>)
             continue;
         }
         if constant_near_root(g, obj_id).is_some() {
+            continue;
+        }
+        if !top_level.contains(&obj_id) {
+            // Descendants' positions are not yet absolute; their parent's
+            // box (counted above) already bounds them.
             continue;
         }
 
@@ -589,7 +609,7 @@ fn apply_constant_near_subgraphs(
     g: &mut Graph,
     subgraphs: &mut [ConstantNearSubgraph],
     opts: &ConfigurableOpts,
-) -> Result<(), String> {
+) -> Result<Vec<usize>, String> {
     let ordered_groups = [
         ["top-center", "bottom-center"].as_slice(),
         ["center-left", "center-right"].as_slice(),
@@ -660,16 +680,59 @@ fn apply_constant_near_subgraphs(
     }
 
     let mut routed_external_edges = HashSet::new();
+    let mut deferred_external_edges: Vec<usize> = Vec::new();
     for subgraph in subgraphs.iter() {
         for &edge_idx in &subgraph.external_edge_indices {
             if !routed_external_edges.insert(edge_idx) {
                 continue;
             }
-            route_constant_near_external_edge(g, edge_idx);
+            // External edges that touch a grid descendant whose absolute
+            // position depends on the post-dagre grid shift (performed by
+            // the caller in d2-lib) cannot be safely routed here; defer
+            // them and let the caller invoke `route_deferred_constant_near_external_edges`
+            // once the descendants are at their final absolute positions.
+            // For non-grid-descendant edges we route in-place as before.
+            let edge = &g.edges[edge_idx];
+            let needs_defer =
+                touches_grid_descendant(g, edge.src) || touches_grid_descendant(g, edge.dst);
+            if needs_defer {
+                deferred_external_edges.push(edge_idx);
+            } else {
+                route_constant_near_external_edge(g, edge_idx);
+            }
         }
     }
 
-    Ok(())
+    Ok(deferred_external_edges)
+}
+
+/// True if `obj_id` lies inside (at any depth) a grid-diagram container.
+/// d2-lib's grid pre-layout stores grid-descendant top_lefts in cell-local
+/// coordinates; their absolute positions are only realised by the post-
+/// dagre grid shift. Routing edges that touch such descendants requires
+/// running after that shift.
+fn touches_grid_descendant(g: &Graph, obj_id: ObjId) -> bool {
+    let mut cur = g.objects[obj_id].parent;
+    while let Some(pid) = cur {
+        if pid == g.root {
+            break;
+        }
+        if g.objects[pid].is_grid_diagram() {
+            return true;
+        }
+        cur = g.objects[pid].parent;
+    }
+    false
+}
+
+/// Route external constant-near edges that were deferred from
+/// `apply_constant_near_subgraphs` because they touch grid descendants.
+/// Call this after the caller has performed any post-dagre grid-cell
+/// shifting so src/dst objects are at their final absolute positions.
+pub fn route_deferred_constant_near_external_edges(g: &mut Graph, edges: &[usize]) {
+    for &edge_idx in edges {
+        route_constant_near_external_edge(g, edge_idx);
+    }
 }
 
 fn route_constant_near_external_edge(g: &mut Graph, edge_idx: usize) {
@@ -677,8 +740,10 @@ fn route_constant_near_external_edge(g: &mut Graph, edge_idx: usize) {
         return;
     }
 
-    let src = g.objects[g.edges[edge_idx].src].center();
-    let dst = g.objects[g.edges[edge_idx].dst].center();
+    let src_id = g.edges[edge_idx].src;
+    let dst_id = g.edges[edge_idx].dst;
+    let src = g.objects[src_id].center();
+    let dst = g.objects[dst_id].center();
     let mut points = vec![src, dst];
 
     let (new_start, new_end) = {
@@ -687,21 +752,54 @@ fn route_constant_near_external_edge(g: &mut Graph, edge_idx: usize) {
     };
     points = points[new_start..=new_end].to_vec();
 
-    let src_id = g.edges[edge_idx].src;
-    let dst_id = g.edges[edge_idx].dst;
-
     if points.len() >= 2 {
         let last = points.len() - 1;
         let src_box = g.objects[src_id].box_;
         let dst_box = g.objects[dst_id].box_;
-        let starting_segment = Segment::new(points[1], points[0]);
-        let ending_segment = Segment::new(points[last - 1], points[last]);
 
+        // Mirror Go `Edge.TraceToShape`: fully resolve the src side (bbox
+        // clip + non-rect perimeter snap) BEFORE constructing the dst's
+        // `ending_segment`. This keeps the dst clip aligned with the
+        // perimeter-snapped `points[0]` rather than the stale bbox hit — a
+        // 0.5 px drift otherwise creeps in whenever `TraceToShapeBorder`
+        // moves the src endpoint off the bbox corner.
+        let starting_segment = Segment::new(points[1], points[0]);
         if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
             points[0] = p;
         }
+        if !g.objects[src_id].is_rectangular_shape() {
+            let bbox = d2_geo::Box2D::new(
+                g.objects[src_id].top_left,
+                g.objects[src_id].width,
+                g.objects[src_id].height,
+            );
+            let traced = trace_to_shape_border_with_box(
+                &g.objects[src_id],
+                bbox,
+                points[0],
+                points[1],
+            );
+            points[0] = traced;
+        }
+
+        let ending_segment = Segment::new(points[last - 1], points[last]);
         if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
             points[last] = p;
+        }
+        if !g.objects[dst_id].is_rectangular_shape() {
+            let last = points.len() - 1;
+            let bbox = d2_geo::Box2D::new(
+                g.objects[dst_id].top_left,
+                g.objects[dst_id].width,
+                g.objects[dst_id].height,
+            );
+            let traced = trace_to_shape_border_with_box(
+                &g.objects[dst_id],
+                bbox,
+                points[last],
+                points[last - 1],
+            );
+            points[last] = traced;
         }
     }
 
@@ -721,15 +819,21 @@ fn route_constant_near_external_edge(g: &mut Graph, edge_idx: usize) {
 /// This builds a dagre graph from d2 objects and edges, runs the layout,
 /// then reads back positions and routes.
 pub fn layout(g: &mut Graph, opts: Option<&ConfigurableOpts>) -> Result<(), String> {
-    layout_with_exclude(g, opts, &std::collections::HashSet::new())
+    layout_with_exclude(g, opts, &std::collections::HashSet::new()).map(|_| ())
 }
 
 /// Layout with an explicit set of object IDs to exclude from dagre.
+///
+/// Returns a list of constant-near external edge indices whose routing was
+/// deferred because their src or dst lies inside a grid container. The
+/// caller (typically d2-lib) must invoke
+/// [`route_deferred_constant_near_external_edges`] after performing the
+/// post-dagre grid-cell shifts so the final absolute coordinates are used.
 pub fn layout_with_exclude(
     g: &mut Graph,
     opts: Option<&ConfigurableOpts>,
     extra_excluded: &std::collections::HashSet<usize>,
-) -> Result<(), String> {
+) -> Result<Vec<usize>, String> {
     let default_opts = ConfigurableOpts::default();
     let opts = opts.unwrap_or(&default_opts);
     let (mut constant_near_subgraphs, mut excluded_objects, excluded_edges) =
@@ -1061,6 +1165,15 @@ pub fn layout_with_exclude(
             continue;
         }
         let (src_id, dst_id) = (g.edges[ei].src, g.edges[ei].dst);
+        // Skip edges whose endpoints live in objects excluded from the outer
+        // dagre layout (e.g. grid-cell descendants). Those routes were laid
+        // out and curve-generated by the cell's own nested sub-graph pass,
+        // and re-running trace-to-shape / curve-gen here would reinterpret
+        // the already-generated bezier control points as raw waypoints and
+        // blow the route out with spurious interior curves.
+        if excluded_objects.contains(&src_id) || excluded_objects.contains(&dst_id) {
+            continue;
+        }
         let src_box = g.objects[src_id].box_;
         let dst_box = g.objects[dst_id].box_;
         let mut points = edge_route;
@@ -1091,8 +1204,46 @@ pub fn layout_with_exclude(
             let mut start_idx: usize = 0;
             let mut end_idx: usize = points.len() - 1;
 
+            // Mirror Go `d2dagrelayout.Layout` lines 314-331: when the edge's
+            // source or destination carries a 3D/multiple visual offset, shift
+            // the shape's effective top-left by `(dx, -dy)` BEFORE running
+            // TraceToShape. This lifts the outside-label box (and the shape's
+            // own rectangle on the non-rectangular perimeter trace) onto the
+            // 3D-offset outline, so edges terminate at the visible border
+            // rather than at the unoffset box. The shift is gated by the same
+            // condition Go uses: the anchor point must sit inside the offset
+            // zone on the upper-right of the shape.
+            let start_point = points[start_idx];
+            let end_point = points[end_idx];
+            let (src_dx, src_dy) = g.objects[src_id].get_modifier_element_adjustments();
+            let src_shift_box = if (src_dx != 0.0 || src_dy != 0.0)
+                && start_point.x > g.objects[src_id].top_left.x + src_dx
+                && start_point.y < g.objects[src_id].top_left.y + g.objects[src_id].height - src_dy
+            {
+                let mut b = src_box;
+                b.top_left.x += src_dx;
+                b.top_left.y -= src_dy;
+                Some(b)
+            } else {
+                None
+            };
+            let (dst_dx, dst_dy) = g.objects[dst_id].get_modifier_element_adjustments();
+            let dst_shift_box = if (dst_dx != 0.0 || dst_dy != 0.0)
+                && end_point.x > g.objects[dst_id].top_left.x + dst_dx
+                && end_point.y < g.objects[dst_id].top_left.y + g.objects[dst_id].height - dst_dy
+            {
+                let mut b = dst_box;
+                b.top_left.x += dst_dx;
+                b.top_left.y -= dst_dy;
+                Some(b)
+            } else {
+                None
+            };
+            let src_label_shape_box = src_shift_box.unwrap_or(src_box);
+            let dst_label_shape_box = dst_shift_box.unwrap_or(dst_box);
+
             // Source side.
-            let src_label_box = outside_label_box(&g.objects[src_id]);
+            let src_label_box = outside_label_box_for(&g.objects[src_id], &src_label_shape_box);
             let starting_segment = Segment::new(points[start_idx + 1], points[start_idx]);
             let src_label_hit = src_label_box.as_ref().and_then(|(b, pos)| {
                 let ints = b.intersections(&starting_segment);
@@ -1107,8 +1258,10 @@ pub fn layout_with_exclude(
             // offset outline (mirror of Go's `edge.Src.TopLeft` mutation in
             // `d2dagrelayout.Layout`).
             let mut src_trace_box: Option<d2_geo::Box2D> = None;
+            let mut overlaps_outside_src = false;
             if let Some(p) = src_label_hit {
                 points[start_idx] = p;
+                overlaps_outside_src = true;
                 // Merge a too-short starting segment with the next one
                 // (mirror Go lines 449-452): if the freshly clipped
                 // segment is shorter than `MIN_SEGMENT_LEN`, collapse
@@ -1121,11 +1274,43 @@ pub fn layout_with_exclude(
                     }
                 }
             } else {
+                // Mirror Go `Edge.TraceToShape`'s `edge.Src.HasIcon()`
+                // branch (layout.go lines 456-486). When the outside label
+                // did not overlap but the shape has an outside icon,
+                // clip the starting segment against the icon box. Uses
+                // `MAX_ICON_SIZE` for Src / `GetIconSize` for Dst — Go
+                // applies `MAX_ICON_SIZE` literal on the src side.
+                let src_icon_box =
+                    outside_icon_box_src_for(&g.objects[src_id], &src_label_shape_box);
+                if let Some((icon_box, icon_pos)) = src_icon_box.as_ref() {
+                    // Go layout.go lines 467-471 have `startIndex+1 > endIndex`
+                    // as the walk-forward predicate, which is effectively
+                    // never true (it would require startIndex >= endIndex).
+                    // Preserve that dead-code behaviour so we stay byte-exact
+                    // with Go's routing: no walk-forward is performed here.
+                    let icon_seg = starting_segment;
+                    let ints = icon_box.intersections(&icon_seg);
+                    if !ints.is_empty() {
+                        let p = find_outer_intersection(*icon_pos, &ints);
+                        points[start_idx] = p;
+                        overlaps_outside_src = true;
+                        if start_idx + 1 < end_idx {
+                            let seg = Segment::new(points[start_idx + 1], points[start_idx]);
+                            if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                                points[start_idx + 1] = points[start_idx];
+                                start_idx += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if !overlaps_outside_src {
                 // Mirror Go `Edge.TraceToShape`'s 3D/multiple handling:
                 // when the segment start sits inside the visual offset
                 // zone (upper-right for 3d/multiple), temporarily shift
                 // the shape's top-left by (dx, -dy) so the intersection
                 // lands on the offset shape border.
+                let starting_segment2 = Segment::new(points[start_idx + 1], points[start_idx]);
                 let (dx, dy) = g.objects[src_id].get_modifier_element_adjustments();
                 let trace_box = if (dx != 0.0 || dy != 0.0)
                     && points[start_idx].x > src_box.top_left.x + dx
@@ -1139,7 +1324,7 @@ pub fn layout_with_exclude(
                 } else {
                     src_box
                 };
-                let ints = trace_box.intersections(&starting_segment);
+                let ints = trace_box.intersections(&starting_segment2);
                 if let Some(p) = ints.first() {
                     points[start_idx] = *p;
                     if start_idx + 1 < end_idx {
@@ -1151,7 +1336,7 @@ pub fn layout_with_exclude(
                     }
                 }
             }
-            if src_label_hit.is_none() && !src_is_rect {
+            if !overlaps_outside_src && !src_is_rect {
                 let bbox = src_trace_box.unwrap_or_else(|| {
                     d2_geo::Box2D::new(
                         g.objects[src_id].top_left,
@@ -1169,7 +1354,7 @@ pub fn layout_with_exclude(
             }
 
             // Destination side.
-            let dst_label_box = outside_label_box(&g.objects[dst_id]);
+            let dst_label_box = outside_label_box_for(&g.objects[dst_id], &dst_label_shape_box);
             // Walk back `end_idx` while the segment START (the pre-endpoint
             // point on the incoming side) still sits inside the outside-
             // label box. This mirrors Go d2graph/layout.go lines 516-520:
@@ -1191,9 +1376,10 @@ pub fn layout_with_exclude(
                     Some(find_outer_intersection(*pos, &ints))
                 }
             });
-            let mut dst_trace_box: Option<d2_geo::Box2D> = None;
+            let mut overlaps_outside_dst = false;
             if let Some(p) = dst_label_hit {
                 points[end_idx] = p;
+                overlaps_outside_dst = true;
                 // Merge a too-short ending segment with the previous one
                 // (mirror Go lines 531-534): if the freshly clipped
                 // segment is shorter than `MIN_SEGMENT_LEN`, collapse
@@ -1206,6 +1392,38 @@ pub fn layout_with_exclude(
                     }
                 }
             } else {
+                // Mirror Go `edge.Dst.HasIcon()` branch: when the label
+                // didn't overlap but the shape has an outside icon, clip
+                // the ending segment against the icon box instead of the
+                // shape's own border. Skips when there is no outside icon.
+                let dst_icon_box = outside_icon_box_for(&g.objects[dst_id], &dst_label_shape_box);
+                if let Some((icon_box, icon_pos)) = dst_icon_box.as_ref() {
+                    // Mirror Go layout.go lines 548-552: walk back the
+                    // end_idx past any points the ending segment's start
+                    // still inside the icon box.
+                    let mut icon_seg = ending_segment;
+                    while end_idx - 1 > start_idx && icon_box.contains(&icon_seg.start) {
+                        end_idx -= 1;
+                        icon_seg = Segment::new(points[end_idx - 1], points[end_idx]);
+                    }
+                    let ints = icon_box.intersections(&icon_seg);
+                    if !ints.is_empty() {
+                        let p = find_outer_intersection(*icon_pos, &ints);
+                        points[end_idx] = p;
+                        overlaps_outside_dst = true;
+                        if end_idx - 1 > start_idx {
+                            let seg = Segment::new(points[end_idx - 1], points[end_idx]);
+                            if seg.length() < d2_graph::MIN_SEGMENT_LEN {
+                                points[end_idx - 1] = points[end_idx];
+                                end_idx -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+            let mut dst_trace_box: Option<d2_geo::Box2D> = None;
+            if !overlaps_outside_dst {
+                let ending_segment2 = Segment::new(points[end_idx - 1], points[end_idx]);
                 let (dx, dy) = g.objects[dst_id].get_modifier_element_adjustments();
                 let trace_box = if (dx != 0.0 || dy != 0.0)
                     && points[end_idx].x > dst_box.top_left.x + dx
@@ -1219,7 +1437,7 @@ pub fn layout_with_exclude(
                 } else {
                     dst_box
                 };
-                let ints = trace_box.intersections(&ending_segment);
+                let ints = trace_box.intersections(&ending_segment2);
                 if let Some(p) = ints.first() {
                     points[end_idx] = *p;
                     if end_idx - 1 > start_idx {
@@ -1231,7 +1449,7 @@ pub fn layout_with_exclude(
                     }
                 }
             }
-            if dst_label_hit.is_none() && !dst_is_rect {
+            if !overlaps_outside_dst && !dst_is_rect {
                 let bbox = dst_trace_box.unwrap_or_else(|| {
                     d2_geo::Box2D::new(
                         g.objects[dst_id].top_left,
@@ -1291,9 +1509,9 @@ pub fn layout_with_exclude(
         g.edges[ei].route = path;
     }
 
-    apply_constant_near_subgraphs(g, &mut constant_near_subgraphs, opts)?;
+    let deferred = apply_constant_near_subgraphs(g, &mut constant_near_subgraphs, opts)?;
 
-    Ok(())
+    Ok(deferred)
 }
 
 /// Recursively shrink each top-level container to wrap its children with the
@@ -1535,11 +1753,11 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
         let mut left_overlap = 0.0f64;
         let mut right_overlap = 0.0f64;
 
-        let mut process = |info: &Option<(d2_geo::Box2D, d2_label::Position)>,
-                           top_overlap: &mut f64,
-                           bottom_overlap: &mut f64,
-                           left_overlap: &mut f64,
-                           right_overlap: &mut f64| {
+        let process = |info: &Option<(d2_geo::Box2D, d2_label::Position)>,
+                       top_overlap: &mut f64,
+                       bottom_overlap: &mut f64,
+                       left_overlap: &mut f64,
+                       right_overlap: &mut f64| {
             let Some((b, pos)) = info else { return };
             let side = match side_of(*pos) {
                 Some(s) => s,
@@ -1868,7 +2086,10 @@ fn trace_to_shape_border_with_box(
 /// border. Returns `None` when the object has no outside label (no label,
 /// no position, or the position is not `OUTSIDE_*`). Mirrors the label box
 /// construction at the top of Go `Edge.TraceToShape`.
-fn outside_label_box(obj: &d2_graph::Object) -> Option<(d2_geo::Box2D, d2_label::Position)> {
+fn outside_label_box_for(
+    obj: &d2_graph::Object,
+    shape_box: &d2_geo::Box2D,
+) -> Option<(d2_geo::Box2D, d2_label::Position)> {
     if !obj.has_label() {
         return None;
     }
@@ -1879,14 +2100,59 @@ fn outside_label_box(obj: &d2_graph::Object) -> Option<(d2_geo::Box2D, d2_label:
     }
     let label_width = obj.label_dimensions.width as f64;
     let label_height = obj.label_dimensions.height as f64;
-    let shape_box = d2_geo::Box2D::new(obj.top_left, obj.width, obj.height);
-    let label_tl = pos.get_point_on_box(&shape_box, d2_label::PADDING, label_width, label_height);
+    let label_tl = pos.get_point_on_box(shape_box, d2_label::PADDING, label_width, label_height);
     // Go adds horizontal padding so the label box extends `PADDING` past
     // the label text on each side, preventing connections from clipping
     // the label's left/right edge.
     let mut box_ = d2_geo::Box2D::new(label_tl, label_width, label_height);
     box_.top_left.x -= d2_label::PADDING;
     box_.width += 2.0 * d2_label::PADDING;
+    Some((box_, pos))
+}
+
+/// Compute the outside-icon `Box2D` for the DST side of an edge. Uses
+/// `d2target.GetIconSize(Dst.Box, iconPosition)` — matches Go
+/// `Edge.TraceToShape` lines 540-569.
+fn outside_icon_box_for(
+    obj: &d2_graph::Object,
+    shape_box: &d2_geo::Box2D,
+) -> Option<(d2_geo::Box2D, d2_label::Position)> {
+    if !obj.has_icon() {
+        return None;
+    }
+    let pos_str = obj.icon_position.as_deref()?;
+    let pos = d2_label::Position::from_string(pos_str);
+    if !pos.is_outside() {
+        return None;
+    }
+    let icon_side = d2_target::get_icon_size(obj.width, obj.height, pos_str) as f64;
+    if icon_side <= 0.0 {
+        return None;
+    }
+    let icon_tl = pos.get_point_on_box(shape_box, d2_label::PADDING, icon_side, icon_side);
+    let box_ = d2_geo::Box2D::new(icon_tl, icon_side, icon_side);
+    Some((box_, pos))
+}
+
+/// Compute the outside-icon `Box2D` for the SRC side of an edge. Mirrors
+/// Go `Edge.TraceToShape` lines 456-486 which hard-codes `MAX_ICON_SIZE`
+/// for the icon side length on the source side (unlike the Dst side which
+/// uses the position-aware `GetIconSize`).
+fn outside_icon_box_src_for(
+    obj: &d2_graph::Object,
+    shape_box: &d2_geo::Box2D,
+) -> Option<(d2_geo::Box2D, d2_label::Position)> {
+    if !obj.has_icon() {
+        return None;
+    }
+    let pos_str = obj.icon_position.as_deref()?;
+    let pos = d2_label::Position::from_string(pos_str);
+    if !pos.is_outside() {
+        return None;
+    }
+    let icon_side = d2_target::MAX_ICON_SIZE as f64;
+    let icon_tl = pos.get_point_on_box(shape_box, d2_label::PADDING, icon_side, icon_side);
+    let box_ = d2_geo::Box2D::new(icon_tl, icon_side, icon_side);
     Some((box_, pos))
 }
 

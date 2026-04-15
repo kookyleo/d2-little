@@ -71,9 +71,9 @@ impl TokenType {
             | TokenType::LiteralStringInterpol
             | TokenType::LiteralStringAffix => TokenType::Literal,
 
-            TokenType::CommentSingle
-            | TokenType::CommentMultiline
-            | TokenType::CommentPreproc => TokenType::Comment,
+            TokenType::CommentSingle | TokenType::CommentMultiline | TokenType::CommentPreproc => {
+                TokenType::Comment
+            }
 
             _ => self,
         }
@@ -136,8 +136,6 @@ pub enum Action {
     Push(String),
     /// Pop the top state from the stack.
     Pop,
-    /// Include rules from another state (used only at build time).
-    Include(String),
 }
 
 /// A single rule in the lexer.
@@ -314,7 +312,6 @@ fn apply_action(action: &Action, stack: &mut Vec<usize>, states: &[State]) {
                 stack.pop();
             }
         }
-        Action::Include(_) => {} // should not happen at runtime
     }
 }
 
@@ -357,5 +354,5 @@ fn is_inline_flags(pattern: &str) -> bool {
 /// Helper: build regex for `Words(prefix, suffix, words...)`.
 pub fn words(prefix: &str, suffix: &str, words: &[&str]) -> String {
     let joined = words.join("|");
-    format!("{}(?:{}){}",  prefix, joined, suffix)
+    format!("{}(?:{}){}", prefix, joined, suffix)
 }

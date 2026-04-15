@@ -21,6 +21,7 @@ members = [
     "crates/d2-grid",
     "crates/d2-exporter",
     "crates/d2-svg-render",
+    "crates/d2-sketch",
     "crates/d2-chroma",
     "crates/d2-latex",
     "crates/d2-lib",

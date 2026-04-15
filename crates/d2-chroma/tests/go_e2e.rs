@@ -1,6 +1,6 @@
 //! Verify Go tokenizer output matches chroma for the code_snippet e2e case.
 
-use d2_chroma::{tokenize, split_into_lines, TokenType};
+use d2_chroma::{split_into_lines, tokenize, TokenType};
 
 const CODE_SNIPPET: &str = r#"// RegisterHash registers a function that returns a new instance of the given
 // hash function. This is intended to be called from the init function in
@@ -19,9 +19,18 @@ fn test_go_tokens_match_chroma() {
 
     // Expected tokens from Go's chroma dump
     let expected: Vec<(TokenType, &str)> = vec![
-        (TokenType::CommentSingle, "// RegisterHash registers a function that returns a new instance of the given\n"),
-        (TokenType::CommentSingle, "// hash function. This is intended to be called from the init function in\n"),
-        (TokenType::CommentSingle, "// packages that implement hash functions.\n"),
+        (
+            TokenType::CommentSingle,
+            "// RegisterHash registers a function that returns a new instance of the given\n",
+        ),
+        (
+            TokenType::CommentSingle,
+            "// hash function. This is intended to be called from the init function in\n",
+        ),
+        (
+            TokenType::CommentSingle,
+            "// packages that implement hash functions.\n",
+        ),
         (TokenType::KeywordDeclaration, "func"),
         (TokenType::Text, " "),
         (TokenType::NameFunction, "RegisterHash"),
@@ -58,7 +67,10 @@ fn test_go_tokens_match_chroma() {
         (TokenType::Text, "\t\t"),
         (TokenType::NameBuiltin, "panic"),
         (TokenType::Punctuation, "("),
-        (TokenType::LiteralString, "\"crypto: RegisterHash of unknown hash function\""),
+        (
+            TokenType::LiteralString,
+            "\"crypto: RegisterHash of unknown hash function\"",
+        ),
         (TokenType::Punctuation, ")"),
         (TokenType::Text, "\n"),
         (TokenType::Text, "\t"),
@@ -78,15 +90,25 @@ fn test_go_tokens_match_chroma() {
         (TokenType::Text, "\n"),
     ];
 
-    assert_eq!(tokens.len(), expected.len(), "token count mismatch: got {}, expected {}", tokens.len(), expected.len());
+    assert_eq!(
+        tokens.len(),
+        expected.len(),
+        "token count mismatch: got {}, expected {}",
+        tokens.len(),
+        expected.len()
+    );
 
     for (i, (tok, (exp_type, exp_val))) in tokens.iter().zip(expected.iter()).enumerate() {
-        assert_eq!(tok.token_type, *exp_type,
+        assert_eq!(
+            tok.token_type, *exp_type,
             "token[{}] type mismatch: got {:?}, expected {:?} (value={:?})",
-            i, tok.token_type, exp_type, tok.value);
-        assert_eq!(tok.value, *exp_val,
+            i, tok.token_type, exp_type, tok.value
+        );
+        assert_eq!(
+            tok.value, *exp_val,
             "token[{}] value mismatch: got {:?}, expected {:?}",
-            i, tok.value, exp_val);
+            i, tok.value, exp_val
+        );
     }
 }
 

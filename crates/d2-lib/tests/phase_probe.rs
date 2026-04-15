@@ -119,21 +119,13 @@ fn probe_case() {
             );
             eprintln!(
                 "shape-meta id={:?} label_pos={:?} icon_pos={:?}",
-                s.id,
-                s.label_position,
-                s.icon_position,
+                s.id, s.label_position, s.icon_position,
             );
         }
         for c in &diagram.connections {
             eprintln!(
                 "conn id={:?} src={:?} dst={:?} label={:?} label_w={} label_h={} route={:?}",
-                c.id,
-                c.src,
-                c.dst,
-                c.text.label,
-                c.text.label_width,
-                c.text.label_height,
-                c.route,
+                c.id, c.src, c.dst, c.text.label, c.text.label_width, c.text.label_height, c.route,
             );
             if let Some(ref l) = c.src_label {
                 eprintln!("  src_label: {:?} color={:?}", l.label, l.color);

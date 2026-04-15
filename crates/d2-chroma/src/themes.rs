@@ -1,8 +1,8 @@
 //! Theme color mappings for github (light) and catppuccin-mocha (dark).
 //! Data extracted from chroma v2.14.0.
 
-use std::collections::HashMap;
 use crate::engine::TokenType;
+use std::collections::HashMap;
 
 /// A single style entry for a token type.
 #[derive(Debug, Clone)]
@@ -71,17 +71,41 @@ fn build_github() -> Theme {
 
     m.insert(TokenType::LiteralString, entry("#dd1144", false, false));
     m.insert(TokenType::LiteralStringChar, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringDouble, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringSingle, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringBacktick, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringEscape, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringInterpol, entry("#dd1144", false, false));
-    m.insert(TokenType::LiteralStringAffix, entry("#dd1144", false, false));
+    m.insert(
+        TokenType::LiteralStringDouble,
+        entry("#dd1144", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringSingle,
+        entry("#dd1144", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringBacktick,
+        entry("#dd1144", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringEscape,
+        entry("#dd1144", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringInterpol,
+        entry("#dd1144", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringAffix,
+        entry("#dd1144", false, false),
+    );
 
     m.insert(TokenType::LiteralNumber, entry("#009999", false, false));
-    m.insert(TokenType::LiteralNumberFloat, entry("#009999", false, false));
+    m.insert(
+        TokenType::LiteralNumberFloat,
+        entry("#009999", false, false),
+    );
     m.insert(TokenType::LiteralNumberHex, entry("#009999", false, false));
-    m.insert(TokenType::LiteralNumberInteger, entry("#009999", false, false));
+    m.insert(
+        TokenType::LiteralNumberInteger,
+        entry("#009999", false, false),
+    );
     m.insert(TokenType::LiteralNumberOct, entry("#009999", false, false));
     m.insert(TokenType::LiteralNumberBin, entry("#009999", false, false));
 
@@ -104,7 +128,10 @@ fn build_catppuccin_mocha() -> Theme {
 
     m.insert(TokenType::Keyword, entry("#cba6f7", false, false));
     m.insert(TokenType::KeywordConstant, entry("#fab387", false, false));
-    m.insert(TokenType::KeywordDeclaration, entry("#f38ba8", false, false));
+    m.insert(
+        TokenType::KeywordDeclaration,
+        entry("#f38ba8", false, false),
+    );
     m.insert(TokenType::KeywordNamespace, entry("#94e2d5", false, false));
     m.insert(TokenType::KeywordType, entry("#f38ba8", false, false));
 
@@ -121,17 +148,41 @@ fn build_catppuccin_mocha() -> Theme {
 
     m.insert(TokenType::LiteralString, entry("#a6e3a1", false, false));
     m.insert(TokenType::LiteralStringChar, entry("#a6e3a1", false, false));
-    m.insert(TokenType::LiteralStringDouble, entry("#a6e3a1", false, false));
-    m.insert(TokenType::LiteralStringSingle, entry("#a6e3a1", false, false));
-    m.insert(TokenType::LiteralStringBacktick, entry("#a6e3a1", false, false));
-    m.insert(TokenType::LiteralStringEscape, entry("#89b4fa", false, false));
-    m.insert(TokenType::LiteralStringInterpol, entry("#a6e3a1", false, false));
-    m.insert(TokenType::LiteralStringAffix, entry("#f38ba8", false, false));
+    m.insert(
+        TokenType::LiteralStringDouble,
+        entry("#a6e3a1", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringSingle,
+        entry("#a6e3a1", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringBacktick,
+        entry("#a6e3a1", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringEscape,
+        entry("#89b4fa", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringInterpol,
+        entry("#a6e3a1", false, false),
+    );
+    m.insert(
+        TokenType::LiteralStringAffix,
+        entry("#f38ba8", false, false),
+    );
 
     m.insert(TokenType::LiteralNumber, entry("#fab387", false, false));
-    m.insert(TokenType::LiteralNumberFloat, entry("#fab387", false, false));
+    m.insert(
+        TokenType::LiteralNumberFloat,
+        entry("#fab387", false, false),
+    );
     m.insert(TokenType::LiteralNumberHex, entry("#fab387", false, false));
-    m.insert(TokenType::LiteralNumberInteger, entry("#fab387", false, false));
+    m.insert(
+        TokenType::LiteralNumberInteger,
+        entry("#fab387", false, false),
+    );
     m.insert(TokenType::LiteralNumberOct, entry("#fab387", false, false));
     m.insert(TokenType::LiteralNumberBin, entry("#fab387", false, false));
 

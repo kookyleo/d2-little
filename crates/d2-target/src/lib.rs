@@ -1227,6 +1227,23 @@ fn icon_size(sw: f64, sh: f64, is_inside_center: bool) -> i32 {
     size.min(MAX_ICON_SIZE)
 }
 
+/// Full Go-compatible `d2target.GetIconSize`: computes the icon-side length for
+/// a shape of the given (w, h) and position. Matches Go's inside/outside
+/// branches plus the inside-position clamp to `min(w-2p, h-2p)` with
+/// `p = label::PADDING`. Returns 0 for empty or degenerate boxes.
+pub fn get_icon_size(w: f64, h: f64, position: &str) -> i32 {
+    let pos = d2_label::Position::from_string(position);
+    let is_inside_center = pos == d2_label::Position::InsideMiddleCenter;
+    let mut size = icon_size(w, h, is_inside_center);
+    if !pos.is_outside() {
+        let pad = d2_label::PADDING as i32;
+        let avail_w = (w as i32 - 2 * pad).max(0);
+        let avail_h = (h as i32 - 2 * pad).max(0);
+        size = size.min(avail_w.min(avail_h));
+    }
+    size
+}
+
 /// Compute the top-left corner (x, y) of a positioned tooltip box, given the
 /// host shape position/size, the tooltip box size, and the `near:` keyword
 /// (e.g. `top-left`, `center-right`). Mirrors Go d2target.CalculateTooltipPosition.
@@ -1684,7 +1701,7 @@ pub mod go_json {
         let mut digits: Vec<u8> = int_part.bytes().chain(frac_part.bytes()).collect();
         // dp17: position of the decimal point counted from the left of `digits`,
         // assuming all 17 digits are significant.
-        let mut dp17: i32 = int_part.len() as i32 + exp;
+        let dp17: i32 = int_part.len() as i32 + exp;
 
         // Strip trailing zeros so that `digits.len()` reflects the actual
         // number of significant digits Rust's scientific formatter felt
@@ -2257,8 +2274,17 @@ pub mod go_json {
             out.extend_from_slice(b",\"labelFill\":");
             write_string(out, &s.text.label_fill);
         }
-        // labelPosition omitempty
-        if !s.label_position.is_empty() {
+        // labelPosition omitempty.
+        //
+        // Match Go: a shape with no label still keeps any class-derived
+        // position in `attrs.LabelPosition`, but Go's d2graph clears it
+        // before export when the label is empty (unlike the `label.near`
+        // value, the position pointer is dropped). Mirror that effective
+        // behavior here so the JSON byte stream — which feeds the diagram
+        // hash — matches Go for empty-labeled shapes (e.g. `1*.label: ""`
+        // siblings under a `class: note` glob).
+        let suppress_for_empty_label = s.text.label.is_empty() && s.text.label_width == 0;
+        if !s.label_position.is_empty() && !suppress_for_empty_label {
             out.extend_from_slice(b",\"labelPosition\":");
             write_string(out, &s.label_position);
         }

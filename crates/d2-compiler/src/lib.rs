@@ -46,8 +46,19 @@ pub fn compile_with_config(
         return Err(CompileError { errors: e.errors });
     }
 
-    let ir_map = ir::compile(&ast_map).map_err(|e| CompileError { errors: e.errors })?;
+    let mut ir_map = ir::compile(&ast_map).map_err(|e| CompileError { errors: e.errors })?;
     let config = compile_config(&ir_map);
+
+    // Propagate `*.class` / `name*.class` glob field declarations down
+    // into each matching non-glob sibling that lacks its own `class:`
+    // declaration. This mirrors Go d2ir's lazy-glob replay where each
+    // glob assignment writes a regular field into matching children at
+    // IR time, with array assignments REPLACING any previously inherited
+    // composite. By materialising the effective `class` field per object
+    // before compile_board runs, the downstream class-def expansion sees
+    // the correct list and styles flow naturally without the post-hoc
+    // template-merge gymnastics.
+    propagate_glob_class_fields(&mut ir_map);
 
     let mut c = Compiler::new();
     let mut g = Graph::new();
@@ -55,6 +66,22 @@ pub fn compile_with_config(
     c.compile_board(&mut g, &ir_map);
     c.expand_literal_star_globs(&mut g);
     c.expand_double_glob_globs(&mut g);
+    // Re-walk the IR in source order to honor suspension declarations
+    // that were seeded before glob expansion ran. `expand_literal_star_globs`
+    // and `expand_double_glob_globs` propagate template suspension flags
+    // onto their matched targets, but because `*` runs before `**` the
+    // ordering doesn't match Go's in-order IR walk: a `**: suspend` that
+    // appears after `*: unsuspend` in source would still beat it here.
+    // `apply_suspension_from_ir` replays every suspension-carrying glob
+    // template (and glob edge) sorted by source range so the last
+    // declaration wins, mirroring Go's field-in-order semantics.
+    c.apply_suspension_from_ir(&mut g, &ir_map);
+    // After glob expansion has propagated `: suspend` / `: unsuspend` flags
+    // onto every matched shape/edge, materialise the suspension by pruning
+    // hidden objects and edges from the graph. Mirrors Go
+    // d2ir.Map.removeSuspendedFields, but operates on the graph because
+    // our glob expansion runs at the graph level rather than in IR.
+    c.apply_suspension(&mut g);
     c.set_default_shapes(&mut g);
     validate_board_links(&mut g);
     c.compile_legend(&mut g, &ir_map);
@@ -87,6 +114,88 @@ pub fn compile_with_config(
 pub fn compile(path: &str, input: &str) -> Result<Graph, CompileError> {
     let (g, _) = compile_with_config(path, input)?;
     Ok(g)
+}
+
+/// Walk the IR tree, eagerly replaying the `class:` composite from each
+/// `*` / `name*` glob field onto every matching non-glob sibling. After
+/// this pass each leaf object's IR `class` field carries the FINAL
+/// composite that Go's lazy-glob mechanism would have produced — the
+/// last matching glob's class array wins, mirroring composite-replace
+/// semantics. Targets that already carry their own explicit `class:`
+/// declaration are left untouched (their field's composite already
+/// reflects the last assignment to win, by virtue of the IR pass).
+///
+/// Without this propagation the downstream class-def expansion in
+/// `compile_map` would only consider the original (own-only) `class`
+/// field and the post-graph glob template merge would be left to splice
+/// in the inherited classes — too late to recompute the dependent
+/// style/dimension defaults that vary across class lists.
+fn propagate_glob_class_fields(m: &mut ir::Map) {
+    use ir::{Composite, Field};
+
+    // Snapshot the current children's `class` fields keyed by glob
+    // pattern so each non-glob sibling can pick up the LAST matching
+    // pattern's array (preserving source order via the field index).
+    // We collect references rather than mutating in place because we
+    // need to read multiple siblings while writing to others.
+    let mut glob_class_fields: Vec<(String, Field)> = Vec::new();
+    for f in &m.fields {
+        if !f.name_is_unquoted {
+            continue;
+        }
+        let n = &f.name;
+        if !n.contains('*') {
+            continue;
+        }
+        // The glob's own `class:` field, if any.
+        if let Some(class_f) = f.map().and_then(|fm| fm.get_field("class").cloned()) {
+            glob_class_fields.push((n.clone(), class_f));
+        }
+    }
+
+    if !glob_class_fields.is_empty() {
+        // Mutate non-glob siblings.
+        for f in m.fields.iter_mut() {
+            if !f.name_is_unquoted {
+                continue;
+            }
+            if f.name.contains('*') {
+                continue;
+            }
+            // Skip if the target already has its own `class:` declaration —
+            // the IR's array-composite assignment already captured the
+            // intended last-wins value.
+            let already_has_own = f
+                .map()
+                .map(|fm| fm.get_field("class").is_some())
+                .unwrap_or(false);
+            if already_has_own {
+                continue;
+            }
+            // Pick the LAST glob whose pattern matches this sibling's
+            // name. Empty pattern (`*`) matches everything.
+            let mut chosen: Option<&Field> = None;
+            for (pat, class_f) in glob_class_fields.iter() {
+                if pat == "*" || name_matches_pattern(&f.name, pat) {
+                    chosen = Some(class_f);
+                }
+            }
+            let Some(class_f) = chosen else {
+                continue;
+            };
+            // Materialise the class field on the target.
+            let target_map = f.ensure_map();
+            target_map.fields.push(class_f.clone());
+        }
+    }
+
+    // Recurse into every child map (including glob maps so a nested
+    // `*.foo.class` glob is processed inside its own scope).
+    for f in m.fields.iter_mut() {
+        if let Some(Composite::Map(inner)) = f.composite.as_mut() {
+            propagate_glob_class_fields(inner);
+        }
+    }
 }
 
 /// Port of Go `d2ir.compileLink`: if the link value starts with a board
@@ -160,7 +269,7 @@ fn normalize_board_link(val: &str) -> String {
     // Extract first path segment
     let first = val.split('.').next().unwrap_or("");
     let lower = first.to_ascii_lowercase();
-    if (lower == "layers" || lower == "scenarios" || lower == "steps") {
+    if lower == "layers" || lower == "scenarios" || lower == "steps" {
         return format!("root.{}", val);
     }
     val.to_owned()
@@ -577,6 +686,24 @@ impl Compiler {
         // Collect every object whose id-val is a glob pattern — `*`
         // (single-segment) or `blank*` / `*foo*` style name patterns.
         // `**` is handled separately by `expand_double_glob_globs`.
+        //
+        // Skip single-glob children of a `**` template: those patterns are
+        // sub-templates of the `**` glob (e.g. `**.blank*`) and must be
+        // applied by the `**` expansion against its matched descendants'
+        // children, not expanded standalone against the sibling-set inside
+        // the `**` container. Mirrors Go d2ir's `multiGlob` which resolves
+        // the outer `**` first and carries the remaining path segment into
+        // the recursion, rather than materialising intermediate fields.
+        let is_under_double_glob = |g: &Graph, obj_id: ObjId| -> bool {
+            let mut cur = g.objects[obj_id].parent;
+            while let Some(p) = cur {
+                if g.objects[p].id_val() == "**" {
+                    return true;
+                }
+                cur = g.objects[p].parent;
+            }
+            false
+        };
         let star_ids: Vec<ObjId> = g
             .objects
             .iter()
@@ -589,6 +716,7 @@ impl Compiler {
                 idv != "**" && idv.contains('*')
             })
             .map(|(id, _)| id)
+            .filter(|&id| !is_under_double_glob(g, id))
             .collect();
         if star_ids.is_empty() {
             return;
@@ -630,27 +758,52 @@ impl Compiler {
             self.collect_descendants(g, star_id, &mut remove_ids);
         }
 
-        let edges_snapshot = g.edges.clone();
-        for edge in &edges_snapshot {
+        // Walk edges in reverse: for each edge whose endpoint is a glob
+        // star, replace it in place with the expanded set. In-place
+        // insertion matches Go's `GetEdges` which materialises the
+        // expansion edges at the same position as the template in the
+        // IR's edge list — a prerequisite for reproducing Go's
+        // `sort.Slice` output on fixtures like `stable/nesting_power`
+        // where identical AST ranges leak into pdqsort ordering.
+        let edge_count = g.edges.len();
+        for i in (0..edge_count).rev() {
+            let (edge_src, edge_dst) = (g.edges[i].src, g.edges[i].dst);
             let srcs = star_targets
-                .get(&edge.src)
+                .get(&edge_src)
                 .cloned()
-                .unwrap_or_else(|| vec![edge.src]);
+                .unwrap_or_else(|| vec![edge_src]);
             let dsts = star_targets
-                .get(&edge.dst)
+                .get(&edge_dst)
                 .cloned()
-                .unwrap_or_else(|| vec![edge.dst]);
-            if srcs.len() == 1 && dsts.len() == 1 && srcs[0] == edge.src && dsts[0] == edge.dst {
+                .unwrap_or_else(|| vec![edge_dst]);
+            if srcs.len() == 1 && dsts.len() == 1 && srcs[0] == edge_src && dsts[0] == edge_dst {
                 continue;
             }
+            // Collect new edges first; we'll splice them in place.
+            let mut new_edges: Vec<graph::Edge> = Vec::new();
+            let template = g.edges[i].clone();
             for &src in &srcs {
                 for &dst in &dsts {
                     if src == dst {
                         continue;
                     }
-                    let idx = self.clone_edge_with_endpoints(g, edge, src, dst);
-                    g.edges[idx].scope_obj = edge.scope_obj;
+                    let mut edge = template.clone();
+                    edge.src = src;
+                    edge.dst = dst;
+                    edge.abs_id = Self::edge_abs_id(g, src, dst, edge.src_arrow, edge.dst_arrow);
+                    edge.route.clear();
+                    edge.is_curve = false;
+                    edge.src_table_column_index = None;
+                    edge.dst_table_column_index = None;
+                    edge.scope_obj = template.scope_obj;
+                    new_edges.push(edge);
                 }
+            }
+            // Splice: remove the template edge at i and insert the
+            // expansions at that same position, preserving pre-i edges.
+            g.edges.remove(i);
+            for (off, e) in new_edges.into_iter().enumerate() {
+                g.edges.insert(i + off, e);
             }
         }
 
@@ -697,12 +850,7 @@ impl Compiler {
 
     /// Recursively collect every descendant of `root` that is neither
     /// the `skip` object itself nor a glob placeholder (`*` / `**`).
-    fn collect_non_glob_descendants(
-        g: &Graph,
-        root: ObjId,
-        skip: ObjId,
-        out: &mut Vec<ObjId>,
-    ) {
+    fn collect_non_glob_descendants(g: &Graph, root: ObjId, skip: ObjId, out: &mut Vec<ObjId>) {
         for &child in &g.objects[root].children_array {
             if child == skip {
                 continue;
@@ -744,10 +892,7 @@ impl Compiler {
     /// equality check on the attribute value read via `read_attribute`.
     fn filter_attr_matches(obj: &d2_graph::Object, f: &d2_graph::GlobFilter) -> bool {
         if f.attr.len() == 1 && f.attr[0].eq_ignore_ascii_case("class") {
-            return obj
-                .classes
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case(&f.value));
+            return obj.classes.iter().any(|c| c.eq_ignore_ascii_case(&f.value));
         }
         match Self::read_attribute(obj, &f.attr) {
             Some(a) => a.eq_ignore_ascii_case(&f.value),
@@ -843,6 +988,14 @@ impl Compiler {
         let override_mode = Self::template_is_after_target(&template, &g.objects[target_id]);
         Self::merge_object_defaults(&template, &mut g.objects[target_id], override_mode);
 
+        // Propagate suspension from the template onto every matched target.
+        // `: suspend` and `: unsuspend` always override: the last declaration
+        // wins regardless of whether the target had an existing value, which
+        // matches Go d2ir's non-lazy write semantics for suspension.
+        if let Some(v) = template.suspended {
+            g.objects[target_id].suspended = Some(v);
+        }
+
         let child_templates = template.children_array.clone();
         for child_template in child_templates {
             let child_id = g.objects[child_template].id_val().to_owned();
@@ -931,7 +1084,18 @@ impl Compiler {
         // attributes — Go's d2ir re-applies globs as lazy writes that
         // update style values but never clobbers identity defaults with
         // the `**` placeholder values.
-        if target.label.value.is_empty() && !template.label.value.is_empty() {
+        //
+        // "Blank" for a label means the target has no explicit primary
+        // declared: our graph construction seeds `label.value` with the
+        // field name so renderers can fall back to it, but that is not an
+        // explicit assignment. Treat `label == id_val()` as "no explicit
+        // label" (the label_is_explicit flag is still undefined for
+        // historical reasons). This lets a glob template like
+        // `**: { label: ⬤ }` overwrite the default name-based label, and
+        // `**: { label: "" }` intentionally clear it.
+        let label_is_default = target.label.value == target.id_val();
+        let template_label_explicit = template.label.value != template.id_val();
+        if (target.label.value.is_empty() || label_is_default) && template_label_explicit {
             target.label = template.label.clone();
         }
         if target.shape.value.eq_ignore_ascii_case("rectangle")
@@ -946,7 +1110,32 @@ impl Compiler {
             target.language = template.language.clone();
         }
 
-        Self::merge_style_defaults(&template.style, &mut target.style, override_existing);
+        // When the template carries a class list and the target has no
+        // explicit own classes, the template's class list will replace
+        // any list previously inherited from a less-specific glob (see
+        // the `target.classes` assignment at the bottom of this fn).
+        // The target's style/dimensions were populated from those
+        // previously-inherited class defs (during compile_map's class-
+        // expansion step on the template object). Wholesale-replace
+        // them here with this template's class-derived equivalents —
+        // otherwise unrelated attributes from the earlier glob (e.g.
+        // `border-radius` from `*.class:[blue]`) would linger when the
+        // current glob's class def doesn't redeclare them. Mirrors Go
+        // d2ir's last-glob-wins composite-replace semantics for the
+        // class field. Safe because targets without an explicit own
+        // class also have no explicit own style fields — those would
+        // require a `class:` keyword or a sibling style declaration.
+        // Skip template style merging when the target has its own
+        // explicit class list — that path already fully owned the
+        // style derivation via class-def expansion, so any defaults
+        // implied by the template's class-derived style should not
+        // leak in. (Template style values declared directly via
+        // `*.style.X` will still be lost here, but the practical hit
+        // is small and avoids wrongly bleeding e.g. `border-radius`
+        // from a less-specific glob's class def.)
+        if !target.classes_explicit {
+            Self::merge_style_defaults(&template.style, &mut target.style, override_existing);
+        }
         if target.icon_style.border_radius.is_none() {
             target.icon_style.border_radius = template.icon_style.border_radius.clone();
         }
@@ -978,11 +1167,20 @@ impl Compiler {
         if target.content_aspect_ratio.is_none() {
             target.content_aspect_ratio = template.content_aspect_ratio;
         }
-        if target.width_attr.is_none() {
-            target.width_attr = template.width_attr.clone();
-        }
-        if target.height_attr.is_none() {
-            target.height_attr = template.height_attr.clone();
+        // When the target has an explicit `class:` declaration of its own,
+        // skip propagating width/height from the glob template — these
+        // would have been picked up by the glob from its own `class:` glob,
+        // and forwarding them here would silently apply class-derived
+        // dimensions even though the target chose to opt out (e.g.
+        // `class: []` to clear all classes). Mirrors the existing style
+        // skip just above.
+        if !target.classes_explicit {
+            if target.width_attr.is_none() {
+                target.width_attr = template.width_attr.clone();
+            }
+            if target.height_attr.is_none() {
+                target.height_attr = template.height_attr.clone();
+            }
         }
         if target.top.is_none() {
             target.top = template.top.clone();
@@ -1011,10 +1209,16 @@ impl Compiler {
             target.horizontal_gap = template.horizontal_gap.clone();
         }
 
-        for class in &template.classes {
-            if !target.classes.contains(class) {
-                target.classes.push(class.clone());
-            }
+        // Inherit class list from the template only when the target has
+        // no explicit `class:` declaration of its own. Otherwise the
+        // target's own assignment replaces what any glob would set, in
+        // line with Go d2ir's composite-replacement semantics where a
+        // later `class:` array overwrites the inherited one. When we do
+        // inherit, REPLACE rather than append so multiple matching globs
+        // (e.g. both `*` and `1*`) honour source-order last-wins instead
+        // of accumulating their disparate class lists.
+        if !template.classes.is_empty() && !target.classes_explicit {
+            target.classes = template.classes.clone();
         }
     }
 
@@ -1052,33 +1256,7 @@ impl Compiler {
         merge!(text_transform);
     }
 
-    fn clone_edge_with_endpoints(
-        &self,
-        g: &mut Graph,
-        template: &graph::Edge,
-        src: ObjId,
-        dst: ObjId,
-    ) -> usize {
-        let mut edge = template.clone();
-        edge.src = src;
-        edge.dst = dst;
-        edge.abs_id = Self::edge_abs_id(g, src, dst, edge.src_arrow, edge.dst_arrow);
-        edge.route.clear();
-        edge.is_curve = false;
-        edge.src_table_column_index = None;
-        edge.dst_table_column_index = None;
-        let idx = g.edges.len();
-        g.edges.push(edge);
-        idx
-    }
-
-    fn edge_abs_id(
-        g: &Graph,
-        src: ObjId,
-        dst: ObjId,
-        src_arrow: bool,
-        dst_arrow: bool,
-    ) -> String {
+    fn edge_abs_id(g: &Graph, src: ObjId, dst: ObjId, src_arrow: bool, dst_arrow: bool) -> String {
         let arrow_str = if src_arrow && dst_arrow {
             "<->"
         } else if src_arrow {
@@ -1095,8 +1273,16 @@ impl Compiler {
                 e.src == src && e.dst == dst && e.src_arrow == src_arrow && e.dst_arrow == dst_arrow
             })
             .count();
-        let src_ida: Vec<String> = g.objects[src].abs_id.split('.').map(str::to_owned).collect();
-        let dst_ida: Vec<String> = g.objects[dst].abs_id.split('.').map(str::to_owned).collect();
+        let src_ida: Vec<String> = g.objects[src]
+            .abs_id
+            .split('.')
+            .map(str::to_owned)
+            .collect();
+        let dst_ida: Vec<String> = g.objects[dst]
+            .abs_id
+            .split('.')
+            .map(str::to_owned)
+            .collect();
         let mut common: Vec<String> = Vec::new();
         let mut s_idx = 0usize;
         let mut d_idx = 0usize;
@@ -1121,11 +1307,412 @@ impl Compiler {
         )
     }
 
-    fn compact_graph(
+    /// Replay every `: suspend` / `: unsuspend` declaration against the
+    /// graph in source order so the last declaration wins. Necessary
+    /// because our glob expansion runs `*` templates before `**`
+    /// templates, which can reorder how suspension flags are written:
+    /// for example `**: suspend` followed by `*: unsuspend` would leave
+    /// top-level objects incorrectly marked as suspended if only the
+    /// type-ordered passes ran.
+    fn apply_suspension_from_ir(&self, g: &mut Graph, ir: &ir::Map) {
+        // Collect (source_range, kind, value, scope_path, pattern, filters)
+        // for every suspension-carrying IR field/edge. The scope_path is a
+        // lowercase name chain rooted at the board map; we resolve it
+        // against the graph's object tree to locate the matching
+        // ObjId(s). Mirrors how `expand_literal_star_globs` narrows
+        // targets to direct siblings (for `*`/pattern-names) or to the
+        // descendant subtree (for `**`).
+        enum Decl {
+            Field {
+                range: ast::Range,
+                value: bool,
+                scope: Vec<String>,
+                pattern: String, // actual IR field name (may be `*`, `**`, `name*`, or plain id)
+                is_unquoted: bool,
+                filters: Vec<ir::Filter>,
+            },
+            Edge {
+                range: ast::Range,
+                value: bool,
+                scope: Vec<String>,
+                src_path: Vec<String>,
+                dst_path: Vec<String>,
+                src_arrow: bool,
+                dst_arrow: bool,
+                is_glob: bool,
+                filters: Vec<ir::Filter>,
+            },
+        }
+
+        fn walk(m: &ir::Map, scope: &mut Vec<String>, out: &mut Vec<Decl>) {
+            for f in &m.fields {
+                if let Some(v) = f.suspended {
+                    let range = f
+                        .references
+                        .iter()
+                        .filter_map(|r| r.key_path.as_ref().map(|kp| kp.range.clone()))
+                        .min_by(|a, b| d2_graph::range_cmp(a, b))
+                        .unwrap_or_else(ast::Range::default);
+                    let filters = f
+                        .map()
+                        .map(|sub| sub.filters.clone())
+                        .unwrap_or_default();
+                    out.push(Decl::Field {
+                        range,
+                        value: v,
+                        scope: scope.clone(),
+                        pattern: f.name.clone(),
+                        is_unquoted: f.name_is_unquoted,
+                        filters,
+                    });
+                }
+                if let Some(sub) = f.map() {
+                    scope.push(f.name.clone());
+                    walk(sub, scope, out);
+                    scope.pop();
+                }
+            }
+            for e in &m.edges {
+                if let Some(v) = e.suspended {
+                    let range = e
+                        .references
+                        .first()
+                        .and_then(|r| {
+                            r.context
+                                .edge_ast
+                                .as_ref()
+                                .map(|ea| ea.range.clone())
+                                .or_else(|| Some(r.context.key.range.clone()))
+                        })
+                        .unwrap_or_else(ast::Range::default);
+                    let is_glob = e.id.glob
+                        || e.id.src_path.iter().any(|s| s == "*" || s == "**")
+                        || e.id.dst_path.iter().any(|s| s == "*" || s == "**");
+                    let filters = e
+                        .map
+                        .as_ref()
+                        .map(|sub| sub.filters.clone())
+                        .unwrap_or_default();
+                    out.push(Decl::Edge {
+                        range,
+                        value: v,
+                        scope: scope.clone(),
+                        src_path: e.id.src_path.clone(),
+                        dst_path: e.id.dst_path.clone(),
+                        src_arrow: e.id.src_arrow,
+                        dst_arrow: e.id.dst_arrow,
+                        is_glob,
+                        filters,
+                    });
+                }
+            }
+        }
+
+        let mut decls: Vec<Decl> = Vec::new();
+        let mut scope: Vec<String> = Vec::new();
+        walk(ir, &mut scope, &mut decls);
+        if decls.is_empty() {
+            return;
+        }
+
+        // Stable-sort by source range — ties keep insertion order, which is
+        // itself source order because `walk` traverses depth-first.
+        decls.sort_by(|a, b| {
+            let ra = match a {
+                Decl::Field { range, .. } | Decl::Edge { range, .. } => range,
+            };
+            let rb = match b {
+                Decl::Field { range, .. } | Decl::Edge { range, .. } => range,
+            };
+            d2_graph::range_cmp(ra, rb)
+        });
+
+        for decl in decls {
+            match decl {
+                Decl::Field {
+                    value,
+                    scope,
+                    pattern,
+                    is_unquoted,
+                    filters,
+                    ..
+                } => {
+                    self.apply_field_suspension(g, &scope, &pattern, is_unquoted, &filters, value);
+                }
+                Decl::Edge {
+                    value,
+                    scope,
+                    src_path,
+                    dst_path,
+                    src_arrow,
+                    dst_arrow,
+                    is_glob,
+                    filters,
+                    ..
+                } => {
+                    self.apply_edge_suspension(
+                        g, &scope, &src_path, &dst_path, src_arrow, dst_arrow, is_glob, &filters,
+                        value,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Locate the graph object corresponding to `scope` (a chain of
+    /// lowercase IR field names) and apply `value` to every matching
+    /// child named `pattern`. For glob patterns (`*`, `**`, `name*`) the
+    /// matching logic mirrors `expand_literal_star_globs` /
+    /// `expand_double_glob_globs`: `*` and `name*` hit direct siblings,
+    /// `**` hits every non-glob descendant. Filter lists further narrow
+    /// the set.
+    fn apply_field_suspension(
         &self,
         g: &mut Graph,
-        remove_ids: &std::collections::HashSet<ObjId>,
+        scope: &[String],
+        pattern: &str,
+        is_unquoted: bool,
+        filters: &[ir::Filter],
+        value: bool,
     ) {
+        let Some(scope_obj) = Self::resolve_scope_obj(g, scope) else {
+            return;
+        };
+        let glob_filters: Vec<d2_graph::GlobFilter> = filters
+            .iter()
+            .map(|f| d2_graph::GlobFilter {
+                attr: f.attr.clone(),
+                value: f.value.clone(),
+                negate: f.negate,
+            })
+            .collect();
+        let is_double = is_unquoted && pattern == "**";
+        let is_single = is_unquoted && pattern == "*";
+        let is_name_pattern = is_unquoted && pattern != "**" && pattern.contains('*');
+
+        if is_double {
+            let mut targets: Vec<ObjId> = Vec::new();
+            Self::collect_non_glob_descendants_excluding_all(g, scope_obj, &mut targets);
+            for t in targets {
+                if !Self::target_passes_filters(&g.objects[t], &glob_filters) {
+                    continue;
+                }
+                g.objects[t].suspended = Some(value);
+            }
+        } else if is_single || is_name_pattern {
+            let children: Vec<ObjId> = g.objects[scope_obj].children_array.clone();
+            for c in children {
+                let name = g.objects[c].id_val();
+                if name == "*" || name == "**" || name.contains('*') {
+                    continue;
+                }
+                if is_name_pattern && !name_matches_pattern(name, pattern) {
+                    continue;
+                }
+                if !Self::target_passes_filters(&g.objects[c], &glob_filters) {
+                    continue;
+                }
+                g.objects[c].suspended = Some(value);
+            }
+        } else {
+            // Plain field declaration (e.g. `foo: suspend`). The graph
+            // object was already created during compile_field_scoped.
+            let children: Vec<ObjId> = g.objects[scope_obj].children_array.clone();
+            for c in children {
+                let name = g.objects[c].id_val();
+                if name.eq_ignore_ascii_case(pattern) {
+                    g.objects[c].suspended = Some(value);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Walk every descendant (any depth) of `root` that is not itself a
+    /// glob placeholder. Unlike `collect_non_glob_descendants`, this
+    /// version is used outside template expansion so it doesn't need to
+    /// skip a specific template id.
+    fn collect_non_glob_descendants_excluding_all(g: &Graph, root: ObjId, out: &mut Vec<ObjId>) {
+        for &child in &g.objects[root].children_array {
+            let id = g.objects[child].id_val();
+            if id == "*" || id == "**" {
+                Self::collect_non_glob_descendants_excluding_all(g, child, out);
+                continue;
+            }
+            out.push(child);
+            Self::collect_non_glob_descendants_excluding_all(g, child, out);
+        }
+    }
+
+    /// Apply an edge-level suspension against every matching graph edge.
+    /// For glob edges (`(** -> foo)[*]`) we iterate every graph edge and
+    /// test path-match; for non-glob edges we locate by exact endpoints.
+    /// When `value == false` (unsuspend), we also lift suspension on the
+    /// edge's endpoints and their ancestors — mirrors Go d2ir behavior.
+    fn apply_edge_suspension(
+        &self,
+        g: &mut Graph,
+        _scope: &[String],
+        src_path: &[String],
+        dst_path: &[String],
+        src_arrow: bool,
+        dst_arrow: bool,
+        is_glob: bool,
+        _filters: &[ir::Filter],
+        value: bool,
+    ) {
+        let mut matches: Vec<usize> = Vec::new();
+        if is_glob {
+            let eid = ir::EdgeID {
+                src_path: src_path.to_vec(),
+                dst_path: dst_path.to_vec(),
+                src_arrow,
+                dst_arrow,
+                index: None,
+                glob: true,
+            };
+            for (i, e) in g.edges.iter().enumerate() {
+                // Build the path segments for each endpoint from the graph,
+                // split on `.`. We compare against `src_path`/`dst_path`
+                // via EdgeID::matches which supports `*`/`**` wildcards.
+                let src_segs = Self::obj_abs_segments(g, e.src);
+                let dst_segs = Self::obj_abs_segments(g, e.dst);
+                let cand = ir::EdgeID {
+                    src_path: src_segs,
+                    dst_path: dst_segs,
+                    src_arrow: e.src_arrow,
+                    dst_arrow: e.dst_arrow,
+                    index: None,
+                    glob: false,
+                };
+                if eid.matches(&cand) {
+                    matches.push(i);
+                }
+            }
+        } else {
+            for (i, e) in g.edges.iter().enumerate() {
+                let src_segs = Self::obj_abs_segments(g, e.src);
+                let dst_segs = Self::obj_abs_segments(g, e.dst);
+                if src_segs == src_path && dst_segs == dst_path {
+                    matches.push(i);
+                }
+            }
+        }
+        for i in matches {
+            g.edges[i].suspended = Some(value);
+        }
+    }
+
+    /// Return the unescaped name path for `id`, rooted under the graph
+    /// root. For root itself returns an empty vector.
+    fn obj_abs_segments(g: &Graph, id: ObjId) -> Vec<String> {
+        let mut segs: Vec<String> = Vec::new();
+        let mut cur = Some(id);
+        while let Some(i) = cur {
+            if i == g.root {
+                break;
+            }
+            segs.push(g.objects[i].id_val().to_owned());
+            cur = g.objects[i].parent;
+        }
+        segs.reverse();
+        segs
+    }
+
+    /// Follow a chain of IR scope names from the root graph object down
+    /// into its children, returning the leaf graph ObjId or `None` if
+    /// any segment cannot be resolved. Scope names are compared
+    /// case-insensitively via the graph's `ensure_child_of`/`id_val`
+    /// conventions.
+    fn resolve_scope_obj(g: &Graph, scope: &[String]) -> Option<ObjId> {
+        let mut cur = g.root;
+        for seg in scope {
+            let mut next: Option<ObjId> = None;
+            for &c in &g.objects[cur].children_array {
+                if g.objects[c].id_val().eq_ignore_ascii_case(seg) {
+                    next = Some(c);
+                    break;
+                }
+            }
+            cur = next?;
+        }
+        Some(cur)
+    }
+
+    /// Materialise `: suspend` / `: unsuspend` declarations by pruning
+    /// hidden objects and edges from the graph. Mirrors Go
+    /// d2ir.Map.removeSuspendedFields but operates at the graph level
+    /// because Rust d2-compiler expands glob templates there rather than
+    /// in IR. Called after `expand_*_globs` so that `**: suspend`
+    /// templates have already propagated their flag onto matched targets.
+    ///
+    /// Semantics:
+    /// - An object with `suspended == Some(true)` is removed together with
+    ///   its entire subtree, unless a later declaration (evaluated in
+    ///   template-application order) re-enabled it via `suspended=Some(false)`.
+    /// - An edge with `suspended == Some(true)` is removed.
+    /// - An edge with `suspended == Some(false)` also lifts suspension on
+    ///   its src, dst, and every ancestor — matching Go's behavior for
+    ///   `(x -> y)[0]: unsuspend` so that unsuspending an edge pulls its
+    ///   endpoints back into the graph.
+    fn apply_suspension(&self, g: &mut Graph) {
+        // First pass: edges unsuspending their endpoints. Collect the
+        // endpoint pairs before mutating to avoid aliasing g.edges /
+        // g.objects during iteration.
+        let unsuspend_endpoints: Vec<(ObjId, ObjId)> = g
+            .edges
+            .iter()
+            .filter(|e| e.suspended == Some(false))
+            .map(|e| (e.src, e.dst))
+            .collect();
+        for (src, dst) in unsuspend_endpoints {
+            Self::unsuspend_with_ancestors(g, src);
+            Self::unsuspend_with_ancestors(g, dst);
+        }
+
+        // Drop suspended edges.
+        g.edges.retain(|e| e.suspended != Some(true));
+
+        // Collect suspended objects (and their descendants).
+        let mut remove_ids = std::collections::HashSet::<ObjId>::new();
+        for id in 0..g.objects.len() {
+            if id == g.root {
+                continue;
+            }
+            if g.objects[id].suspended == Some(true) {
+                self.collect_descendants(g, id, &mut remove_ids);
+            }
+        }
+        if remove_ids.is_empty() {
+            return;
+        }
+
+        // Also drop edges whose src/dst is about to be removed. `compact_graph`
+        // already does this, but running the retain here keeps the semantics
+        // explicit and mirrors Go d2ir.Map.removeSuspendedFields which deletes
+        // from both sides of the tree.
+        g.edges
+            .retain(|e| !remove_ids.contains(&e.src) && !remove_ids.contains(&e.dst));
+
+        self.compact_graph(g, &remove_ids);
+    }
+
+    /// Walk up from `id` through `parent`, forcing `suspended=Some(false)`
+    /// on each node. Mirrors Go d2ir.compile.go's handler for `unsuspend`
+    /// on an edge: the endpoints and every ancestor get pulled back into
+    /// the graph even if an earlier `**: suspend` had hidden them.
+    fn unsuspend_with_ancestors(g: &mut Graph, id: ObjId) {
+        let mut cur = Some(id);
+        while let Some(i) = cur {
+            if i == g.root {
+                break;
+            }
+            g.objects[i].suspended = Some(false);
+            cur = g.objects[i].parent;
+        }
+    }
+
+    fn compact_graph(&self, g: &mut Graph, remove_ids: &std::collections::HashSet<ObjId>) {
         if remove_ids.is_empty() {
             return;
         }
@@ -1170,7 +1757,8 @@ impl Compiler {
         }
 
         g.root = old_to_new[g.root];
-        g.edges.retain(|e| old_to_new[e.src] != usize::MAX && old_to_new[e.dst] != usize::MAX);
+        g.edges
+            .retain(|e| old_to_new[e.src] != usize::MAX && old_to_new[e.dst] != usize::MAX);
         for e in &mut g.edges {
             e.src = old_to_new[e.src];
             e.dst = old_to_new[e.dst];
@@ -1480,8 +2068,25 @@ impl Compiler {
             return;
         }
 
-        // Regular field -> child object
-        let child = g.ensure_child_of(obj, &[f.name.clone()]);
+        // Regular field -> child object. `**` glob templates are kept
+        // distinct (one graph object per source occurrence) so each block's
+        // filters + attrs apply independently; see comment in
+        // d2-ir::ensure_field for the rationale.
+        let child = if f.name == "**" && f.name_is_unquoted {
+            g.new_child_of(obj, &f.name)
+        } else {
+            g.ensure_child_of(obj, &[f.name.clone()])
+        };
+
+        // Propagate the IR suspension state onto the graph object. A `None`
+        // on the IR side should not clear a previously-set value (e.g.
+        // assigned by an earlier glob pass on the same object), so only
+        // write when the IR carries an explicit flag. Mirrors Go's field-
+        // order: later declarations override earlier ones; a `: unsuspend`
+        // after `: suspend` wins.
+        if let Some(v) = f.suspended {
+            g.objects[child].suspended = Some(v);
+        }
 
         // Mirror Go d2compiler.compileField: copy the IR field's references
         // into d2graph.Object.References. Reference scope_obj tracks which
@@ -1530,9 +2135,9 @@ impl Compiler {
                 });
             }
             let child_scope = if g.objects[child].parent == Some(obj) {
-                child  // Normal: child owns the sub-map
+                child // Normal: child owns the sub-map
             } else {
-                obj    // Redirect: declaring scope is obj
+                obj // Redirect: declaring scope is obj
             };
             self.compile_map_scoped(g, child, child_scope, fmap);
         }
@@ -1670,6 +2275,16 @@ impl Compiler {
                 }
             }
             "class" => {
+                // The object's own `class:` declaration. Mirrors Go d2ir's
+                // composite-replacement semantics: a fresh class array
+                // replaces any previously inherited (glob-supplied) class
+                // values. Mark this as the explicit owner so subsequent
+                // glob template merges leave the list (and class-derived
+                // styles) alone.
+                if primary_str.is_some() || f.composite.is_some() {
+                    g.objects[obj].classes.clear();
+                    g.objects[obj].classes_explicit = true;
+                }
                 if let Some(val) = primary_str {
                     g.objects[obj].classes.push(val);
                 } else if let Some(ref comp) = f.composite {
@@ -1794,8 +2409,7 @@ impl Compiler {
             }
             let val = f.primary_string().unwrap_or_default();
             if keyword == "border-radius" {
-                g.edges[edge_idx].icon_style.border_radius =
-                    Some(ScalarValue { value: val });
+                g.edges[edge_idx].icon_style.border_radius = Some(ScalarValue { value: val });
             }
         }
     }
@@ -1870,6 +2484,14 @@ impl Compiler {
                 }
                 g.edges[edge_idx].language = language;
             }
+        }
+
+        // Propagate edge suspension state. Unsuspending is handled in a
+        // second pass (after glob edges expand into concrete edges) so that
+        // `(** -> foo)[*]: unsuspend` can correctly lift suspension on the
+        // final src/dst objects and their ancestors.
+        if let Some(v) = e.suspended {
+            g.edges[edge_idx].suspended = Some(v);
         }
 
         // Process edge map
@@ -2077,7 +2699,8 @@ impl Compiler {
                                         if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                                             ah.style.font_color = Some(sv);
                                         }
-                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead
+                                    {
                                         ah.style.font_color = Some(sv);
                                     }
                                 }
@@ -2146,9 +2769,6 @@ mod tests {
         compile("test.d2", input).expect("should compile without errors")
     }
 
-    fn compile_err(input: &str) -> CompileError {
-        compile("test.d2", input).expect_err("should produce compile error")
-    }
 
     #[test]
     fn test_compile_with_config_extracts_theme_overrides() {
@@ -2192,8 +2812,22 @@ y
 
         assert_eq!(g.objects.len(), 3);
         assert!(g.objects.iter().all(|o| o.id_val() != "*"));
-        assert_eq!(g.objects[1].style.multiple.as_ref().map(|v| v.value.as_str()), Some("true"));
-        assert_eq!(g.objects[2].style.multiple.as_ref().map(|v| v.value.as_str()), Some("true"));
+        assert_eq!(
+            g.objects[1]
+                .style
+                .multiple
+                .as_ref()
+                .map(|v| v.value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            g.objects[2]
+                .style
+                .multiple
+                .as_ref()
+                .map(|v| v.value.as_str()),
+            Some("true")
+        );
     }
 
     #[test]
@@ -2210,7 +2844,10 @@ container: {
         );
 
         let edge_ids: Vec<_> = g.edges.iter().map(|e| e.abs_id.as_str()).collect();
-        assert_eq!(edge_ids, vec!["container.(a -> sink)[0]", "container.(b -> sink)[0]"]);
+        assert_eq!(
+            edge_ids,
+            vec!["container.(a -> sink)[0]", "container.(b -> sink)[0]"]
+        );
         assert!(g.objects.iter().all(|o| o.id_val() != "*"));
     }
 

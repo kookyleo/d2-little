@@ -974,6 +974,7 @@ fn draw_connection(
     markers: &mut HashMap<String, ()>,
     id_to_shape: &HashMap<String, &d2_target::Shape>,
     inline_theme: Option<&d2_themes::ResolvedTheme>,
+    sketch_runner: Option<&d2_sketch::SketchRunner>,
 ) -> Result<String, String> {
     let mut label_mask = String::new();
 
@@ -990,7 +991,10 @@ fn draw_connection(
 
     write!(buf, "<g{}{}>", class_str, opacity_style).unwrap();
 
-    // Source arrowhead marker
+    // Source arrowhead marker.  Marker defs are emitted even in sketch mode
+    // (Go writes them unconditionally; only the path rendering branches on
+    // jsRunner).  The `marker-start`/`-end` attribute strings are reused
+    // only by the non-sketch branch below.
     let mut marker_start = String::new();
     if connection.src_arrow != d2_target::Arrowhead::None {
         let id = arrowhead_marker_id(diagram_hash, false, connection);
@@ -1089,6 +1093,15 @@ fn draw_connection(
         ""
     };
 
+    // Sketch mode: replace the marker arrowhead + straight path with
+    // rough-rendered path + separate sketched arrowheads.  Mirrors Go
+    // d2svg.go `if jsRunner != nil { d2sketch.Connection(...); d2sketch.Arrowheads(...) }`.
+    if let Some(sr) = sketch_runner {
+        let out = d2_sketch::connection(sr, connection, &path, &mask)?;
+        buf.push_str(&out);
+        let arrow_out = d2_sketch::arrowheads(sr, connection, &src_adj, &dst_adj)?;
+        buf.push_str(&arrow_out);
+    } else {
     // If connection is animated and bidirectional (both arrows or no arrows),
     // split the path at 50% and render two separate paths animating in
     // opposite directions.  Mirrors Go d2svg.go.
@@ -1138,6 +1151,7 @@ fn draw_connection(
         path_el.style = connection_css_style(connection);
         path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
         buf.push_str(&path_el.render());
+    }
     }
 
     // Connection label
@@ -1755,6 +1769,7 @@ fn draw_shape(
     diagram_hash: &str,
     target_shape: &d2_target::Shape,
     inline_theme: Option<&d2_themes::ResolvedTheme>,
+    sketch_runner: Option<&d2_sketch::SketchRunner>,
 ) -> Result<String, String> {
     let mut label_mask = String::new();
     let mut closing_tag = "</g>".to_owned();
@@ -1858,16 +1873,20 @@ fn draw_shape(
                         inline_theme,
                     ));
                 }
-                buf.push_str(&render_double_oval(
-                    &tl,
-                    width,
-                    height,
-                    &fill,
-                    &target_shape.fill_pattern,
-                    &stroke,
-                    &style,
-                    inline_theme,
-                ));
+                if let Some(sr) = sketch_runner {
+                    buf.push_str(&d2_sketch::double_oval(sr, target_shape, diagram_hash)?);
+                } else {
+                    buf.push_str(&render_double_oval(
+                        &tl,
+                        width,
+                        height,
+                        &fill,
+                        &target_shape.fill_pattern,
+                        &stroke,
+                        &style,
+                        inline_theme,
+                    ));
+                }
             } else {
                 if let Some(ref mtl) = multiple_tl {
                     buf.push_str(&render_oval(
@@ -1881,16 +1900,20 @@ fn draw_shape(
                         inline_theme,
                     ));
                 }
-                buf.push_str(&render_oval(
-                    &tl,
-                    width,
-                    height,
-                    &fill,
-                    &target_shape.fill_pattern,
-                    &stroke,
-                    &style,
-                    inline_theme,
-                ));
+                if let Some(sr) = sketch_runner {
+                    buf.push_str(&d2_sketch::oval(sr, target_shape, diagram_hash)?);
+                } else {
+                    buf.push_str(&render_oval(
+                        &tl,
+                        width,
+                        height,
+                        &fill,
+                        &target_shape.fill_pattern,
+                        &stroke,
+                        &style,
+                        inline_theme,
+                    ));
+                }
             }
         }
         d2_target::SHAPE_IMAGE => {
@@ -1938,6 +1961,9 @@ fn draw_shape(
                     el.rx = Some(border_radius);
                     buf.push_str(&el.render());
                 }
+                if let Some(sr) = sketch_runner {
+                    buf.push_str(&d2_sketch::rect(sr, target_shape, diagram_hash)?);
+                } else {
                 let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
                 el.x = Some(tl.x);
                 el.y = Some(tl.y);
@@ -1957,6 +1983,7 @@ fn draw_shape(
                 }
 
                 buf.push_str(&el.render());
+                }
             } else {
                 // Double border
                 if let Some(ref mtl) = multiple_tl {
@@ -1983,6 +2010,9 @@ fn draw_shape(
                     buf.push_str(&el2.render());
                 }
 
+                if let Some(sr) = sketch_runner {
+                    buf.push_str(&d2_sketch::double_rect(sr, target_shape, diagram_hash)?);
+                } else {
                 let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
                 el.x = Some(tl.x);
                 el.y = Some(tl.y);
@@ -2005,6 +2035,7 @@ fn draw_shape(
                 el2.style = style.clone();
                 el2.rx = Some(border_radius);
                 buf.push_str(&el2.render());
+                }
             }
         }
         d2_target::SHAPE_HEXAGON => {
@@ -2027,14 +2058,19 @@ fn draw_shape(
                     }
                 }
 
-                let mut el = d2_themes::ThemableElement::new("path", inline_theme);
-                el.fill = fill.clone();
-                el.fill_pattern = target_shape.fill_pattern.clone();
-                el.stroke = stroke.clone();
-                el.style = style.clone();
-                for pd in s.get_svg_path_data() {
-                    el.d = pd;
-                    buf.push_str(&el.render());
+                if let Some(sr) = sketch_runner {
+                    let paths = s.get_svg_path_data();
+                    buf.push_str(&d2_sketch::paths(sr, target_shape, diagram_hash, &paths)?);
+                } else {
+                    let mut el = d2_themes::ThemableElement::new("path", inline_theme);
+                    el.fill = fill.clone();
+                    el.fill_pattern = target_shape.fill_pattern.clone();
+                    el.stroke = stroke.clone();
+                    el.style = style.clone();
+                    for pd in s.get_svg_path_data() {
+                        el.d = pd;
+                        buf.push_str(&el.render());
+                    }
                 }
             }
         }
@@ -2045,7 +2081,7 @@ fn draw_shape(
             draw_class(buf, diagram_hash, target_shape, inline_theme);
             let bbox = d2_geo::Box2D::new(tl, width, height);
             let s = d2_shape::Shape::new(shape_type, bbox);
-            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
+            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s)?;
             buf.push_str("</g>");
             buf.push_str(&closing_tag);
             return Ok(label_mask);
@@ -2054,7 +2090,7 @@ fn draw_shape(
             draw_table(buf, diagram_hash, target_shape, inline_theme);
             let bbox = d2_geo::Box2D::new(tl, width, height);
             let s = d2_shape::Shape::new(shape_type, bbox);
-            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s);
+            add_appendix_items(appendix_buf, diagram_hash, target_shape, &s)?;
             buf.push_str("</g>");
             buf.push_str(&closing_tag);
             return Ok(label_mask);
@@ -2089,22 +2125,27 @@ fn draw_shape(
                 }
             }
 
-            let mut el = d2_themes::ThemableElement::new("path", inline_theme);
-            el.fill = fill.clone();
-            el.fill_pattern = target_shape.fill_pattern.clone();
-            el.stroke = stroke.clone();
-            el.style = style.clone();
+            if let Some(sr) = sketch_runner {
+                let paths = s.get_svg_path_data();
+                buf.push_str(&d2_sketch::paths(sr, target_shape, diagram_hash, &paths)?);
+            } else {
+                let mut el = d2_themes::ThemableElement::new("path", inline_theme);
+                el.fill = fill.clone();
+                el.fill_pattern = target_shape.fill_pattern.clone();
+                el.stroke = stroke.clone();
+                el.style = style.clone();
 
-            if !target_shape.text.label.is_empty() {
-                let lp = d2_label::Position::from_string(&target_shape.label_position);
-                if lp.is_border() {
-                    el.mask = format!("url(#{})", diagram_hash);
+                if !target_shape.text.label.is_empty() {
+                    let lp = d2_label::Position::from_string(&target_shape.label_position);
+                    if lp.is_border() {
+                        el.mask = format!("url(#{})", diagram_hash);
+                    }
                 }
-            }
 
-            for pd in s.get_svg_path_data() {
-                el.d = pd;
-                buf.push_str(&el.render());
+                for pd in s.get_svg_path_data() {
+                    el.d = pd;
+                    buf.push_str(&el.render());
+                }
             }
         }
     }
@@ -3702,7 +3743,7 @@ fn scoped_markdown_css(diagram_hash: &str) -> String {
 
 fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
     let (tl, br) = diagram.bounding_box();
-    let mut left = tl.x - pad;
+    let left = tl.x - pad;
     let mut top = tl.y - pad;
     let mut width = br.x - tl.x + pad * 2;
     let mut height = br.y - tl.y + pad * 2;
@@ -3730,7 +3771,6 @@ fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
                 if top + height < legend_bottom {
                     height = legend_bottom - top + pad / 2;
                 }
-                let _ = left; // silence if statement below never needs left
             }
         }
     }
@@ -3987,7 +4027,7 @@ fn render_legend_shape_icon(
 
     let mut inner = String::new();
     let mut appendix = String::new();
-    draw_shape(&mut inner, &mut appendix, diagram_hash, &icon_shape, theme)?;
+    draw_shape(&mut inner, &mut appendix, diagram_hash, &icon_shape, theme, None)?;
     final_buf.push_str(&inner);
     final_buf.push_str("</g>");
     Ok(final_buf)
@@ -4046,6 +4086,7 @@ fn render_legend_connection_icon(
         &mut markers,
         &id_to_shape,
         theme,
+        None,
     )?;
     final_buf.push_str(&inner);
     final_buf.push_str("</g>");
@@ -4547,6 +4588,22 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
     };
     let inline_theme = inline_theme.as_ref();
 
+    // Sketch runner: created once per render so rough.js + setup.js only load
+    // once per diagram.  When sketch mode is off or the diagram config didn't
+    // request it, leave `None` so the normal rendering path runs.
+    let sketch_enabled = opts.sketch == Some(true)
+        || diagram
+            .config
+            .as_ref()
+            .and_then(|c| c.sketch)
+            .unwrap_or(false);
+    let sketch_runner = if sketch_enabled {
+        Some(d2_sketch::SketchRunner::new()?)
+    } else {
+        None
+    };
+    let sketch_runner = sketch_runner.as_ref();
+
     // Draw objects
     for obj in &all_objects {
         match obj {
@@ -4558,13 +4615,21 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
                     &mut markers,
                     &id_to_shape,
                     inline_theme,
+                    sketch_runner,
                 )?;
                 if !lm.is_empty() {
                     label_masks.push(lm);
                 }
             }
             DiagramObject::Shape(s) => {
-                let lm = draw_shape(&mut buf, &mut appendix_buf, &diagram_hash, s, inline_theme)?;
+                let lm = draw_shape(
+                    &mut buf,
+                    &mut appendix_buf,
+                    &diagram_hash,
+                    s,
+                    inline_theme,
+                    sketch_runner,
+                )?;
                 if !lm.is_empty() {
                     label_masks.push(lm);
                 }
@@ -4601,15 +4666,23 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
         // Themes with `special_rules.mono` set `font_family` to
         // `SourceCodePro`, so honouring this value keeps the embedded font
         // subset aligned with how Go's exporter resolves mono themes.
-        let parse_family = |name: Option<&String>, default: d2_fonts::FontFamily| -> d2_fonts::FontFamily {
-            match name.map(|s| s.as_str()) {
-                Some("SourceCodePro") => d2_fonts::FontFamily::SourceCodePro,
-                Some("SourceSansPro") => d2_fonts::FontFamily::SourceSansPro,
-                _ => default,
-            }
-        };
-        let font_family = parse_family(diagram.font_family.as_ref(), d2_fonts::FontFamily::SourceSansPro);
-        let mono_family = parse_family(diagram.mono_font_family.as_ref(), d2_fonts::FontFamily::SourceCodePro);
+        let parse_family =
+            |name: Option<&String>, default: d2_fonts::FontFamily| -> d2_fonts::FontFamily {
+                match name.map(|s| s.as_str()) {
+                    Some("SourceCodePro") => d2_fonts::FontFamily::SourceCodePro,
+                    Some("SourceSansPro") => d2_fonts::FontFamily::SourceSansPro,
+                    Some("HandDrawn") => d2_fonts::FontFamily::HandDrawn,
+                    _ => default,
+                }
+            };
+        let font_family = parse_family(
+            diagram.font_family.as_ref(),
+            d2_fonts::FontFamily::SourceSansPro,
+        );
+        let mono_family = parse_family(
+            diagram.mono_font_family.as_ref(),
+            d2_fonts::FontFamily::SourceCodePro,
+        );
 
         // Collect corpus (all text in diagram)
         let corpus = collect_corpus(diagram);
@@ -4652,6 +4725,13 @@ pub fn render(diagram: &d2_target::Diagram, opts: &RenderOpts) -> Result<Vec<u8>
         &diagram_hash,
         &diagram.root.fill_pattern,
     );
+
+    // Sketch-mode streak fill-pattern <defs>.  Only emitted if sketch is
+    // enabled — matches Go d2svg.go `if jsRunner != nil { DefineFillPatterns }`.
+    // `buf` is inspected to decide which streak variants to include.
+    if sketch_enabled {
+        d2_sketch::define_fill_patterns(&mut upper_buf, &diagram_hash);
+    }
 
     // Background element
     let half_sw = (diagram.root.stroke_width as f64 / 2.0).ceil() as i32;

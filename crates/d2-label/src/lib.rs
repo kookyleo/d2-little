@@ -1,4 +1,4 @@
-use d2_geo::{self, Point, RouteExt};
+use d2_geo::{self, Point};
 
 /// Percentage locations where labels are placed along a connection.
 pub const LEFT_LABEL_POSITION: f64 = 1.0 / 4.0;

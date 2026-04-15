@@ -22,24 +22,20 @@ impl Lexer for BashLexer {
 
 fn build_bash_lexer() -> StateMachineLexer {
     let bash_builtins = &[
-        "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command",
-        "compgen", "complete", "declare", "dirs", "disown", "echo", "enable",
-        "eval", "exec", "exit", "export", "false", "fc", "fg", "getopts",
-        "hash", "help", "history", "jobs", "kill", "let", "local", "logout",
-        "popd", "printf", "pushd", "pwd", "read", "readonly", "set", "shift",
-        "shopt", "source", "suspend", "test", "time", "times", "trap", "true",
-        "type", "typeset", "ulimit", "umask", "unalias", "unset", "wait",
+        "alias", "bg", "bind", "break", "builtin", "caller", "cd", "command", "compgen",
+        "complete", "declare", "dirs", "disown", "echo", "enable", "eval", "exec", "exit",
+        "export", "false", "fc", "fg", "getopts", "hash", "help", "history", "jobs", "kill", "let",
+        "local", "logout", "popd", "printf", "pushd", "pwd", "read", "readonly", "set", "shift",
+        "shopt", "source", "suspend", "test", "time", "times", "trap", "true", "type", "typeset",
+        "ulimit", "umask", "unalias", "unset", "wait",
     ];
-    let builtins_pattern = words("", r"(?=[\s)`])", bash_builtins);
+    let _builtins_pattern = words("", r"(?=[\s)`])", bash_builtins);
 
     let bash_keywords = &[
-        "if", "fi", "else", "while", "do", "done", "for", "then", "return",
-        "function", "case", "select", "continue", "until", "esac", "elif",
+        "if", "fi", "else", "while", "do", "done", "for", "then", "return", "function", "case",
+        "select", "continue", "until", "esac", "elif",
     ];
-    let keywords_pattern = format!(
-        r"\b({})\b",
-        bash_keywords.join("|")
-    );
+    let _keywords_pattern = format!(r"\b({})\b", bash_keywords.join("|"));
 
     // State: basic
     let basic_rules = vec![
@@ -70,7 +66,11 @@ fn build_bash_lexer() -> StateMachineLexer {
         },
         Rule::ByGroups {
             pattern: re(r"(\b\w+)(\s*)(\+?=)"),
-            group_types: vec![TokenType::NameVariable, TokenType::Text, TokenType::Operator],
+            group_types: vec![
+                TokenType::NameVariable,
+                TokenType::Text,
+                TokenType::Operator,
+            ],
             action: Action::None,
         },
         Rule::Simple {
@@ -302,15 +302,42 @@ fn build_bash_lexer() -> StateMachineLexer {
 
     StateMachineLexer {
         states: vec![
-            State { name: "root".to_string(), rules: root_rules },
-            State { name: "basic".to_string(), rules: basic_rules },
-            State { name: "data".to_string(), rules: data_rules },
-            State { name: "interp".to_string(), rules: interp_rules },
-            State { name: "string".to_string(), rules: string_rules },
-            State { name: "backticks".to_string(), rules: backtick_rules },
-            State { name: "paren".to_string(), rules: paren_rules },
-            State { name: "math".to_string(), rules: math_rules },
-            State { name: "curly".to_string(), rules: curly_rules },
+            State {
+                name: "root".to_string(),
+                rules: root_rules,
+            },
+            State {
+                name: "basic".to_string(),
+                rules: basic_rules,
+            },
+            State {
+                name: "data".to_string(),
+                rules: data_rules,
+            },
+            State {
+                name: "interp".to_string(),
+                rules: interp_rules,
+            },
+            State {
+                name: "string".to_string(),
+                rules: string_rules,
+            },
+            State {
+                name: "backticks".to_string(),
+                rules: backtick_rules,
+            },
+            State {
+                name: "paren".to_string(),
+                rules: paren_rules,
+            },
+            State {
+                name: "math".to_string(),
+                rules: math_rules,
+            },
+            State {
+                name: "curly".to_string(),
+                rules: curly_rules,
+            },
         ],
         ensure_nl: false, // bash.xml doesn't set EnsureNL
     }

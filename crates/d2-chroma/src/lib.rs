@@ -4,14 +4,14 @@
 //! with lexer definitions for Go and Bash, plus github and catppuccin-mocha
 //! theme styles for SVG output.
 
+mod bash_lexer;
 mod engine;
 mod go_lexer;
-mod bash_lexer;
 mod python_lexer;
 mod themes;
 
 pub use engine::{Token, TokenType};
-pub use themes::{Theme, StyleEntry};
+pub use themes::{StyleEntry, Theme};
 
 /// Tokenize source code using the given language name.
 /// Falls back to plain-text tokenization for unsupported languages (like
@@ -101,7 +101,8 @@ pub fn svg_escape(s: &str) -> String {
 /// the internal double-space artifact from string replacement.
 pub fn style_attr(theme: &Theme, tt: TokenType) -> String {
     // Look up style: try exact type, then subcategory, then category
-    let entry = theme.get(tt)
+    let entry = theme
+        .get(tt)
         .or_else(|| theme.get(tt.sub_category()))
         .or_else(|| theme.get(tt.category()));
 
@@ -179,9 +180,10 @@ mod tests {
     #[test]
     fn test_split_into_lines_single_multiline_token() {
         // Single token spanning two lines
-        let tokens = vec![
-            Token { token_type: TokenType::CommentSingle, value: "// line1\n// line2\n".to_string() },
-        ];
+        let tokens = vec![Token {
+            token_type: TokenType::CommentSingle,
+            value: "// line1\n// line2\n".to_string(),
+        }];
         let lines = split_into_lines(&tokens);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].len(), 1);
@@ -194,8 +196,14 @@ mod tests {
     fn test_split_into_lines_separate_tokens() {
         // Two separate tokens, each ending with \n (like chroma Go output)
         let tokens = vec![
-            Token { token_type: TokenType::CommentSingle, value: "// line1\n".to_string() },
-            Token { token_type: TokenType::CommentSingle, value: "// line2\n".to_string() },
+            Token {
+                token_type: TokenType::CommentSingle,
+                value: "// line1\n".to_string(),
+            },
+            Token {
+                token_type: TokenType::CommentSingle,
+                value: "// line2\n".to_string(),
+            },
         ];
         let lines = split_into_lines(&tokens);
         assert_eq!(lines.len(), 2);

@@ -22,8 +22,6 @@ const DEFAULT_SHAPE_SIZE: f64 = 100.0;
 const MIN_SHAPE_SIZE: f64 = 5.0;
 /// Padding added around label text inside a shape (Go d2graph.INNER_LABEL_PADDING = 5).
 const INNER_LABEL_PADDING: f64 = 5.0;
-/// Default shape padding (matches Go lib/shape baseShape.defaultPadding = 40).
-const DEFAULT_SHAPE_PADDING: f64 = 40.0;
 
 fn has_none_text_transform(style: &d2_graph::Style) -> bool {
     style
@@ -165,7 +163,7 @@ pub fn compile(
 
     // Step 2-5: recursively compile graph (theme, dimensions, layout, export)
     let mut ruler = d2_textmeasure::Ruler::new().map_err(|e| format!("ruler init: {}", e))?;
-    let mut diagram = compile_graph(&mut g, theme_id, &mut ruler)?;
+    let mut diagram = compile_graph(&mut g, theme_id, sketch, &mut ruler)?;
 
     // Match Go d2lib.Compile: copy selected render options back into
     // diagram.Config so the diagram hash (used for CSS scoping) accounts for
@@ -233,6 +231,7 @@ pub fn compile(
 fn compile_graph(
     g: &mut Graph,
     theme_id: i64,
+    sketch: bool,
     ruler: &mut d2_textmeasure::Ruler,
 ) -> Result<d2_target::Diagram, String> {
     // Apply theme
@@ -241,27 +240,43 @@ fn compile_graph(
     }
 
     if g.objects.len() > 1 || !g.edges.is_empty() {
-        // Set dimensions
-        set_dimensions(g, ruler)?;
+        // Set dimensions. When sketch is on, Go sets compileOpts.FontFamily =
+        // HandDrawn which flows into the ruler defaults; mirror here.
+        set_dimensions_with_font(
+            g,
+            ruler,
+            if sketch {
+                Some(d2_fonts::FontFamily::HandDrawn)
+            } else {
+                None
+            },
+        )?;
 
         // Layout with nested diagram support
         layout_nested(g)?;
     }
 
-    // Export
-    let mut diagram = d2_exporter::export(g, None, None)?;
+    // Export: pass sketch-selected font family so diagram.fontFamily matches
+    // Go's "HandDrawn" emission and the font embedding pipeline subsets
+    // FuzzyBubbles instead of SourceSansPro.
+    let font_family = if sketch {
+        Some(d2_fonts::FontFamily::HandDrawn)
+    } else {
+        None
+    };
+    let mut diagram = d2_exporter::export(g, font_family, None)?;
 
     // Recursively compile nested boards
     for layer in &mut g.layers {
-        let ld = compile_graph(layer, theme_id, ruler)?;
+        let ld = compile_graph(layer, theme_id, sketch, ruler)?;
         diagram.layers.push(ld);
     }
     for scenario in &mut g.scenarios {
-        let sd = compile_graph(scenario, theme_id, ruler)?;
+        let sd = compile_graph(scenario, theme_id, sketch, ruler)?;
         diagram.scenarios.push(sd);
     }
     for step in &mut g.steps {
-        let sd = compile_graph(step, theme_id, ruler)?;
+        let sd = compile_graph(step, theme_id, sketch, ruler)?;
         diagram.steps.push(sd);
     }
 
@@ -290,7 +305,7 @@ struct SubObjResult {
 struct NestedResult {
     container_id: ObjId,
     obj_results: HashMap<ObjId, SubObjResult>,
-    edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)>, // (route, label_position, z_index)
+    edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32, bool)>, // (route, label_position, z_index, is_curve)
     new_edges: Vec<d2_graph::Edge>,
     container_width: f64,
     container_height: f64,
@@ -302,14 +317,58 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
     let mut sub_g = Graph::new();
     sub_g.root_level = g.objects[container_id].level(g);
 
-    let mut root_copy = g.objects[container_id].clone();
-    root_copy.parent = None;
-    root_copy.children.clear();
-    root_copy.children_array.clear();
-    sub_g.objects[sub_g.root] = root_copy;
+    // Mirror Go LayoutNested + ExtractSubgraph: each nested graph is laid out
+    // with its root at (0,0). Reset positions on the COPIED objects below so
+    // a re-extraction pass (e.g. seq_containers re-running after a grid
+    // pre-layout has already shifted descendants into main-graph coordinates)
+    // doesn't see stale absolute positions and double-apply offsets when
+    // d2_grid::layout's `inner_tl + padding.left` shift uses bbox.top_left.
+    // We do this AFTER the BFS copy below by explicitly resetting in sub_g.
+
+    // Mirror Go `ExtractSubgraph(container, includeSelf=true)`: for a plain
+    // (non-grid, non-sequence) container, insert a synthetic "virtual root"
+    // above the container so the container itself becomes a compound-parent
+    // node in dagre and gets shrunk via removeBorderNodes. Grid/sequence
+    // containers keep the legacy semantics (root == container) because
+    // d2_grid / d2_sequence layout special-cases the root and changing the
+    // hierarchy breaks their size / position calculations.
+    let is_grid = g.objects[container_id].is_grid_diagram();
+    let is_seq = g.objects[container_id].is_sequence_diagram();
+    let use_virtual_root = !is_grid && !is_seq;
 
     let mut id_map: HashMap<ObjId, ObjId> = HashMap::new();
-    id_map.insert(container_id, sub_g.root);
+
+    let container_sub_id: ObjId = if use_virtual_root {
+        // sub_g.root is the scaffold virtual root; add container as its child.
+        sub_g.root_level = sub_g.root_level.saturating_sub(1);
+        // Mirror Go ExtractSubgraph (line 379): nestedGraph.Root.Attributes =
+        // container.Attributes. The root and the contained container share
+        // attributes so that layout passes (e.g. dagre) which read direction
+        // off the root see the container's direction. Without this, a
+        // container with `direction: right` placed inside a grid cell loses
+        // its direction when laid out in the temporary subgraph.
+        sub_g.objects[sub_g.root].direction = g.objects[container_id].direction.clone();
+        let container_sub_id = sub_g.objects.len();
+        let mut container_copy = g.objects[container_id].clone();
+        container_copy.parent = Some(sub_g.root);
+        container_copy.children.clear();
+        container_copy.children_array.clear();
+        sub_g.objects.push(container_copy);
+        sub_g.objects[sub_g.root]
+            .children_array
+            .push(container_sub_id);
+        sub_g.objects[sub_g.root].children.push(container_sub_id);
+        id_map.insert(container_id, container_sub_id);
+        container_sub_id
+    } else {
+        let mut root_copy = g.objects[container_id].clone();
+        root_copy.parent = None;
+        root_copy.children.clear();
+        root_copy.children_array.clear();
+        sub_g.objects[sub_g.root] = root_copy;
+        id_map.insert(container_id, sub_g.root);
+        sub_g.root
+    };
 
     let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
     let mut queue: std::collections::VecDeque<ObjId> = children.iter().copied().collect();
@@ -322,11 +381,11 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
         new_obj.children_array.clear();
 
         let parent_main_id = obj.parent.unwrap_or(container_id);
-        new_obj.parent = Some(*id_map.get(&parent_main_id).unwrap_or(&sub_g.root));
+        new_obj.parent = Some(*id_map.get(&parent_main_id).unwrap_or(&container_sub_id));
         id_map.insert(obj_id, new_id);
         sub_g.objects.push(new_obj);
 
-        let parent_sub_id = *id_map.get(&parent_main_id).unwrap_or(&sub_g.root);
+        let parent_sub_id = *id_map.get(&parent_main_id).unwrap_or(&container_sub_id);
         sub_g.objects[parent_sub_id].children.push(new_id);
         sub_g.objects[parent_sub_id].children_array.push(new_id);
 
@@ -341,6 +400,20 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
                 r.scope_obj = id_map.get(&scope).copied();
             }
         }
+    }
+
+    // Reset top_left to (0,0) for every object in sub_g BEFORE laying out.
+    // Mirror Go LayoutNested + ExtractSubgraph semantics: each nested graph
+    // is laid out fresh with all objects at (0,0). When this function is
+    // called a second time on a container whose descendants were already
+    // moved by an earlier pre-layout pass (e.g. a sequence container nested
+    // inside a grid cell), passing stale absolute positions to d2_grid::layout
+    // causes its `inner_tl + padding.left` shift to use the wrong bbox origin
+    // and accumulate the offset twice. Box state is also reset so any
+    // intermediate `update_box` calls before the layout uses fresh bounds.
+    for obj in sub_g.objects.iter_mut() {
+        obj.top_left = Point::new(0.0, 0.0);
+        obj.box_ = d2_geo::Box2D::new(Point::new(0.0, 0.0), obj.width, obj.height);
     }
 
     let mut edge_map: HashMap<usize, usize> = HashMap::new();
@@ -360,19 +433,37 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
 
     layout_nested(&mut sub_g)?;
 
-    // For non-grid, non-sequence containers, dagre's fit_container_padding
-    // does not size the root container (it only walks `root.ChildrenArray`).
-    // Mirror Go `LayoutNested` line 227 `FitToGraph(curr, nestedGraph, ...)`
-    // by growing the root to enclose its children + DEFAULT_PADDING and
-    // shifting the children so they sit inside the new root box. Must run
-    // BEFORE we snapshot obj_results so callers see post-shift positions.
-    {
-        let root_obj = &sub_g.objects[sub_g.root];
-        let needs_fit = !root_obj.is_grid_diagram()
-            && !root_obj.is_sequence_diagram()
-            && !sub_g.objects[sub_g.root].children_array.is_empty();
-        if needs_fit {
-            fit_root_to_children(&mut sub_g);
+    // Virtual-root path: the container was a compound parent in dagre and has
+    // already been sized by removeBorderNodes. Legacy path (grid/sequence
+    // container as root): grid/sequence layout already sized the root, so no
+    // post-layout fitting is needed for either branch.
+    if use_virtual_root {
+        // Mirrors Go's `curr.TopLeft = geo.NewPoint(0, 0)` after FitToGraph:
+        // shift the container + all descendants + contained edge routes so
+        // container's top_left sits at (0,0). Downstream callers apply the
+        // container's outer (dagre-computed) dx,dy, which must be relative
+        // to (0,0) of the subgraph.
+        let container_tl = sub_g.objects[container_sub_id].top_left;
+        let dx = -container_tl.x;
+        let dy = -container_tl.y;
+        if dx != 0.0 || dy != 0.0 {
+            // Shift container and every descendant transitively.
+            move_obj_with_descendants_and_boxes(&mut sub_g, container_sub_id, dx, dy);
+            // Shift edge routes whose endpoints live within container's subtree.
+            for ei in 0..sub_g.edges.len() {
+                if sub_g.edges[ei].route.is_empty() {
+                    continue;
+                }
+                let src = sub_g.edges[ei].src;
+                let dst = sub_g.edges[ei].dst;
+                let src_in = src == container_sub_id
+                    || sub_g.objects[src].is_descendant_of(src, container_sub_id, &sub_g);
+                let dst_in = dst == container_sub_id
+                    || sub_g.objects[dst].is_descendant_of(dst, container_sub_id, &sub_g);
+                if src_in && dst_in {
+                    sub_g.edges[ei].move_route(dx, dy);
+                }
+            }
         }
     }
 
@@ -399,7 +490,7 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
         );
     }
 
-    let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32)> = HashMap::new();
+    let mut edge_routes: HashMap<usize, (Vec<Point>, Option<String>, i32, bool)> = HashMap::new();
     let mapped_sub_indices: HashSet<usize> = edge_map.values().copied().collect();
     for (&main_ei, &sub_ei) in &edge_map {
         let sub_edge = &sub_g.edges[sub_ei];
@@ -409,6 +500,7 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
                 sub_edge.route.clone(),
                 sub_edge.label_position.clone(),
                 sub_edge.z_index,
+                sub_edge.is_curve,
             ),
         );
     }
@@ -431,7 +523,7 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
         }
     }
 
-    let root = &sub_g.objects[sub_g.root];
+    let root = &sub_g.objects[container_sub_id];
     Ok(NestedResult {
         container_id,
         obj_results,
@@ -442,64 +534,6 @@ fn layout_container_as_subgraph(g: &Graph, container_id: ObjId) -> Result<Nested
         container_label_position: root.label_position.clone(),
         container_icon_position: root.icon_position.clone(),
     })
-}
-
-/// Grow the root container so its bounding box encloses all direct children
-/// plus DEFAULT_PADDING. Children are shifted so they lie inside the new box
-/// starting at (pad_left, pad_top); root.top_left is reset to (0, 0).
-/// Mirrors Go `LayoutNested -> FitToGraph` for non-grid/non-seq containers.
-fn fit_root_to_children(g: &mut Graph) {
-    const DEFAULT_PADDING: f64 = 30.0;
-    let root = g.root;
-    let children: Vec<ObjId> = g.objects[root].children_array.clone();
-    if children.is_empty() {
-        return;
-    }
-    // Padding from container's own spacing (label/icon overhead) clamped to default.
-    let (_, own_pad) = g.objects[root].spacing();
-    let pad_top = own_pad.top.max(DEFAULT_PADDING);
-    let pad_bottom = own_pad.bottom.max(DEFAULT_PADDING);
-    let pad_left = own_pad.left.max(DEFAULT_PADDING);
-    let pad_right = own_pad.right.max(DEFAULT_PADDING);
-
-    let mut tl_x = f64::INFINITY;
-    let mut tl_y = f64::INFINITY;
-    let mut br_x = f64::NEG_INFINITY;
-    let mut br_y = f64::NEG_INFINITY;
-    for &cid in &children {
-        let c = &g.objects[cid];
-        let (margin, _) = c.spacing();
-        tl_x = tl_x.min(c.top_left.x - margin.left.max(pad_left));
-        tl_y = tl_y.min(c.top_left.y - margin.top.max(pad_top));
-        br_x = br_x.max(c.top_left.x + c.width + margin.right.max(pad_right));
-        br_y = br_y.max(c.top_left.y + c.height + margin.bottom.max(pad_bottom));
-    }
-    if !tl_x.is_finite() {
-        return;
-    }
-    let new_w = (br_x - tl_x).max(g.objects[root].width);
-    let new_h = (br_y - tl_y).max(g.objects[root].height);
-    // Shift descendants so the inner bbox starts at (0, 0) of the new root.
-    let dx = -tl_x;
-    let dy = -tl_y;
-    if dx != 0.0 || dy != 0.0 {
-        for &cid in &children {
-            move_obj_with_descendants_and_boxes(g, cid, dx, dy);
-        }
-        // Move edge routes contained in this subgraph.
-        for ei in 0..g.edges.len() {
-            let route_in = !g.edges[ei].route.is_empty();
-            let src_in = g.objects[g.edges[ei].src].is_descendant_of(g.edges[ei].src, root, g);
-            let dst_in = g.objects[g.edges[ei].dst].is_descendant_of(g.edges[ei].dst, root, g);
-            if route_in && src_in && dst_in {
-                g.edges[ei].move_route(dx, dy);
-            }
-        }
-    }
-    g.objects[root].width = new_w;
-    g.objects[root].height = new_h;
-    g.objects[root].top_left = Point::new(0.0, 0.0);
-    g.objects[root].update_box();
 }
 
 fn apply_nested_object_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
@@ -519,7 +553,23 @@ fn apply_nested_object_results(g: &mut Graph, result: &NestedResult, dx: f64, dy
 }
 
 fn apply_nested_edge_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
-    for (&ei, (route, label_pos, z_index)) in &result.edge_routes {
+    apply_nested_edge_routes_only(g, result, dx, dy);
+
+    for mut edge in result.new_edges.clone() {
+        for p in &mut edge.route {
+            p.x += dx;
+            p.y += dy;
+        }
+        g.edges.push(edge);
+    }
+}
+
+/// Like [`apply_nested_edge_results`] but only updates existing edges'
+/// routes/flags. Skips re-injecting `new_edges` (e.g. sequence-diagram
+/// lifelines) so it is safe to call during the grid pre-layout pass before
+/// the outer layout has had a chance to process those synthetic edges.
+fn apply_nested_edge_routes_only(g: &mut Graph, result: &NestedResult, dx: f64, dy: f64) {
+    for (&ei, (route, label_pos, z_index, is_curve)) in &result.edge_routes {
         let edge = &mut g.edges[ei];
         edge.route = route
             .iter()
@@ -529,14 +579,7 @@ fn apply_nested_edge_results(g: &mut Graph, result: &NestedResult, dx: f64, dy: 
             edge.label_position = Some(pos.clone());
         }
         edge.z_index = *z_index;
-    }
-
-    for mut edge in result.new_edges.clone() {
-        for p in &mut edge.route {
-            p.x += dx;
-            p.y += dy;
-        }
-        g.edges.push(edge);
+        edge.is_curve = *is_curve;
     }
 }
 
@@ -565,6 +608,65 @@ fn restore_removed_edges(g: &mut Graph, mut saved_edges: Vec<(usize, d2_graph::E
     saved_edges.reverse();
     for (ei, edge) in saved_edges {
         g.edges.insert(ei, edge);
+    }
+}
+
+/// Shift route points of every edge whose src or dst lies in the grid
+/// subtree by `(dx, dy)`. Used after the main layout relocates a grid
+/// container so that edges laid out in grid-local coordinates (for example
+/// sequence-diagram lifelines synthesized inside a grid cell) follow their
+/// cells to the final position. Mirrors the object-plus-edge shift that Go
+/// performs in `PositionNested` when injecting a nested graph.
+fn is_constant_near_key(near_key: Option<&str>) -> bool {
+    matches!(
+        near_key,
+        Some(
+            "top-left"
+                | "top-center"
+                | "top-right"
+                | "center-left"
+                | "center-right"
+                | "bottom-left"
+                | "bottom-center"
+                | "bottom-right"
+        )
+    )
+}
+
+/// True if `obj_id` itself or any ancestor carries a constant-`near` key.
+/// Mirrors Go's routing of constant-near subgraphs through `d2near.Layout`
+/// separately from the main layout, which affects the order in which
+/// synthesized lifeline edges land in `g.edges`.
+fn is_inside_constant_near(g: &Graph, obj_id: ObjId) -> bool {
+    let mut cur = Some(obj_id);
+    while let Some(id) = cur {
+        if is_constant_near_key(g.objects[id].near_key.as_deref()) {
+            return true;
+        }
+        cur = g.objects[id].parent;
+    }
+    false
+}
+
+fn shift_grid_subtree_edge_routes(
+    g: &mut Graph,
+    grid_descendants: &HashSet<ObjId>,
+    dx: f64,
+    dy: f64,
+) {
+    if grid_descendants.is_empty() || (dx == 0.0 && dy == 0.0) {
+        return;
+    }
+    for edge in &mut g.edges {
+        if edge.route.is_empty() {
+            continue;
+        }
+        if grid_descendants.contains(&edge.src) || grid_descendants.contains(&edge.dst) {
+            for p in &mut edge.route {
+                p.x += dx;
+                p.y += dy;
+            }
+        }
     }
 }
 
@@ -755,21 +857,47 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     }
 
     // Find all non-root objects that are sequence or grid diagrams.
-    let seq_containers: Vec<ObjId> = (0..g.objects.len())
+    //
+    // Exclude sequence diagrams whose ancestor chain includes a grid
+    // diagram: those get laid out recursively inside the grid-cell
+    // pre-layout (`layout_container_as_subgraph` on the cell's plain
+    // container rebuilds a fresh sub-graph and runs `layout_nested` on it,
+    // which already handles nested sequence diagrams as its own
+    // `seq_containers` pass). If the outer pass re-ran sequence layout on
+    // the same diagram, it would see actors mutated in-place (e.g. widths
+    // bumped to MIN_ACTOR_WIDTH = 100 from their natural label widths)
+    // and produce different `actor_x_step` values. Mirrors Go's
+    // `LayoutNested` which processes each sequence diagram exactly once
+    // via the recursive grid-cell extraction path.
+    let mut seq_containers: Vec<ObjId> = (0..g.objects.len())
         .filter(|&i| {
-            i != g.root
-                && g.objects[i].is_sequence_diagram()
+            if i == g.root
+                || !g.objects[i].is_sequence_diagram()
                 // Match Go LayoutNested: empty nested sequence diagrams stay in
                 // the main graph and are laid out as normal shapes.
-                && !g.objects[i].children_array.is_empty()
+                || g.objects[i].children_array.is_empty()
+            {
+                return false;
+            }
+            // Skip if any ancestor is a grid diagram: the grid-cell
+            // pre-layout already handles this sequence recursively.
+            let mut cur = g.objects[i].parent;
+            while let Some(pid) = cur {
+                if g.objects[pid].is_grid_diagram() {
+                    return false;
+                }
+                cur = g.objects[pid].parent;
+            }
+            true
         })
         .collect();
+    seq_containers.sort_by_key(|&id| id);
 
     // Find grid containers that need pre-layout. Exclude grids nested inside
     // a sequence diagram — those are handled by the sequence diagram's own
     // nested sub-graph layout, and clearing their children here would strip
     // descendants before the outer sub-graph can capture them.
-    let grid_containers: Vec<ObjId> = (0..g.objects.len())
+    let mut grid_containers: Vec<ObjId> = (0..g.objects.len())
         .filter(|&i| {
             if i == g.root
                 || !g.objects[i].is_grid_diagram()
@@ -788,9 +916,46 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             true
         })
         .collect();
+    // Pre-layout deepest grids first so an outer grid that contains other
+    // grids equalises cell widths/heights using the inner grid's final
+    // (post-layout) size, not its natural pre-layout size. Without this
+    // ordering, e.g. `more` (grid-rows: 2) processed before its grid-cell
+    // child `more.stylish` (grid-columns: 2) would equalise stylish to the
+    // wider sibling row, only for the later `stylish` pass to overwrite the
+    // width back to its natural grid size — losing the equalisation.
+    grid_containers.sort_by(|&a, &b| {
+        let depth = |mut id: ObjId| -> usize {
+            let mut d = 0usize;
+            while let Some(p) = g.objects[id].parent {
+                d += 1;
+                id = p;
+            }
+            d
+        };
+        depth(b).cmp(&depth(a))
+    });
 
     // Pre-layout grid containers: for each grid container, build a temporary
     // sub-graph and run grid layout on it, then set the container's dimensions.
+    //
+    // `pre_layout_saved_children` records the children of each pre-laid-out
+    // grid container BEFORE its `children_array` is cleared, so a later
+    // outer pre-layout pass that needs to reposition a previously-cleared
+    // cell can still walk its descendants.
+    let mut pre_layout_saved_children: HashMap<ObjId, Vec<ObjId>> = HashMap::new();
+    // Synthesized edges (e.g. sequence-diagram lifelines) produced while
+    // laying out nested grid cells. We defer pushing these into `g.edges`
+    // until after the outer `seq_containers` pass has injected its OWN
+    // synthetic lifelines, so the final `g.edges` order mirrors Go's:
+    // [constant-near-subtree lifelines, outer-seq lifelines, other-grid
+    // lifelines]. Without deferral, lifelines inside grids nested under
+    // `more` or `l` appear in the wrong order in the SVG output stream.
+    // Each entry is `(edge, owning_cell_id, is_under_constant_near)` so
+    // the cell-move step below can shift the edge together with its cell's
+    // descendants, and the flush step below can split entries into
+    // pre-seq (constant-near) vs post-seq (ordinary grid) halves, matching
+    // Go's `d2near.Layout` running before the `extractedOrder` InjectNested.
+    let mut deferred_grid_new_edges: Vec<(d2_graph::Edge, ObjId, bool)> = Vec::new();
     for &container_id in &grid_containers {
         let children: Vec<ObjId> = g.objects[container_id].children_array.clone();
         if children.is_empty() {
@@ -811,6 +976,26 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 g.objects[result.container_id].icon_position = Some(pos.clone());
             }
             apply_nested_object_results(g, &result, 0.0, 0.0);
+            // Apply internal edge routes in cell-local coordinates; they
+            // will be shifted below alongside their containing cell's
+            // subtree when the outer grid layout moves the cell to its
+            // final slot. Lifeline edges synthesized by nested sequence
+            // diagrams live in `result.new_edges`; stash them in the
+            // deferred buffer so a later outer `seq_containers` pass does
+            // NOT need to re-run sequence layout over this subtree
+            // (re-running would observe actor widths already normalised
+            // to MIN_ACTOR_WIDTH and mis-compute `actor_x_step` — e.g.
+            // nesting_power's `more.container.a_sequence` comes out 10px
+            // wider on the second pass than Go's single-pass result),
+            // while also ensuring the final emit order matches Go.
+            apply_nested_edge_routes_only(g, &result, 0.0, 0.0);
+            let under_cn = is_inside_constant_near(g, container_id);
+            for edge in result.new_edges.clone() {
+                // new_edges carry cell-local coordinates; the grid-move
+                // step below shifts them into the outer graph's frame via
+                // the deferred buffer.
+                deferred_grid_new_edges.push((edge, child_id, under_cn));
+            }
         }
 
         // Build a temporary sub-graph for this grid container.
@@ -899,15 +1084,53 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 g.objects[child_id].label_position = sub.objects[sub_id].label_position.clone();
                 g.objects[child_id].icon_position = sub.objects[sub_id].icon_position.clone();
                 if dx != 0.0 || dy != 0.0 {
-                    move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
+                    // Inner grid cells that were already pre-laid-out have
+                    // their own restore iteration after dagre — that
+                    // iteration cascades the cell's final top_left to its
+                    // descendants. Moving descendants here would double-
+                    // apply the offset (cf. directions.v.u/d). For non-grid
+                    // cells (which are not in `grid_containers`), descendants
+                    // were placed at cell-local coordinates by
+                    // `apply_nested_object_results` above, so we DO move them
+                    // alongside the cell here.
+                    let is_inner_grid_cell = pre_layout_saved_children.contains_key(&child_id);
+                    if is_inner_grid_cell {
+                        g.objects[child_id].top_left.x += dx;
+                        g.objects[child_id].top_left.y += dy;
+                        g.objects[child_id].update_box();
+                    } else {
+                        move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
+                        // Shift internal edge routes that were applied above
+                        // with a (0,0) base — they must follow the cell to its
+                        // final grid slot so the rendered path lines up with
+                        // the moved descendants.
+                        let mut subtree: HashSet<ObjId> = HashSet::new();
+                        subtree.insert(child_id);
+                        collect_descendants(g, child_id, &mut subtree);
+                        shift_grid_subtree_edge_routes(g, &subtree, dx, dy);
+                        // Edges deferred from this cell's sub-layout (lifelines)
+                        // are not yet in `g.edges`, so the shift above misses
+                        // them. Apply the same shift to their queued routes so
+                        // the eventual flush injects them in sync with their
+                        // already-moved cell descendants.
+                        for (edge, cell, _) in deferred_grid_new_edges.iter_mut() {
+                            if *cell == child_id {
+                                edge.move_route(dx, dy);
+                            }
+                        }
+                    }
                 } else {
                     g.objects[child_id].update_box();
                 }
             }
         }
 
-        // Mark grid children as removed so dagre skips them.
+        // Mark grid children as removed so dagre skips them. Save the
+        // pre-clear list so a subsequent outer-grid pre-layout can still
+        // walk this container's descendants when repositioning the cell.
         // After dagre, we restore them and offset to container position.
+        pre_layout_saved_children
+            .insert(container_id, g.objects[container_id].children_array.clone());
         g.objects[container_id].children_array.clear();
     }
 
@@ -933,7 +1156,26 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
 
     if seq_containers.is_empty() {
         // Run dagre with grid descendants excluded.
-        d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
+        let deferred_cn_external_edges =
+            d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
+
+        // No outer seq_containers pass to produce lifelines first, so the
+        // deferred grid-cell lifelines can be flushed straight away —
+        // their relative order is preserved (constant-near entries still
+        // come before ordinary grid entries so the emit order matches
+        // Go's `d2near.Layout` + `InjectNested` pipeline).
+        let mut cn_first: Vec<(d2_graph::Edge, ObjId, bool)> = Vec::new();
+        let mut rest: Vec<(d2_graph::Edge, ObjId, bool)> = Vec::new();
+        for entry in deferred_grid_new_edges.drain(..) {
+            if entry.2 {
+                cn_first.push(entry);
+            } else {
+                rest.push(entry);
+            }
+        }
+        for (edge, _, _) in cn_first.into_iter().chain(rest.into_iter()) {
+            g.edges.push(edge);
+        }
 
         // Restore children and offset grid cells to container positions.
         for (&container_id, children) in &grid_children_map {
@@ -944,9 +1186,25 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 for &child_id in children {
                     move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
                 }
+                // Edges whose endpoints live inside this grid container's
+                // subtree (e.g. lifelines synthesized by a nested sequence
+                // diagram) carry grid-local routes and must follow the cell
+                // to its final dagre-computed slot. Mirrors Go
+                // `PositionNested` which shifts nested objects AND edges by
+                // the container's offset.
+                let mut subtree: HashSet<ObjId> = HashSet::new();
+                collect_descendants(g, container_id, &mut subtree);
+                shift_grid_subtree_edge_routes(g, &subtree, dx, dy);
             }
         }
         route_direct_edges_for_excluded_descendants(g, &grid_all_descendants);
+        // External constant-near edges that touch grid descendants need
+        // routing AFTER the grid shift so the absolute coordinates of those
+        // endpoints are final.
+        d2_dagre_layout::route_deferred_constant_near_external_edges(
+            g,
+            &deferred_cn_external_edges,
+        );
         return Ok(());
     }
 
@@ -1003,7 +1261,8 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     // Save and remove internal/external edges touching sequence descendants.
     let saved_edges = remove_edges_touching_descendants(g, &seq_descendants);
 
-    d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
+    let deferred_cn_external_edges =
+        d2_dagre_layout::layout_with_exclude(g, None, &grid_all_descendants)?;
 
     // Restore container children.
     for (c, children, children_array) in saved_children {
@@ -1019,6 +1278,27 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
     // Restore edges.
     restore_removed_edges(g, saved_edges);
 
+    // Flush deferred grid-cell lifelines that live inside a constant-near
+    // subtree BEFORE pushing the outer seq_containers' lifelines. Mirrors
+    // Go's pipeline: `d2near.Layout` appends the constant-near nestedGraph's
+    // edges to `g.Edges` BEFORE the `extractedOrder` `InjectNested` loop
+    // (which appends top-level sequence/grid nested graphs). Without this
+    // split, e.g. `nesting_power`'s `l.here.grid.*` lifelines (inside the
+    // `l` constant-near subtree) would appear AFTER `seq.*` lifelines in
+    // the SVG stream.
+    let mut cn_deferred: Vec<(d2_graph::Edge, ObjId, bool)> = Vec::new();
+    let mut rest_deferred: Vec<(d2_graph::Edge, ObjId, bool)> = Vec::new();
+    for entry in deferred_grid_new_edges.drain(..) {
+        if entry.2 {
+            cn_deferred.push(entry);
+        } else {
+            rest_deferred.push(entry);
+        }
+    }
+    for (edge, _, _) in cn_deferred {
+        g.edges.push(edge);
+    }
+
     // Now offset nested sequence diagram contents by their container's position,
     // and add newly created edges (e.g. lifelines) to the main graph.
     for result in nested_results {
@@ -1030,6 +1310,15 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
         apply_nested_edge_results(g, &result, dx, dy);
     }
 
+    // Flush the remaining grid-cell lifelines AFTER the outer-seq ones.
+    // Mirrors Go's `extractedOrder` BFS: top-level sequence containers
+    // (e.g. `seq`) are injected before non-constant-near grid containers
+    // (e.g. `more` → `container.a_sequence`), so their lifeline edges
+    // appear earlier in the rendered SVG stream.
+    for (edge, _, _) in rest_deferred {
+        g.edges.push(edge);
+    }
+
     // Restore grid children and offset grid cells to their container positions.
     for (&container_id, children) in &grid_children_map {
         g.objects[container_id].children_array = children.clone();
@@ -1039,12 +1328,20 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
             for &child_id in children {
                 move_obj_with_descendants_and_boxes(g, child_id, dx, dy);
             }
+            // See the seq-empty branch above: edges synthesized inside
+            // grid-cell sequence sub-diagrams (lifelines) carry grid-local
+            // routes and need the same shift as their endpoints.
+            let mut subtree: HashSet<ObjId> = HashSet::new();
+            collect_descendants(g, container_id, &mut subtree);
+            shift_grid_subtree_edge_routes(g, &subtree, dx, dy);
         }
     }
 
     let mut excluded_special_descendants = grid_all_descendants.clone();
     excluded_special_descendants.extend(seq_descendants.iter().copied());
     route_direct_edges_for_excluded_descendants(g, &excluded_special_descendants);
+
+    d2_dagre_layout::route_deferred_constant_near_external_edges(g, &deferred_cn_external_edges);
 
     Ok(())
 }
@@ -1093,17 +1390,39 @@ fn route_direct_edges_for_excluded_descendants(
                 g.objects[edge.dst].height,
             );
             let last = points.len() - 1;
-            // Mirror Go d2graph.Edge.TraceToShape: src intersection is
-            // applied first and the updated `points[0]` feeds into
-            // `ending_segment`, so the dst clip sees the shortened segment
-            // from src boundary to dst center.
+            // Mirror Go d2graph.Edge.TraceToShape: src is clipped fully
+            // (bbox then perimeter) BEFORE the dst side so the dst's
+            // `ending_segment` sees the perimeter-snapped `points[0]` rather
+            // than the stale bbox hit. Getting this order wrong leaves the
+            // dst endpoint 0.5 px off whenever the src perimeter refinement
+            // moved `points[0]` off the bbox corner.
             let starting_segment = d2_geo::Segment::new(points[1], points[0]);
             if let Some(p) = src_box.intersections(&starting_segment).first().copied() {
                 points[0] = p;
             }
+            if !g.objects[edge.src].is_rectangular_shape() {
+                let traced = trace_to_shape_border_for(
+                    &g.objects[edge.src],
+                    src_box,
+                    points[0],
+                    points[1],
+                );
+                points[0] = traced;
+            }
+
             let ending_segment = d2_geo::Segment::new(points[last - 1], points[last]);
             if let Some(p) = dst_box.intersections(&ending_segment).first().copied() {
                 points[last] = p;
+            }
+            if !g.objects[edge.dst].is_rectangular_shape() {
+                let last = points.len() - 1;
+                let traced = trace_to_shape_border_for(
+                    &g.objects[edge.dst],
+                    dst_box,
+                    points[last],
+                    points[last - 1],
+                );
+                points[last] = traced;
             }
         }
 
@@ -1113,6 +1432,27 @@ fn route_direct_edges_for_excluded_descendants(
             edge.label_position = Some("INSIDE_MIDDLE_CENTER".to_owned());
         }
     }
+}
+
+/// Thin wrapper around `d2_shape::trace_to_shape_border` that constructs a
+/// transient `Shape` matching the object's current bounding box and shape
+/// type. Mirrors what `d2-dagre-layout` uses internally for the second-pass
+/// perimeter trace; duplicated here so callers outside the dagre crate can
+/// run the same snap after routing a straight edge via bbox intersection.
+fn trace_to_shape_border_for(
+    obj: &d2_graph::Object,
+    bbox: d2_geo::Box2D,
+    rect_border_point: d2_geo::Point,
+    prev_point: d2_geo::Point,
+) -> d2_geo::Point {
+    let shape_type = d2_target::dsl_shape_to_shape_type(obj.shape.value.as_str());
+    let mut shape = d2_shape::Shape::new(shape_type, bbox);
+    if obj.shape.value == d2_target::SHAPE_CLOUD
+        && let Some(ratio) = obj.content_aspect_ratio
+    {
+        shape.set_inner_box_aspect_ratio(ratio);
+    }
+    d2_shape::trace_to_shape_border(&shape, &rect_border_point, &prev_point)
 }
 
 /// Convenience function: D2 source text -> SVG bytes with default options.
@@ -1137,12 +1477,25 @@ pub fn d2_to_svg(input: &str) -> Result<Vec<u8>, String> {
 ///
 /// This is a simplified port of Go's `Graph.SetDimensions`.
 pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Result<(), String> {
+    set_dimensions_with_font(g, ruler, None)
+}
+
+/// Variant that accepts an explicit default font family (used for sketch mode
+/// which forces HandDrawn / FuzzyBubbles).  Mirrors Go
+/// `compileOpts.FontFamily = HandDrawn` in `applyDefaults`.
+pub fn set_dimensions_with_font(
+    g: &mut Graph,
+    ruler: &mut d2_textmeasure::Ruler,
+    override_family: Option<FontFamily>,
+) -> Result<(), String> {
     // Default font family for the diagram. Themes with the `mono` special
     // rule (e.g. the terminal theme) force everything to mono; otherwise
     // start from SourceSansPro and let per-object `style.font: mono` opt
     // individual labels into mono. Mirrors Go d2graph.GetLabelSize.
     let caps_lock = g.theme.as_ref().is_some_and(|t| t.special_rules.caps_lock);
-    let default_family = if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
+    let default_family = if let Some(f) = override_family {
+        f
+    } else if g.theme.as_ref().is_some_and(|t| t.special_rules.mono) {
         FontFamily::SourceCodePro
     } else {
         FontFamily::SourceSansPro
@@ -1264,8 +1617,15 @@ pub fn set_dimensions(g: &mut Graph, ruler: &mut d2_textmeasure::Ruler) -> Resul
         let is_grid = g.objects[i].is_grid_diagram();
         let in_seq = g.objects[i].is_inside_sequence_diagram(g);
         let mut is_bold = !is_container && shape != "text";
+        // Match Go d2graph.Object.Text(): `style.bold == "true"` forces bold
+        // on, but a literal "false" value does NOT clear the default. There
+        // is no branch in Go that turns isBold off via the style attribute,
+        // so leaf shapes with `style.bold: false` are still measured as
+        // bold. Mirroring this quirk keeps label widths matching Go.
         if let Some(v) = g.objects[i].style.bold.as_ref() {
-            is_bold = v.value == "true";
+            if v.value == "true" {
+                is_bold = true;
+            }
         }
         if in_seq {
             is_bold = false;

@@ -22,34 +22,105 @@ impl Lexer for GoLexer {
 
 fn build_go_lexer() -> StateMachineLexer {
     let builtin_types = &[
-        "uint", "uint8", "uint16", "uint32", "uint64",
-        "int", "int8", "int16", "int32", "int64",
-        "float", "float32", "float64",
-        "complex64", "complex128",
-        "byte", "rune", "string", "bool", "error", "uintptr",
-        "print", "println", "panic", "recover", "close",
-        "complex", "real", "imag", "len", "cap", "append",
-        "copy", "delete", "new", "make", "clear", "min", "max",
+        "uint",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "int",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "float",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
+        "byte",
+        "rune",
+        "string",
+        "bool",
+        "error",
+        "uintptr",
+        "print",
+        "println",
+        "panic",
+        "recover",
+        "close",
+        "complex",
+        "real",
+        "imag",
+        "len",
+        "cap",
+        "append",
+        "copy",
+        "delete",
+        "new",
+        "make",
+        "clear",
+        "min",
+        "max",
     ];
 
     // Words("", `\b(\()`, ...) in Go chroma wraps the alternation in a
     // capture group so ByGroups can assign NameBuiltin to group 1 and
     // Punctuation to group 2.
-    let builtin_words = builtin_types.iter().map(|w| *w).collect::<Vec<_>>().join("|");
+    let builtin_words = builtin_types
+        .iter()
+        .map(|w| *w)
+        .collect::<Vec<_>>()
+        .join("|");
     let builtin_types_with_paren = format!("((?:{})\\b)(\\()", builtin_words);
-    let builtin_types_plain = words("", r"\b", &[
-        "uint", "uint8", "uint16", "uint32", "uint64",
-        "int", "int8", "int16", "int32", "int64",
-        "float", "float32", "float64",
-        "complex64", "complex128",
-        "byte", "rune", "string", "bool", "error", "uintptr",
-    ]);
+    let builtin_types_plain = words(
+        "",
+        r"\b",
+        &[
+            "uint",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "int",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "float",
+            "float32",
+            "float64",
+            "complex64",
+            "complex128",
+            "byte",
+            "rune",
+            "string",
+            "bool",
+            "error",
+            "uintptr",
+        ],
+    );
 
-    let flow_keywords = words("", r"\b", &[
-        "break", "default", "select", "case", "defer", "go", "else",
-        "goto", "switch", "fallthrough", "if", "range", "continue",
-        "for", "return",
-    ]);
+    let flow_keywords = words(
+        "",
+        r"\b",
+        &[
+            "break",
+            "default",
+            "select",
+            "case",
+            "defer",
+            "go",
+            "else",
+            "goto",
+            "switch",
+            "fallthrough",
+            "if",
+            "range",
+            "continue",
+            "for",
+            "return",
+        ],
+    );
 
     let root_rules = vec![
         Rule::Simple {
@@ -161,7 +232,9 @@ fn build_go_lexer() -> StateMachineLexer {
         },
         // Character literal
         Rule::Simple {
-            pattern: re(r"'(\\['\x22\\abfnrtv]|\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|[^\\])'"),
+            pattern: re(
+                r"'(\\['\x22\\abfnrtv]|\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|[^\\])'",
+            ),
             token_type: TokenType::LiteralStringChar,
             action: Action::None,
         },
@@ -179,14 +252,20 @@ fn build_go_lexer() -> StateMachineLexer {
         },
         // Operators
         Rule::Simple {
-            pattern: re(r"(<<=|>>=|<<|>>|<=|>=|&\^=|&\^|\+=|-=|\*=|/=|%=|&=|\|=|&&|\|\||<-|\+\+|--|==|!=|:=|\.\.\.|[+\-*/%&])"),
+            pattern: re(
+                r"(<<=|>>=|<<|>>|<=|>=|&\^=|&\^|\+=|-=|\*=|/=|%=|&=|\|=|&&|\|\||<-|\+\+|--|==|!=|:=|\.\.\.|[+\-*/%&])",
+            ),
             token_type: TokenType::Operator,
             action: Action::None,
         },
         // Function call: name ( — ByGroups
         Rule::ByGroups {
             pattern: re(r"([a-zA-Z_]\w*)(\s*)(\()"),
-            group_types: vec![TokenType::NameFunction, TokenType::Text, TokenType::Punctuation],
+            group_types: vec![
+                TokenType::NameFunction,
+                TokenType::Text,
+                TokenType::Punctuation,
+            ],
             action: Action::None,
         },
         // Punctuation

@@ -138,6 +138,11 @@ pub struct Field {
     pub composite: Option<Composite>,
     /// All references to this field from the AST.
     pub references: Vec<FieldReference>,
+    /// `Some(true)` when a `: suspend` declaration hid the field, `Some(false)`
+    /// when `: unsuspend` restored it, `None` when untouched. Mirrors Go
+    /// d2ir.Field.suspended. For glob templates (`**: suspend`), the value
+    /// propagates through `apply_literal_star_template` to matched targets.
+    pub suspended: Option<bool>,
 }
 
 impl Field {
@@ -295,6 +300,10 @@ pub struct IREdge {
     pub primary: Option<Scalar>,
     pub map: Option<Map>,
     pub references: Vec<EdgeReference>,
+    /// Suspension state set by `: suspend` / `: unsuspend` declarations.
+    /// Mirrors Go d2ir.Edge.suspended. Unsuspending an edge also lifts
+    /// suspension from its src/dst objects and their ancestors.
+    pub suspended: Option<bool>,
 }
 
 /// A single `&attr: value` (or `!&attr: value`) filter entry recorded
@@ -697,6 +706,7 @@ impl Compiler {
                         }),
                         composite: None,
                         references: Vec::new(),
+                        suspended: None,
                     };
                     dst.fields.push(f);
                 }
@@ -839,6 +849,29 @@ impl Compiler {
         let lower = name.to_lowercase();
         let is_reserved = ast::RESERVED_KEYWORDS.contains(lower.as_str());
 
+        // `**` glob templates are never deduplicated: each occurrence in the
+        // source carries its own filter set and its own RHS body, which must
+        // be applied independently at expansion time. Merging them (the
+        // default dedup behaviour below) would accumulate filters/attrs from
+        // unrelated blocks and produce wrong matches. Mirrors Go d2ir where
+        // each `**: {...}` key triggers a fresh `multiGlob`/`_compileField`
+        // pass against the current map rather than writing into a shared
+        // `**` field. `*` is left shared for now since its semantics are
+        // narrower (single-level) and no failing fixture currently exercises
+        // multi-block `*` globs with filters.
+        if is_unquoted && name == "**" {
+            let f = Field {
+                name: name.to_string(),
+                name_is_unquoted: is_unquoted,
+                primary: None,
+                composite: None,
+                references: Vec::new(),
+                suspended: None,
+            };
+            m.fields.push(f);
+            return m.fields.last_mut().unwrap();
+        }
+
         // Look for existing field
         let existing_idx = m.fields.iter().position(|f| {
             if is_reserved {
@@ -859,6 +892,7 @@ impl Compiler {
             primary: None,
             composite: None,
             references: Vec::new(),
+            suspended: None,
         };
         m.fields.push(f);
         m.fields.last_mut().unwrap()
@@ -879,7 +913,13 @@ impl Compiler {
 
         // Primary value
         if let Some(ref primary) = key.primary {
-            if !matches!(primary, ast::ScalarBox::Suspension(_)) {
+            if let ast::ScalarBox::Suspension(s) = primary {
+                // `**: suspend` / `*: unsuspend` record the suspension state
+                // on the field so the graph-level glob expansion can carry
+                // it into matched targets. Mirrors Go d2ir's
+                // `f.suspended = refctx.Key.Primary.Suspension.Value`.
+                f.suspended = Some(s.value);
+            } else {
                 f.primary = Some(Scalar {
                     value: primary.clone(),
                 });
@@ -911,11 +951,16 @@ impl Compiler {
                     self.scope_name_stack.pop();
                     self.scope_stack.pop();
                 }
-                ast::ValueBox::Null(_) | ast::ValueBox::Suspension(_) => {}
+                ast::ValueBox::Null(_) => {}
+                ast::ValueBox::Suspension(s) => {
+                    f.suspended = Some(s.value);
+                }
                 _ => {
                     // Scalar value
                     if let Some(sb) = val.scalar_box() {
-                        if !matches!(sb, ast::ScalarBox::Suspension(_)) {
+                        if let ast::ScalarBox::Suspension(s) = sb {
+                            f.suspended = Some(s.value);
+                        } else {
                             f.primary = Some(Scalar { value: sb });
                         }
                     }
@@ -1381,6 +1426,7 @@ impl Compiler {
                     scope_map_idx: None,
                 },
             }],
+            suspended: None,
         };
 
         self.apply_edge_value(&mut e, key, edge_idx);
@@ -1399,13 +1445,16 @@ impl Compiler {
         } else {
             // Direct value on edge
             if let Some(ref primary) = key.primary {
-                if !matches!(
-                    primary,
-                    ast::ScalarBox::Null(_) | ast::ScalarBox::Suspension(_)
-                ) {
-                    e.primary = Some(Scalar {
-                        value: primary.clone(),
-                    });
+                match primary {
+                    ast::ScalarBox::Null(_) => {}
+                    ast::ScalarBox::Suspension(s) => {
+                        e.suspended = Some(s.value);
+                    }
+                    _ => {
+                        e.primary = Some(Scalar {
+                            value: primary.clone(),
+                        });
+                    }
                 }
             }
             if let Some(ref val) = key.value {
@@ -1419,10 +1468,15 @@ impl Compiler {
                         }
                         self.compile_map(e.map.as_mut().unwrap(), m);
                     }
-                    ast::ValueBox::Null(_) | ast::ValueBox::Suspension(_) => {}
+                    ast::ValueBox::Null(_) => {}
+                    ast::ValueBox::Suspension(s) => {
+                        e.suspended = Some(s.value);
+                    }
                     _ => {
                         if let Some(sb) = val.scalar_box() {
-                            if !matches!(sb, ast::ScalarBox::Suspension(_)) {
+                            if let ast::ScalarBox::Suspension(s) = sb {
+                                e.suspended = Some(s.value);
+                            } else {
                                 e.primary = Some(Scalar { value: sb });
                             }
                         }
@@ -2238,6 +2292,7 @@ mod tests {
             }),
             composite: None,
             references: Vec::new(),
+            suspended: None,
         });
 
         let overlay = Map {
@@ -2249,8 +2304,10 @@ mod tests {
                 }),
                 composite: None,
                 references: Vec::new(),
+                suspended: None,
             }],
             edges: Vec::new(),
+            filters: Vec::new(),
         };
 
         overlay_map(&mut base, &overlay);

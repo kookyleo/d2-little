@@ -10,6 +10,8 @@ use d2_shape::{self, ShapeOps};
 use d2_target;
 use d2_themes;
 
+pub mod go_sort;
+
 // ---------------------------------------------------------------------------
 // Key ID formatting — mirrors Go's d2format.Format(RawString(s, inKey=true))
 // ---------------------------------------------------------------------------
@@ -46,8 +48,8 @@ pub fn format_key_segment(name: &str) -> String {
 
     if !needs_quoting {
         // Check surrounding whitespace
-        let has_surrounding_ws = name.starts_with(char::is_whitespace)
-            || name.ends_with(char::is_whitespace);
+        let has_surrounding_ws =
+            name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace);
         if !has_surrounding_ws {
             return name.to_owned();
         }
@@ -591,6 +593,15 @@ pub struct Object {
 
     pub z_index: i32,
     pub classes: Vec<String>,
+    /// True when `classes` was assigned via the object's own `class:`
+    /// declaration in the source (rather than inherited from a `*` /
+    /// `**` glob template). Used during glob template merging to decide
+    /// whether the template's class list (and class-derived styles) may
+    /// override the target's existing values: if the target has its own
+    /// explicit class list, glob-supplied class defaults are skipped so
+    /// that own-class semantics win, mirroring Go d2ir's array-composite
+    /// replacement behavior at IR time.
+    pub classes_explicit: bool,
 
     /// `&attr: value` filters declared on this object's map. Used by the
     /// compiler when expanding glob (`*` / `**`) templates to restrict
@@ -610,6 +621,13 @@ pub struct Object {
     /// d2graph.Object.References. Used by `Graph::sort_objects_by_ast` to
     /// reorder objects to match the order they first appear in the source.
     pub references: Vec<Reference>,
+
+    /// Suspension state propagated from IR fields and glob templates.
+    /// `Some(true)` hides the object (and its subtree) from the final
+    /// graph; `Some(false)` forces it visible (used to override a parent
+    /// glob's suspend). `None` means untouched — treated as visible
+    /// unless a glob flips it. Mirrors Go d2ir.Field.suspended.
+    pub suspended: Option<bool>,
 }
 
 /// AST reference back-pointer for an object. Mirrors Go d2graph.Reference
@@ -679,10 +697,12 @@ impl Default for Object {
             horizontal_gap: None,
             z_index: 0,
             classes: Vec::new(),
+            classes_explicit: false,
             filters: Vec::new(),
             is_sequence_diagram_note: false,
             is_sequence_diagram_group: false,
             references: Vec::new(),
+            suspended: None,
         }
     }
 }
@@ -734,8 +754,15 @@ impl Object {
         let is_container = !self.children_array.is_empty();
         let in_seq = self.is_inside_sequence_diagram(graph);
         let mut is_bold = !is_container && self.shape.value != "text";
+        // Match Go: `style.bold == "true"` forces bold on, but `"false"` does
+        // NOT clear the default. Go's d2graph.Object.Text() only sets isBold
+        // to true when the value is the literal "true"; there is no branch to
+        // turn it off. So a leaf shape with `style.bold: false` is still
+        // measured as bold. Mirroring this quirk keeps label widths matching.
         if let Some(v) = self.style.bold.as_ref() {
-            is_bold = v.value == "true";
+            if v.value == "true" {
+                is_bold = true;
+            }
         }
         // class shapes are never bold regardless of the default.
         if self.shape.value == d2_target::SHAPE_CLASS {
@@ -1268,10 +1295,8 @@ impl Object {
         if self.has_label() {
             if let Some(ref pos_str) = self.label_position {
                 let position = d2_label::Position::from_string(pos_str);
-                let label_width =
-                    self.label_dimensions.width as f64 + d2_label::PADDING;
-                let label_height =
-                    self.label_dimensions.height as f64 + d2_label::PADDING;
+                let label_width = self.label_dimensions.width as f64 + d2_label::PADDING;
+                let label_height = self.label_dimensions.height as f64 + d2_label::PADDING;
 
                 use d2_label::Position::*;
                 match position {
@@ -1361,20 +1386,16 @@ impl Object {
             s.get_dimensions_to_fit(content_w, content_h, pad_x, pad_y)
         };
 
-        let mut desired_w = 0.0f64;
         if let Some(ref wa) = self.width_attr {
             if let Ok(w) = wa.value.parse::<f64>() {
-                desired_w = w;
                 self.width = w;
             }
         } else {
             self.width = fit_w;
         }
 
-        let mut desired_h = 0.0f64;
         if let Some(ref ha) = self.height_attr {
             if let Ok(h) = ha.value.parse::<f64>() {
-                desired_h = h;
                 self.height = h;
             }
         } else {
@@ -1382,10 +1403,7 @@ impl Object {
         }
 
         // SQL tables, classes, code blocks: use max of desired and fit
-        if self.sql_table.is_some()
-            || self.class.is_some()
-            || !self.language.is_empty()
-        {
+        if self.sql_table.is_some() || self.class.is_some() || !self.language.is_empty() {
             self.width = self.width.max(fit_w);
             self.height = self.height.max(fit_h);
         }
@@ -1496,6 +1514,11 @@ pub struct Edge {
     /// `Edge.References[].ScopeObj`. Used by sequence diagram layout to
     /// determine if an edge is contained by a group.
     pub scope_obj: Option<ObjId>,
+
+    /// Suspension state propagated from IR. Suspended edges are removed
+    /// after glob expansion; unsuspended edges lift suspension on their
+    /// endpoints and ancestors. Mirrors Go d2ir.Edge.suspended.
+    pub suspended: Option<bool>,
 }
 
 impl Default for Edge {
@@ -1528,6 +1551,7 @@ impl Default for Edge {
             dst_table_column_index: None,
             dst_id_override: None,
             scope_obj: None,
+            suspended: None,
         }
     }
 }
@@ -1684,60 +1708,93 @@ impl Graph {
     /// every parent / children / children_array / edge endpoint with the
     /// new positions so the graph remains internally consistent.
     pub fn sort_objects_by_ast(&mut self) {
-        // Stable sort the non-root objects by AST position. The root is
-        // always at index 0 and shouldn't move.
-        let mut order: Vec<ObjId> = (0..self.objects.len()).collect();
-        // Skip root in the comparison so it stays put.
+        // Mirror Go `d2graph.(*Graph).SortObjectsByAST`. Go's comparator:
+        //
+        //   - if either side's References[0] is a var substitution,
+        //     preserve original index order (i < j);
+        //   - else compare by the byte range of References[0]'s key path
+        //     at KeyPathIndex.
+        //
+        // Go uses `sort.Slice` (unstable). The comparator is non-transitive
+        // for inputs mixing var-only and key-sourced nodes, so results depend
+        // on the sort algorithm. Empirically, Go preserves the pre-sort
+        // insertion order for var-ref nodes; only key-ref nodes whose byte
+        // ranges are out of order get swapped past each other. We reproduce
+        // that effect with a stable insertion-sort that applies the swap
+        // only when the comparator unambiguously says so, matching Go's
+        // observed output byte-for-byte on grid/var-heavy inputs.
         let root = self.root;
-        // Precompute sort keys so the comparator is a pure total order.
-        // For each object, find a non-var AST range if any. If only var
-        // (spread substitution) references exist, walk up the parent
-        // chain to inherit the closest non-var range — this keeps
-        // spread-materialised children grouped under their parent's
-        // source position, preserving transitivity.
+        let mut order: Vec<ObjId> = (0..self.objects.len()).collect();
+
+        // Precompute per-object: (is_var_ref0, optional key-path byte range).
+        // - None range means no References[0] byte-range is available
+        //   (no references, or References[0] is a var substitution).
         struct SortKey {
+            has_ref: bool,
+            is_var: bool,
             range: Option<ast::Range>,
-            id: ObjId,
         }
-        let mut keys: Vec<SortKey> = (0..self.objects.len())
+        let keys: Vec<SortKey> = (0..self.objects.len())
             .map(|i| {
                 let obj = &self.objects[i];
-                let r = obj
-                    .references
-                    .iter()
-                    .find(|r| !r.is_var)
-                    .and_then(|r| r.key.path.get(r.key_path_index))
+                if obj.references.is_empty() {
+                    return SortKey { has_ref: false, is_var: false, range: None };
+                }
+                let r0 = &obj.references[0];
+                if r0.is_var {
+                    return SortKey { has_ref: true, is_var: true, range: None };
+                }
+                let range = r0
+                    .key
+                    .path
+                    .get(r0.key_path_index)
                     .map(|sb| sb.get_range().clone());
-                SortKey { range: r, id: i }
+                SortKey { has_ref: true, is_var: false, range }
             })
             .collect();
-        // Inherit parent range for var-only nodes so they sort with their
-        // parent rather than with insertion-order outliers.
-        for i in 0..self.objects.len() {
-            if keys[i].range.is_some() {
-                continue;
-            }
-            let mut cur = self.objects[i].parent;
-            while let Some(p) = cur {
-                if let Some(ref r) = keys[p].range {
-                    keys[i].range = Some(r.clone());
-                    break;
-                }
-                cur = self.objects[p].parent;
-            }
-        }
-        let cmp = |&a: &ObjId, &b: &ObjId| -> std::cmp::Ordering {
+
+        // Comparator matching Go's semantics exactly (non-transitive):
+        // Returns Ordering::Less when Go's `less(a, b)` would be true,
+        // Ordering::Greater when `less(b, a)` would be true, otherwise Equal.
+        let go_cmp = |a: ObjId, b: ObjId| -> std::cmp::Ordering {
             if a == root || b == root {
+                // Root stays at its index; use insertion order as tiebreak.
                 return a.cmp(&b);
             }
             let ka = &keys[a];
             let kb = &keys[b];
+            if !ka.has_ref || !kb.has_ref {
+                return a.cmp(&b);
+            }
+            if ka.is_var || kb.is_var {
+                return a.cmp(&b);
+            }
             match (&ka.range, &kb.range) {
-                (Some(ra), Some(rb)) => range_cmp(ra, rb).then_with(|| ka.id.cmp(&kb.id)),
-                _ => ka.id.cmp(&kb.id),
+                (Some(ra), Some(rb)) => range_cmp(ra, rb),
+                _ => a.cmp(&b),
             }
         };
-        order.sort_by(cmp);
+
+        // Stable insertion sort: at each step, insert order[i] into the
+        // already-sorted prefix by walking left while the comparator says
+        // the neighbor is strictly greater. Because var-ref nodes compare
+        // "equal" (via index tiebreak returning Greater-only-when-a>b) to
+        // non-var neighbors, they won't be moved past them — matching Go's
+        // observed behavior on this family of inputs.
+        for i in 1..order.len() {
+            let cur = order[i];
+            let mut j = i;
+            while j > 0 {
+                let prev = order[j - 1];
+                if go_cmp(prev, cur) == std::cmp::Ordering::Greater {
+                    order[j] = prev;
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            order[j] = cur;
+        }
 
         // No-op if already sorted.
         if order.iter().enumerate().all(|(i, &j)| i == j) {
@@ -1796,17 +1853,52 @@ impl Graph {
     /// `d2graph.Graph.SortEdgesByAST` — edges without a range keep their
     /// relative order.
     pub fn sort_edges_by_ast(&mut self) {
+        // Match Go `sort.Slice` exactly — including its pdqsort-specific
+        // handling of equal-key runs. A stable Rust sort is not enough:
+        // when N glob-expanded edges all share the same AST range, Go's
+        // unstable pdqsort leaves them in a deterministic but
+        // non-insertion order (e.g. `default.* -> layout` yields
+        // `tala, dagre, elk` from input `dagre, elk, tala`). Matching
+        // that ordering is required for SVG byte-level parity on fixtures
+        // like `stable/nesting_power`.
         let n = self.edges.len();
+        if n <= 1 {
+            return;
+        }
         let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| {
-            match (
-                self.edges[a].first_ast_range.as_ref(),
-                self.edges[b].first_ast_range.as_ref(),
-            ) {
-                (Some(ra), Some(rb)) => range_cmp(ra, rb),
-                _ => a.cmp(&b),
-            }
-        });
+        // Snapshot the sort key per original edge index so the comparator
+        // stays correct as positions shuffle.
+        let ranges: Vec<Option<ast::Range>> =
+            self.edges.iter().map(|e| e.first_ast_range.clone()).collect();
+        use std::cell::RefCell;
+        let order_cell = RefCell::new(order);
+        // Go's `Range.Before` delegates to `Position.Before`, which
+        // compares byte offsets only. Equal-byte ranges report
+        // "neither is before" — required so the unstable pdqsort can
+        // freely permute equal-key runs the same way Go does.
+        let range_before = |ra: &ast::Range, rb: &ast::Range| -> bool {
+            ra.start.byte < rb.start.byte
+        };
+        go_sort::go_sort_slice(
+            n,
+            |i, j| {
+                let o = order_cell.borrow();
+                let ia = o[i];
+                let ib = o[j];
+                match (ranges[ia].as_ref(), ranges[ib].as_ref()) {
+                    (Some(ra), Some(rb)) => range_before(ra, rb),
+                    // Mirror Go: if either side has no references, use
+                    // `i < j` (the positional indices after shuffling,
+                    // not the original IDs).
+                    _ => i < j,
+                }
+            },
+            |i, j| {
+                order_cell.borrow_mut().swap(i, j);
+            },
+        );
+        order = order_cell.into_inner();
+
         if order.iter().enumerate().all(|(i, &j)| i == j) {
             return;
         }
@@ -1937,6 +2029,39 @@ impl Graph {
     /// Ensure a child object exists at the given path from root.
     pub fn ensure_child(&mut self, ida: &[String]) -> ObjId {
         self.ensure_child_of(self.root, ida)
+    }
+
+    /// Create a new child object under `parent` without deduplicating on
+    /// id_val. Used for `**` glob templates where each source occurrence
+    /// must remain a distinct object so its filters + attrs apply as a
+    /// standalone template pass (see compile_field in d2-compiler).
+    pub fn new_child_of(&mut self, parent: ObjId, name: &str) -> ObjId {
+        let formatted = format_key_segment(name);
+        let parent_abs = self.objects[parent].abs_id.clone();
+        let abs = if parent_abs.is_empty() {
+            formatted.clone()
+        } else {
+            format!("{}.{}", parent_abs, formatted)
+        };
+        let idx = self.objects.len();
+        let obj = Object {
+            id: formatted,
+            id_val: name.to_string(),
+            abs_id: abs,
+            label: Label {
+                value: name.to_string(),
+                ..Default::default()
+            },
+            shape: ScalarValue {
+                value: String::new(),
+            },
+            parent: Some(parent),
+            ..Default::default()
+        };
+        self.objects.push(obj);
+        self.objects[parent].children.push(idx);
+        self.objects[parent].children_array.push(idx);
+        idx
     }
 
     /// Like `ensure_child_of` but stops descending as soon as the walk

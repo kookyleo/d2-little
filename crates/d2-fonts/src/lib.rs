@@ -38,6 +38,8 @@ pub const FONT_SIZES: &[i32] = &[
 pub enum FontFamily {
     SourceSansPro,
     SourceCodePro,
+    /// Sketch / hand-drawn font (FuzzyBubbles), enabled when sketch=true.
+    HandDrawn,
 }
 
 impl FontFamily {
@@ -55,11 +57,16 @@ impl fmt::Display for FontFamily {
         match self {
             FontFamily::SourceSansPro => write!(f, "SourceSansPro"),
             FontFamily::SourceCodePro => write!(f, "SourceCodePro"),
+            FontFamily::HandDrawn => write!(f, "HandDrawn"),
         }
     }
 }
 
-pub const FONT_FAMILIES: &[FontFamily] = &[FontFamily::SourceSansPro, FontFamily::SourceCodePro];
+pub const FONT_FAMILIES: &[FontFamily] = &[
+    FontFamily::SourceSansPro,
+    FontFamily::SourceCodePro,
+    FontFamily::HandDrawn,
+];
 
 // ---------------------------------------------------------------------------
 // FontStyle
@@ -159,6 +166,11 @@ static SOURCE_CODE_PRO_BOLD: &[u8] = include_bytes!("../ttf/SourceCodePro-Bold.t
 static SOURCE_CODE_PRO_SEMIBOLD: &[u8] = include_bytes!("../ttf/SourceCodePro-Semibold.ttf");
 static SOURCE_CODE_PRO_ITALIC: &[u8] = include_bytes!("../ttf/SourceCodePro-Italic.ttf");
 
+// HandDrawn = FuzzyBubbles.  Go reuses regular for italic and bold for
+// semibold because FuzzyBubbles ships only two cuts.  Mirror that.
+static FUZZY_BUBBLES_REGULAR: &[u8] = include_bytes!("../ttf/FuzzyBubbles-Regular.ttf");
+static FUZZY_BUBBLES_BOLD: &[u8] = include_bytes!("../ttf/FuzzyBubbles-Bold.ttf");
+
 /// Look up the raw TTF bytes for a given font family + style.
 pub fn lookup_font_face(family: FontFamily, style: FontStyle) -> &'static [u8] {
     match (family, style) {
@@ -170,6 +182,10 @@ pub fn lookup_font_face(family: FontFamily, style: FontStyle) -> &'static [u8] {
         (FontFamily::SourceCodePro, FontStyle::Bold) => SOURCE_CODE_PRO_BOLD,
         (FontFamily::SourceCodePro, FontStyle::Semibold) => SOURCE_CODE_PRO_SEMIBOLD,
         (FontFamily::SourceCodePro, FontStyle::Italic) => SOURCE_CODE_PRO_ITALIC,
+        (FontFamily::HandDrawn, FontStyle::Regular) => FUZZY_BUBBLES_REGULAR,
+        (FontFamily::HandDrawn, FontStyle::Italic) => FUZZY_BUBBLES_REGULAR,
+        (FontFamily::HandDrawn, FontStyle::Bold) => FUZZY_BUBBLES_BOLD,
+        (FontFamily::HandDrawn, FontStyle::Semibold) => FUZZY_BUBBLES_BOLD,
     }
 }
 
