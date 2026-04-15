@@ -1250,7 +1250,7 @@ mod tests {
     fn test_sign() {
         assert_eq!(sign(-5.0), -1);
         assert_eq!(sign(0.0), 0);
-        assert_eq!(sign(3.14), 1);
+        assert_eq!(sign(3.5), 1);
     }
 
     #[test]
