@@ -184,6 +184,17 @@ pub struct EdgeID {
     pub glob: bool,
 }
 
+/// Endpoint descriptors used when materialising a new edge in the IR. Bundles
+/// the path/arrow/skip pairs that flow through `create_edge`/`create_edge_inner`.
+struct EdgeEnds<'a> {
+    src_path: &'a [String],
+    dst_path: &'a [String],
+    src_arrow: bool,
+    dst_arrow: bool,
+    src_skip: usize,
+    dst_skip: usize,
+}
+
 /// Returns true if `seg` is a glob segment (`*` or `**`).
 fn is_glob_segment(seg: &str) -> bool {
     seg == "*" || seg == "**"
@@ -272,11 +283,10 @@ impl EdgeID {
     /// `d2ir` where `(* -> *)[*]` and `(** -> **)[*]` style declarations
     /// apply to every matching edge.
     pub fn matches(&self, other: &EdgeID) -> bool {
-        if self.index.is_some() && other.index.is_some() {
-            if self.index != other.index {
+        if self.index.is_some() && other.index.is_some()
+            && self.index != other.index {
                 return false;
             }
-        }
         if self.src_arrow != other.src_arrow {
             return false;
         }
@@ -620,9 +630,9 @@ impl Compiler {
     /// # Safety
     /// The returned map pointer is only valid while the scope stack remains
     /// stable. Callers must not modify the stack while using the pointer.
-    unsafe fn resolve_underscore_scope<'a, 'b>(
+    unsafe fn resolve_underscore_scope<'b>(
         &mut self,
-        current: &'a mut Map,
+        current: &mut Map,
         path: &'b [ast::StringBox],
     ) -> (*mut Map, &'b [ast::StringBox]) {
         let mut scope: *mut Map = current as *mut Map;
@@ -721,8 +731,8 @@ impl Compiler {
         // expanding `**` (and `*`) templates so only fields whose attribute
         // matches (or doesn't match, for `!&`) receive the template values.
         if key.ampersand || key.not_ampersand {
-            if let Some(ref kp) = key.key {
-                if !kp.path.is_empty() {
+            if let Some(ref kp) = key.key
+                && !kp.path.is_empty() {
                     let attr: Vec<String> = kp
                         .path
                         .iter()
@@ -743,7 +753,6 @@ impl Compiler {
                         negate: key.not_ampersand,
                     });
                 }
-            }
             return;
         }
 
@@ -780,8 +789,8 @@ impl Compiler {
             let lower = name.to_lowercase();
 
             // Validate reserved keywords
-            if ast::RESERVED_KEYWORDS.contains(lower.as_str()) && is_unquoted {
-                if !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str()) && i < path.len() - 1
+            if ast::RESERVED_KEYWORDS.contains(lower.as_str()) && is_unquoted
+                && !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str()) && i < path.len() - 1
                 {
                     self.errorf(
                         sb.get_range(),
@@ -789,7 +798,6 @@ impl Compiler {
                     );
                     return;
                 }
-            }
 
             // Safety: we only have one mutable reference at a time
             let m = unsafe { &mut *cur_map };
@@ -900,16 +908,14 @@ impl Compiler {
 
     fn apply_field_value(&mut self, f: &mut Field, key: &ast::Key, parent_map_ptr: *mut Map) {
         // Check for null -> delete (simplified: just skip)
-        if let Some(ref v) = key.value {
-            if matches!(v, ast::ValueBox::Null(_)) {
+        if let Some(ref v) = key.value
+            && matches!(v, ast::ValueBox::Null(_)) {
                 return;
             }
-        }
-        if let Some(ref p) = key.primary {
-            if matches!(p, ast::ScalarBox::Null(_)) {
+        if let Some(ref p) = key.primary
+            && matches!(p, ast::ScalarBox::Null(_)) {
                 return;
             }
-        }
 
         // Primary value
         if let Some(ref primary) = key.primary {
@@ -1010,8 +1016,8 @@ impl Compiler {
         for (i, name) in path.iter().enumerate() {
             let m = unsafe { &mut *cur };
             let f = self.ensure_field(m, name, true);
-            if i >= skip {
-                if let (Some(kp), Some(key)) = (kp, key) {
+            if i >= skip
+                && let (Some(kp), Some(key)) = (kp, key) {
                     f.references.push(FieldReference {
                         string: name.clone(),
                         key_path: Some(kp.clone()),
@@ -1025,7 +1031,6 @@ impl Compiler {
                         },
                     });
                 }
-            }
             if f.composite.is_none() {
                 f.composite = Some(Composite::Map(Map::new()));
             }
@@ -1108,8 +1113,8 @@ impl Compiler {
             let edge_up = src_up.max(dst_up);
             if edge_up > self.scope_stack.len() {
                 // More `_`s than available parents: report error and skip
-                if let Some(first_kp) = ast_edge.src.as_ref().or(ast_edge.dst.as_ref()) {
-                    if let Some(first_underscore) =
+                if let Some(first_kp) = ast_edge.src.as_ref().or(ast_edge.dst.as_ref())
+                    && let Some(first_underscore) =
                         first_kp.path.iter().find(|sb| sb.scalar_string() == "_")
                     {
                         self.errorf(
@@ -1117,7 +1122,6 @@ impl Compiler {
                             "invalid underscore: no parent".to_owned(),
                         );
                     }
-                }
                 continue;
             }
             // Build src/dst relative paths for the edge, rooted at edge_scope.
@@ -1279,24 +1283,31 @@ impl Compiler {
                 let src_skip = edge_up.saturating_sub(src_up);
                 let dst_skip = edge_up.saturating_sub(dst_up);
                 self.create_edge(
-                    dst, key, i, &src_path, &dst_path, src_arrow, dst_arrow, src_skip, dst_skip,
+                    dst,
+                    key,
+                    i,
+                    EdgeEnds {
+                        src_path: &src_path,
+                        dst_path: &dst_path,
+                        src_arrow,
+                        dst_arrow,
+                        src_skip,
+                        dst_skip,
+                    },
                 );
             }
         }
     }
 
-    fn create_edge(
-        &mut self,
-        dst: &mut Map,
-        key: &ast::Key,
-        edge_idx: usize,
-        src_path: &[String],
-        dst_path: &[String],
-        src_arrow: bool,
-        dst_arrow: bool,
-        src_skip: usize,
-        dst_skip: usize,
-    ) {
+    fn create_edge(&mut self, dst: &mut Map, key: &ast::Key, edge_idx: usize, ends: EdgeEnds) {
+        let EdgeEnds {
+            src_path,
+            dst_path,
+            src_arrow,
+            dst_arrow,
+            src_skip,
+            dst_skip,
+        } = ends;
         // Resolve common prefix
         let mut common_len = 0;
         for (a, b) in src_path.iter().zip(dst_path.iter()) {
@@ -1320,30 +1331,28 @@ impl Compiler {
             let src_kp = ast_edge_for_paths.and_then(|e| e.src.as_ref());
             let scope = self.ensure_field_path_with_refs_skip(
                 dst,
-                &common.to_vec(),
+                common,
                 src_kp,
                 Some(key),
                 0,
                 src_skip.min(common_len),
             );
-            let src_skip_inner = src_skip.saturating_sub(common_len);
-            let dst_skip_inner = dst_skip.saturating_sub(common_len);
             self.create_edge_inner(
                 scope,
                 key,
                 edge_idx,
-                inner_src,
-                inner_dst,
-                src_arrow,
-                dst_arrow,
-                src_skip_inner,
-                dst_skip_inner,
+                EdgeEnds {
+                    src_path: inner_src,
+                    dst_path: inner_dst,
+                    src_arrow,
+                    dst_arrow,
+                    src_skip: src_skip.saturating_sub(common_len),
+                    dst_skip: dst_skip.saturating_sub(common_len),
+                },
                 common_len,
             );
         } else {
-            self.create_edge_inner(
-                dst, key, edge_idx, src_path, dst_path, src_arrow, dst_arrow, src_skip, dst_skip, 0,
-            );
+            self.create_edge_inner(dst, key, edge_idx, ends, 0);
         }
     }
 
@@ -1352,14 +1361,17 @@ impl Compiler {
         dst: &mut Map,
         key: &ast::Key,
         edge_idx: usize,
-        src_path: &[String],
-        dst_path: &[String],
-        src_arrow: bool,
-        dst_arrow: bool,
-        src_skip: usize,
-        dst_skip: usize,
+        ends: EdgeEnds,
         kp_offset: usize,
     ) {
+        let EdgeEnds {
+            src_path,
+            dst_path,
+            src_arrow,
+            dst_arrow,
+            src_skip,
+            dst_skip,
+        } = ends;
         // Ensure src and dst fields exist, recording the AST KeyPath for
         // each new field reference. `kp_offset` is the number of path
         // segments (common prefix) already consumed from the AST KeyPath
@@ -1978,16 +1990,20 @@ impl Compiler {
     }
 
     fn lookup_var_field<'a>(&self, vars: &'a Map, path: &[String]) -> Option<&'a Field> {
-        if path.is_empty() {
-            return None;
-        }
-        let f = vars.get_field(&path[0])?;
-        if path.len() == 1 {
-            return Some(f);
-        }
-        let inner = f.map()?;
-        self.lookup_var_field(inner, &path[1..])
+        lookup_var_field(vars, path)
     }
+}
+
+fn lookup_var_field<'a>(vars: &'a Map, path: &[String]) -> Option<&'a Field> {
+    if path.is_empty() {
+        return None;
+    }
+    let f = vars.get_field(&path[0])?;
+    if path.len() == 1 {
+        return Some(f);
+    }
+    let inner = f.map()?;
+    lookup_var_field(inner, &path[1..])
 }
 
 /// Collect all scalar variables from a `vars` map into a flat
@@ -2121,7 +2137,7 @@ fn extract_single_substitution(value: &ast::ScalarBox) -> Option<&ast::Substitut
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2_parser;
+    
 
     fn compile_str(input: &str) -> Result<Map, CompileError> {
         let (ast, err) = d2_parser::parse("test.d2", input);

@@ -5,10 +5,7 @@
 
 use d2_ast as ast;
 use d2_geo::{self, Box2D, Point, Segment, Spacing};
-use d2_label;
 use d2_shape::{self, ShapeOps};
-use d2_target;
-use d2_themes;
 
 pub mod go_sort;
 
@@ -114,13 +111,12 @@ pub fn format_key_segment(name: &str) -> String {
 /// the unquoted (IDVal) form.  If the string is not quoted, it is
 /// returned unchanged.
 pub fn unformat_key_segment(formatted: &str) -> &str {
-    if formatted.len() >= 2 {
-        if (formatted.starts_with('"') && formatted.ends_with('"'))
-            || (formatted.starts_with('\'') && formatted.ends_with('\''))
+    if formatted.len() >= 2
+        && ((formatted.starts_with('"') && formatted.ends_with('"'))
+            || (formatted.starts_with('\'') && formatted.ends_with('\'')))
         {
             return &formatted[1..formatted.len() - 1];
         }
-    }
     formatted
 }
 
@@ -759,11 +755,10 @@ impl Object {
         // to true when the value is the literal "true"; there is no branch to
         // turn it off. So a leaf shape with `style.bold: false` is still
         // measured as bold. Mirroring this quirk keeps label widths matching.
-        if let Some(v) = self.style.bold.as_ref() {
-            if v.value == "true" {
+        if let Some(v) = self.style.bold.as_ref()
+            && v.value == "true" {
                 is_bold = true;
             }
-        }
         // class shapes are never bold regardless of the default.
         if self.shape.value == d2_target::SHAPE_CLASS {
             is_bold = false;
@@ -788,8 +783,8 @@ impl Object {
         // Inside sequence diagrams, objects get isBold=false (Go:
         // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
         if !in_seq {
-            if (is_container || self.is_grid_diagram()) && self.shape.value != "text" {
-                if self.style.font_size.is_none() {
+            if (is_container || self.is_grid_diagram()) && self.shape.value != "text"
+                && self.style.font_size.is_none() {
                     font_size = match self.level(graph) {
                         1 => 28, // FONT_SIZE_XXL
                         2 => 24, // FONT_SIZE_XL
@@ -797,7 +792,6 @@ impl Object {
                         _ => 16, // FONT_SIZE_M
                     };
                 }
-            }
         } else {
             is_bold = false;
         }
@@ -932,11 +926,10 @@ impl Object {
             return d2_color::N5;
         }
         // Direct children of a sequence_diagram root always get B5.
-        if let Some(pid) = self.parent {
-            if graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
+        if let Some(pid) = self.parent
+            && graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
                 return d2_color::B5;
             }
-        }
         // Spans inside sequence diagrams: fill by depth relative to the
         // sequence diagram root. Go Level() returns 0 for root, our level()
         // returns 1 for root. For non-root objects they match. Adjust for
@@ -1292,8 +1285,8 @@ impl Object {
     pub fn get_margin(&self) -> Spacing {
         let mut margin = Spacing::default();
 
-        if self.has_label() {
-            if let Some(ref pos_str) = self.label_position {
+        if self.has_label()
+            && let Some(ref pos_str) = self.label_position {
                 let position = d2_label::Position::from_string(pos_str);
                 let label_width = self.label_dimensions.width as f64 + d2_label::PADDING;
                 let label_height = self.label_dimensions.height as f64 + d2_label::PADDING;
@@ -1341,10 +1334,9 @@ impl Object {
                     }
                 }
             }
-        }
 
-        if self.has_icon() {
-            if let Some(ref pos_str) = self.icon_position {
+        if self.has_icon()
+            && let Some(ref pos_str) = self.icon_position {
                 let position = d2_label::Position::from_string(pos_str);
                 let icon_size = d2_target::MAX_ICON_SIZE as f64 + d2_label::PADDING;
                 use d2_label::Position::*;
@@ -1364,7 +1356,6 @@ impl Object {
                     _ => {}
                 }
             }
-        }
 
         let (dx, dy) = self.get_modifier_element_adjustments();
         margin.right += dx;
@@ -1420,11 +1411,10 @@ impl Object {
         // the original content's aspect, not the bbox aspect.
         if shape_type == d2_shape::CLOUD_TYPE {
             let inner = d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h);
-            if let Some(inner) = inner {
-                if inner.height > 0.0 {
+            if let Some(inner) = inner
+                && inner.height > 0.0 {
                     self.content_aspect_ratio = Some(inner.width / inner.height);
                 }
-            }
         }
     }
 }
@@ -1581,7 +1571,7 @@ impl Edge {
                 .style
                 .italic
                 .as_ref()
-                .map_or(true, |v| v.value == "true"),
+                .is_none_or(|v| v.value == "true"),
             dimensions: self.label_dimensions,
         }
     }
@@ -1962,8 +1952,8 @@ impl Graph {
         // the first segment of ida matches a top-level child of that diagram,
         // redirect to the diagram root so the walk creates/finds the child
         // there instead of under the current (group) scope.
-        if let Some(first_name) = ida.first() {
-            if let Some(seq_id) = self.objects[cur].outer_sequence_diagram(self) {
+        if let Some(first_name) = ida.first()
+            && let Some(seq_id) = self.objects[cur].outer_sequence_diagram(self) {
                 let seq_has_child = self.objects[seq_id]
                     .children_array
                     .iter()
@@ -1977,7 +1967,6 @@ impl Graph {
                     }
                 }
             }
-        }
 
         for name in ida {
             // Look for existing child — match on the unquoted value
@@ -2166,9 +2155,9 @@ impl Graph {
         let mut dst_column_idx: Option<usize> = None;
         if self.objects[src].shape.value == "sql_table" && src != dst {
             let src_abs_len = self.objects[src].abs_id.split('.').count();
-            if parent_abs_len + src_path.len() > src_abs_len {
-                if let Some(last) = src_path.last() {
-                    if let Some(table) = self.objects[src].sql_table.as_ref() {
+            if parent_abs_len + src_path.len() > src_abs_len
+                && let Some(last) = src_path.last()
+                    && let Some(table) = self.objects[src].sql_table.as_ref() {
                         for (i, col) in table.columns.iter().enumerate() {
                             if col.name.label == *last {
                                 src_column_idx = Some(i);
@@ -2176,14 +2165,12 @@ impl Graph {
                             }
                         }
                     }
-                }
-            }
         }
         if self.objects[dst].shape.value == "sql_table" {
             let dst_abs_len = self.objects[dst].abs_id.split('.').count();
-            if parent_abs_len + dst_path.len() > dst_abs_len {
-                if let Some(last) = dst_path.last() {
-                    if let Some(table) = self.objects[dst].sql_table.as_ref() {
+            if parent_abs_len + dst_path.len() > dst_abs_len
+                && let Some(last) = dst_path.last()
+                    && let Some(table) = self.objects[dst].sql_table.as_ref() {
                         for (i, col) in table.columns.iter().enumerate() {
                             if col.name.label == *last {
                                 dst_column_idx = Some(i);
@@ -2191,8 +2178,6 @@ impl Graph {
                             }
                         }
                     }
-                }
-            }
         }
 
         let edge = Edge {

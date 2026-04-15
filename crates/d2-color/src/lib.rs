@@ -549,7 +549,7 @@ fn parse_hex_to_floats(hex: &str) -> Result<(f64, f64, f64), String> {
 
 fn parse_rgb_func(inner: &str) -> Result<(f64, f64, f64), String> {
     // Accept both comma-separated and space-separated, with optional / alpha
-    let inner = inner.replace(',', " ").replace('/', " ");
+    let inner = inner.replace([',', '/'], " ");
     let parts: Vec<&str> = inner.split_whitespace().collect();
     if parts.len() < 3 {
         return Err("rgb() requires at least 3 values".to_string());
@@ -561,7 +561,7 @@ fn parse_rgb_func(inner: &str) -> Result<(f64, f64, f64), String> {
 }
 
 fn parse_hsl_func(inner: &str) -> Result<(f64, f64, f64), String> {
-    let inner = inner.replace(',', " ").replace('/', " ");
+    let inner = inner.replace([',', '/'], " ");
     let parts: Vec<&str> = inner.split_whitespace().collect();
     if parts.len() < 3 {
         return Err("hsl() requires at least 3 values".to_string());
@@ -840,14 +840,10 @@ pub fn parse_gradient(css: &str) -> Result<Gradient, String> {
         id: String::new(),
     };
 
-    if gradient_type == "linear" && (first.ends_with("deg") || first.starts_with("to ")) {
-        gradient.direction = first.to_string();
-        let stops = &param_list[1..];
-        if stops.is_empty() {
-            return Err("no color stops in gradient".to_string());
-        }
-        gradient.color_stops = parse_color_stops(stops);
-    } else if gradient_type == "radial" && (first == "circle" || first == "ellipse") {
+    let has_direction = (gradient_type == "linear"
+        && (first.ends_with("deg") || first.starts_with("to ")))
+        || (gradient_type == "radial" && (first == "circle" || first == "ellipse"));
+    if has_direction {
         gradient.direction = first.to_string();
         let stops = &param_list[1..];
         if stops.is_empty() {
@@ -950,7 +946,7 @@ fn sha1_hex(data: &[u8]) -> String {
 
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
 
-        for i in 0..80 {
+        for (i, &wi) in w.iter().enumerate() {
             let (f, k) = match i {
                 0..=19 => ((b & c) | ((!b) & d), 0x5A827999u32),
                 20..=39 => (b ^ c ^ d, 0x6ED9EBA1u32),
@@ -962,7 +958,7 @@ fn sha1_hex(data: &[u8]) -> String {
                 .wrapping_add(f)
                 .wrapping_add(e)
                 .wrapping_add(k)
-                .wrapping_add(w[i]);
+                .wrapping_add(wi);
             e = d;
             d = c;
             c = b.rotate_left(30);
@@ -1019,7 +1015,7 @@ fn linear_gradient_to_svg(gradient: &Gradient) -> String {
 fn parse_linear_gradient_direction(direction: &str) -> (String, String, String, String) {
     let direction = direction.trim();
     if let Some(dir) = direction.strip_prefix("to ") {
-        let parts: Vec<&str> = dir.trim().split_whitespace().collect();
+        let parts: Vec<&str> = dir.split_whitespace().collect();
         let (mut x_start, mut y_start) = ("50%".to_string(), "50%".to_string());
         let (mut x_end, mut y_end) = ("50%".to_string(), "50%".to_string());
         let mut x_set = false;

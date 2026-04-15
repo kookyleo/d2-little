@@ -328,19 +328,18 @@ impl Parser {
             }
             '"' => {
                 // Check for block comment """
-                if let Some(s) = self.peek_n(2) {
-                    if s == "\"\"" {
+                if let Some(s) = self.peek_n(2)
+                    && s == "\"\"" {
                         // consume the two extra quotes
                         self.read();
                         self.read();
                         return Some(MapNode::BlockComment(self.parse_block_comment()));
                     }
-                }
             }
             '.' => {
                 // Check for spread: ...$ or ...@
-                if let Some(s) = self.peek_n(2) {
-                    if s == ".." {
+                if let Some(s) = self.peek_n(2)
+                    && s == ".." {
                         let save = self.save();
                         self.read(); // second .
                         self.read(); // third .
@@ -361,14 +360,13 @@ impl Parser {
                         }
                         self.restore(save);
                     }
-                }
             }
             _ => {}
         }
 
         // Unread r and try to parse a map key.
         self.unread(r);
-        self.parse_map_key().map(MapNode::Key)
+        self.parse_map_key().map(|k| MapNode::Key(Box::new(k)))
     }
 
     // -----------------------------------------------------------------------
@@ -525,8 +523,8 @@ impl Parser {
         }
 
         // Check for edge group (
-        if let Some(ch) = self.peek() {
-            if ch == '(' {
+        if let Some(ch) = self.peek()
+            && ch == '(' {
                 self.read();
                 self.parse_edge_group(&mut mk);
                 mk.range.end = self.pos;
@@ -536,7 +534,6 @@ impl Parser {
                     Some(mk)
                 };
             }
-        }
 
         let k = self.parse_key_path();
         if let Some(k) = k {
@@ -567,11 +564,11 @@ impl Parser {
                     mk.key = Some(sk);
                 }
                 mk.range.end = self.pos;
-                return if mk.key.is_none() && mk.edges.is_empty() {
+                if mk.key.is_none() && mk.edges.is_empty() {
                     None
                 } else {
                     Some(mk)
-                };
+                }
             }
             Some('<') | Some('>') | Some('-') => {
                 self.restore(save);
@@ -579,21 +576,21 @@ impl Parser {
                 self.parse_edges(&mut mk, src);
                 self.parse_map_key_value(&mut mk);
                 mk.range.end = self.pos;
-                return if mk.key.is_none() && mk.edges.is_empty() {
+                if mk.key.is_none() && mk.edges.is_empty() {
                     None
                 } else {
                     Some(mk)
-                };
+                }
             }
             _ => {
                 self.restore(save);
                 self.parse_map_key_value(&mut mk);
                 mk.range.end = self.pos;
-                return if mk.key.is_none() && mk.edges.is_empty() {
+                if mk.key.is_none() && mk.edges.is_empty() {
                     None
                 } else {
                     Some(mk)
-                };
+                }
             }
         }
     }
@@ -647,7 +644,7 @@ impl Parser {
         let is_scalar = mk
             .value
             .as_ref()
-            .map_or(false, |v| v.scalar_box().is_some());
+            .is_some_and(|v| v.scalar_box().is_some());
         if is_scalar {
             let save2 = self.save();
             let newlines2 = self.skip_whitespace();
@@ -1192,11 +1189,10 @@ impl Parser {
         }
 
         // Finalize pattern
-        if let Some(ref mut pat) = pattern {
-            if last_pattern_index < sv.len() {
+        if let Some(ref mut pat) = pattern
+            && last_pattern_index < sv.len() {
                 pat.push(sv[last_pattern_index..].to_string());
             }
-        }
 
         if !sv.is_empty() {
             value_parts.push(InterpolationBox {
@@ -1533,8 +1529,8 @@ impl Parser {
                     }
                     // Check if rest of end marker follows
                     let rest: String = end_chars[1..].iter().collect();
-                    if let Some(peeked) = self.peek_n(rest.len()) {
-                        if peeked == rest {
+                    if let Some(peeked) = self.peek_n(rest.len())
+                        && peeked == rest {
                             // Consume rest
                             for _ in 0..rest.len() {
                                 self.read();
@@ -1549,7 +1545,6 @@ impl Parser {
                                 value,
                             };
                         }
-                    }
                     sb.push(ch);
                     continue;
                 }
@@ -1622,17 +1617,16 @@ impl Parser {
                 return Some(ArrayNode::Comment(self.parse_comment()));
             }
             '"' => {
-                if let Some(s) = self.peek_n(2) {
-                    if s == "\"\"" {
+                if let Some(s) = self.peek_n(2)
+                    && s == "\"\"" {
                         self.read();
                         self.read();
                         return Some(ArrayNode::BlockComment(self.parse_block_comment()));
                     }
-                }
             }
             '.' => {
-                if let Some(s) = self.peek_n(2) {
-                    if s == ".." {
+                if let Some(s) = self.peek_n(2)
+                    && s == ".." {
                         let save = self.save();
                         self.read();
                         self.read();
@@ -1651,7 +1645,6 @@ impl Parser {
                         }
                         self.restore(save);
                     }
-                }
             }
             _ => {}
         }
@@ -2303,7 +2296,7 @@ mod tests {
         let key = m.nodes[0].as_key().unwrap();
         match key.value.as_ref().unwrap() {
             ValueBox::UnquotedString(s) => {
-                assert!(s.value.len() >= 1);
+                assert!(!s.value.is_empty());
                 // Should have a substitution part
                 let has_subst = s.value.iter().any(|ib| ib.substitution.is_some());
                 assert!(

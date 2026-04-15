@@ -4,6 +4,13 @@
 
 use std::collections::BTreeMap;
 
+type ParsedSymbols = (
+    BTreeMap<usize, usize>, // rune_symbol_pair
+    BTreeMap<usize, usize>, // symbol_array
+    BTreeMap<usize, usize>, // symbol_collection
+    Vec<usize>,             // symbol_collection_keys
+);
+
 // Composite-glyph flags
 const SYMBOL_WORDS: u16 = 1 << 0;
 const SYMBOL_SCALE: u16 = 1 << 3;
@@ -301,20 +308,12 @@ impl Utf8FontFile {
         }
     }
 
-    fn parse_symbols(
-        &mut self,
-        used_runes: &BTreeMap<usize, usize>,
-    ) -> (
-        BTreeMap<usize, usize>, // rune_symbol_pair
-        BTreeMap<usize, usize>, // symbol_array
-        BTreeMap<usize, usize>, // symbol_collection
-        Vec<usize>,             // symbol_collection_keys
-    ) {
+    fn parse_symbols(&mut self, used_runes: &BTreeMap<usize, usize>) -> ParsedSymbols {
         let mut symbol_collection: BTreeMap<usize, usize> = BTreeMap::new();
         symbol_collection.insert(0, 0);
         let mut char_symbol_pairs: BTreeMap<usize, usize> = BTreeMap::new();
 
-        for (_, ch) in used_runes {
+        for ch in used_runes.values() {
             if let Some(&sym) = self.char_symbol_dict.get(ch) {
                 symbol_collection.insert(sym, *ch);
                 char_symbol_pairs.insert(*ch, sym);
@@ -324,14 +323,12 @@ impl Utf8FontFile {
 
         let begin = self.table_descs["glyf"].position;
 
-        let mut symbol_array: BTreeMap<usize, usize> = BTreeMap::new();
         let symbol_keys: Vec<usize> = symbol_collection.keys().copied().collect();
-
-        let mut counter = 0usize;
-        for &old_idx in &symbol_keys {
-            symbol_array.insert(old_idx, counter);
-            counter += 1;
-        }
+        let mut symbol_array: BTreeMap<usize, usize> = symbol_keys
+            .iter()
+            .enumerate()
+            .map(|(i, &k)| (k, i))
+            .collect();
 
         let mut rune_symbol_pairs: BTreeMap<usize, usize> = BTreeMap::new();
         for (&runa, &sym) in &char_symbol_pairs {
@@ -478,10 +475,7 @@ impl Utf8FontFile {
         cmap.push(1);
 
         // idRangeOffset
-        for _ in &cid_array {
-            cmap.push(0);
-        }
-        cmap.push(0);
+        cmap.resize(cmap.len() + cid_array.len() + 1, 0);
 
         // glyphIdArray
         for &start in &cid_array_keys {
@@ -519,7 +513,7 @@ impl Utf8FontFile {
 
     fn generate_checksum(data: &[u8]) -> [u16; 2] {
         let mut padded;
-        let data = if data.len() % 4 != 0 {
+        let data = if !data.len().is_multiple_of(4) {
             padded = data.to_vec();
             while padded.len() % 4 != 0 {
                 padded.push(0);
@@ -621,8 +615,8 @@ impl Utf8FontFile {
             (adj[1] >> 8) as u8,
             (adj[1] & 0xFF) as u8,
         ];
-        let answer = Self::splice(&answer, begin + 8, &adj_bytes);
-        answer
+        
+        Self::splice(&answer, begin + 8, &adj_bytes)
     }
 
     fn generate_cut_font(&mut self, used_runes: &BTreeMap<usize, usize>) -> Option<Vec<u8>> {
@@ -747,7 +741,7 @@ impl Utf8FontFile {
 
             new_glyf.extend_from_slice(&data);
             pos += sym_len;
-            if pos % 4 != 0 {
+            if !pos.is_multiple_of(4) {
                 let padding = 4 - (pos % 4);
                 new_glyf.extend(std::iter::repeat_n(0u8, padding));
                 pos += padding;

@@ -2,13 +2,6 @@
 //!
 //! Ported from Go `d2exporter/export.go`.
 
-use d2_color;
-use d2_fonts;
-use d2_geo;
-use d2_graph;
-use d2_label;
-use d2_target;
-use d2_themes;
 
 // ---------------------------------------------------------------------------
 // Export entry point
@@ -35,11 +28,10 @@ pub fn export(
 
     // Font family selection
     let mut effective_font = font_family.unwrap_or(d2_fonts::FontFamily::SourceSansPro);
-    if let Some(ref theme) = g.theme {
-        if theme.special_rules.mono {
+    if let Some(ref theme) = g.theme
+        && theme.special_rules.mono {
             effective_font = d2_fonts::FontFamily::SourceCodePro;
         }
-    }
     diagram.font_family = Some(effective_font.to_string());
     diagram.mono_font_family = Some(
         mono_font_family
@@ -303,15 +295,14 @@ fn to_shape(obj: &d2_graph::Object, g: &d2_graph::Graph) -> d2_target::Shape {
     let is_italic = shape.text.italic;
     shape.text.color = text.get_color(is_italic).to_owned();
 
-    if let Some(ref theme) = g.theme {
-        if theme.special_rules.c4 && obj.style.font_color.is_none() {
+    if let Some(ref theme) = g.theme
+        && theme.special_rules.c4 && obj.style.font_color.is_none() {
             if obj.is_container() {
                 shape.text.color = d2_color::N1.to_owned();
             } else {
                 shape.text.color = d2_color::N7.to_owned();
             }
         }
-    }
 
     // Second apply_styles (overrides theme defaults with explicit user styles)
     apply_styles(&mut shape, obj);
@@ -389,8 +380,8 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
             conn.src_arrow = ah.to_arrowhead();
         }
     }
-    if let Some(ref ah) = edge.src_arrowhead {
-        if !ah.label.value.is_empty() {
+    if let Some(ref ah) = edge.src_arrowhead
+        && !ah.label.value.is_empty() {
             conn.src_label = Some(d2_target::Text {
                 label: ah.label.value.clone(),
                 label_width: ah.label_dimensions.width,
@@ -404,7 +395,6 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
                 ..Default::default()
             });
         }
-    }
 
     // Destination arrowhead
     if edge.dst_arrow {
@@ -413,8 +403,8 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
             conn.dst_arrow = ah.to_arrowhead();
         }
     }
-    if let Some(ref ah) = edge.dst_arrowhead {
-        if !ah.label.value.is_empty() {
+    if let Some(ref ah) = edge.dst_arrowhead
+        && !ah.label.value.is_empty() {
             conn.dst_label = Some(d2_target::Text {
                 label: ah.label.value.clone(),
                 label_width: ah.label_dimensions.width,
@@ -428,14 +418,12 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
                 ..Default::default()
             });
         }
-    }
 
     // Theme corner radius override
-    if let Some(ref theme) = g.theme {
-        if theme.special_rules.no_corner_radius {
+    if let Some(ref theme) = g.theme
+        && theme.special_rules.no_corner_radius {
             conn.border_radius = 0.0;
         }
-    }
 
     // Edge style overrides
     if let Some(ref v) = edge.style.border_radius {
@@ -497,11 +485,10 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
         conn.text.underline = v.value == "true";
     }
 
-    if let Some(ref theme) = g.theme {
-        if theme.special_rules.mono {
+    if let Some(ref theme) = g.theme
+        && theme.special_rules.mono {
             conn.text.font_family = "mono".to_owned();
         }
-    }
     if let Some(ref v) = edge.style.font {
         conn.text.font_family = v.value.clone();
     }
@@ -543,8 +530,8 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
     };
 
     // C4 theme overrides for connections
-    if let Some(ref theme) = g.theme {
-        if theme.special_rules.c4 {
+    if let Some(ref theme) = g.theme
+        && theme.special_rules.c4 {
             if edge.style.stroke_dash.is_none() {
                 conn.stroke_dash = 5.0;
             }
@@ -555,7 +542,6 @@ fn to_connection(edge: &d2_graph::Edge, g: &d2_graph::Graph) -> d2_target::Conne
                 conn.text.color = d2_color::N2.to_owned();
             }
         }
-    }
 
     conn
 }

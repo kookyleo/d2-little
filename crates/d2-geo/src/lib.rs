@@ -371,7 +371,7 @@ pub fn points_get_median(ps: &[Point]) -> Point {
     let mut median_x = xs[mid];
     let mut median_y = ys[mid];
 
-    if xs.len() % 2 == 0 {
+    if xs.len().is_multiple_of(2) {
         median_x = (median_x + xs[mid - 1]) / 2.0;
         median_y = (median_y + ys[mid - 1]) / 2.0;
     }
@@ -420,7 +420,7 @@ pub fn intersection_point(u0: &Point, u1: &Point, v0: &Point, v1: &Point) -> Opt
     let s = (vdx * uvdy - vdy * uvdx) / denom;
     let t = (udx * uvdy - udy * uvdx) / denom;
 
-    if s < 0.0 || s > 1.0 || t < 0.0 || t > 1.0 {
+    if !(0.0..=1.0).contains(&s) || !(0.0..=1.0).contains(&t) {
         return None;
     }
 
@@ -972,14 +972,14 @@ impl BezierCurveImpl {
             .collect();
 
         let mut w: f64 = 0.0;
-        for i in 0..n {
+        for (i, ci) in c.iter_mut().enumerate() {
             match i {
                 0 => w = 1.0,
                 1 => w = (n as f64) - 1.0,
                 _ => w *= (n - i) as f64 / i as f64,
             }
-            c[i].control.x = c[i].point.x * w;
-            c[i].control.y = c[i].point.y * w;
+            ci.control.x = ci.point.x * w;
+            ci.control.y = ci.point.y * w;
         }
 
         BezierCurveImpl(c)
@@ -989,10 +989,10 @@ impl BezierCurveImpl {
         let c = &mut self.0;
         c[0].point = c[0].control;
         let mut u = t;
-        for i in 1..c.len() {
-            c[i].point = BezierPoint {
-                x: c[i].control.x * u,
-                y: c[i].control.y * u,
+        for ci in c.iter_mut().skip(1) {
+            ci.point = BezierPoint {
+                x: ci.control.x * u,
+                y: ci.control.y * u,
             };
             u *= t;
         }
@@ -1093,9 +1093,7 @@ pub fn compute_intersections(px: &[f64], py: &[f64], lx: &[f64], ly: &[f64]) -> 
 
     let r = cubic_roots(&p);
 
-    for i in 0..3 {
-        let t = r[i];
-
+    for &t in &r {
         let point = Point::new(
             bx[0] * t * t * t + bx[1] * t * t + bx[2] * t + bx[3],
             by[0] * t * t * t + by[1] * t * t + by[2] * t + by[3],
@@ -1206,7 +1204,7 @@ fn sort_special(a: &mut [f64; 3]) {
             let ai1_gte_0 = precision_compare(a[i + 1], 0.0, PRECISION) >= 0;
             let ai_gt_ai1 = precision_compare(a[i], a[i + 1], PRECISION) > 0;
             let ai_lt_0 = precision_compare(a[i], 0.0, PRECISION) < 0;
-            if (ai1_gte_0 && ai_gt_ai1) || (ai_lt_0 && ai1_gte_0) {
+            if ai1_gte_0 && (ai_gt_ai1 || ai_lt_0) {
                 flip = true;
                 a.swap(i, i + 1);
             }

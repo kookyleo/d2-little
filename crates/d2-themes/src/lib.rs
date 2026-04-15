@@ -3,7 +3,6 @@
 //! Ported from Go `d2themes/d2themes.go`, `d2themes/element.go`,
 //! and `d2themes/d2themescatalog/*.go`.
 
-use d2_color;
 
 // ---------------------------------------------------------------------------
 // Neutral presets
@@ -1269,12 +1268,7 @@ pub mod catalog {
                 return Some(t);
             }
         }
-        for t in DARK_CATALOG {
-            if t.id == id {
-                return Some(t);
-            }
-        }
-        None
+        DARK_CATALOG.iter().find(|&t| t.id == id).map(|v| v as _)
     }
 
     /// Build a human-readable catalog listing for CLI usage.

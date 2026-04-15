@@ -5,16 +5,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
-use d2_ast;
-use d2_color;
-use d2_fonts;
-use d2_geo;
-use d2_label;
 use d2_shape::{self, ShapeOps};
-use d2_svg_path;
-use d2_target;
-use d2_textmeasure;
-use d2_themes;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -180,11 +171,10 @@ fn sort_objects(objects: &mut [DiagramObject<'_>]) {
             return za.cmp(&zb);
         }
         // Both shapes: parent before child
-        if let (Some(la), Some(lb)) = (a.level(), b.level()) {
-            if la != lb {
+        if let (Some(la), Some(lb)) = (a.level(), b.level())
+            && la != lb {
                 return la.cmp(&lb);
             }
-        }
         // Shapes before connections
         match (a.is_shape(), b.is_shape()) {
             (true, false) => std::cmp::Ordering::Less,
@@ -1040,7 +1030,7 @@ fn draw_connection(
                     )
                     .map(|(tl, _)| {
                         d2_geo::Point::new(
-                            tl.x - d2_target::CONNECTION_ICON_LABEL_GAP as f64
+                            tl.x - d2_target::CONNECTION_ICON_LABEL_GAP
                                 - d2_target::DEFAULT_ICON_SIZE as f64,
                             tl.y + connection.text.label_height as f64 / 2.0
                                 - d2_target::DEFAULT_ICON_SIZE as f64 / 2.0,
@@ -1169,7 +1159,7 @@ fn draw_connection(
 
             // When connection also has an icon, expand mask to cover both
             // icon + gap + label, matching Go drawConnection behavior.
-            let mut mask_tl = label_tl.clone();
+            let mut mask_tl = label_tl;
             let mut mask_width = connection.text.label_width;
             if connection.icon.is_some() {
                 mask_width +=
@@ -1288,7 +1278,7 @@ fn draw_connection(
                         let class = if is_light { "light-code" } else { "dark-code" };
 
                         let font_size_attr =
-                            if connection.text.font_size != d2_fonts::FONT_SIZE_M as i32 {
+                            if connection.text.font_size != d2_fonts::FONT_SIZE_M {
                                 format!(" style=\"font-size:{}\"", connection.text.font_size,)
                             } else {
                                 String::new()
@@ -1423,16 +1413,14 @@ fn draw_connection(
     }
 
     // Source / destination arrowhead labels (e.g. `source-arrowhead: 1`).
-    if let Some(ref l) = connection.src_label {
-        if !l.label.is_empty() {
+    if let Some(ref l) = connection.src_label
+        && !l.label.is_empty() {
             buf.push_str(&render_arrowhead_label(connection, l, false, inline_theme));
         }
-    }
-    if let Some(ref l) = connection.dst_label {
-        if !l.label.is_empty() {
+    if let Some(ref l) = connection.dst_label
+        && !l.label.is_empty() {
             buf.push_str(&render_arrowhead_label(connection, l, true, inline_theme));
         }
-    }
 
     buf.push_str("</g>");
     Ok(label_mask)
@@ -1524,7 +1512,7 @@ fn arrowhead_label_position(connection: &d2_target::Connection, is_dst: bool) ->
     };
 
     if arrow_size > 0.0 {
-        let offset = (arrow_size / 2.0 + d2_target::ARROWHEAD_PADDING as f64)
+        let offset = (arrow_size / 2.0 + d2_target::ARROWHEAD_PADDING)
             - stroke_width / 2.0
             - d2_label::PADDING;
         if offset > 0.0 {
@@ -1860,16 +1848,25 @@ fn draw_shape(
     // Dispatch by shape type
     match target_shape.type_.as_str() {
         d2_target::SHAPE_OVAL => {
+            let shape_box = d2_geo::Box2D::new(tl, width, height);
+            let oval_style_multi = OvalStyle {
+                fill: &fill,
+                fill_pattern: "",
+                stroke: &stroke,
+                css_style: &style,
+            };
+            let oval_style_main = OvalStyle {
+                fill: &fill,
+                fill_pattern: &target_shape.fill_pattern,
+                stroke: &stroke,
+                css_style: &style,
+            };
             if target_shape.double_border {
                 if let Some(ref mtl) = multiple_tl {
+                    let multi_box = d2_geo::Box2D::new(*mtl, width, height);
                     buf.push_str(&render_double_oval(
-                        mtl,
-                        width,
-                        height,
-                        &fill,
-                        "",
-                        &stroke,
-                        &style,
+                        &multi_box,
+                        &oval_style_multi,
                         inline_theme,
                     ));
                 }
@@ -1877,42 +1874,20 @@ fn draw_shape(
                     buf.push_str(&d2_sketch::double_oval(sr, target_shape, diagram_hash)?);
                 } else {
                     buf.push_str(&render_double_oval(
-                        &tl,
-                        width,
-                        height,
-                        &fill,
-                        &target_shape.fill_pattern,
-                        &stroke,
-                        &style,
+                        &shape_box,
+                        &oval_style_main,
                         inline_theme,
                     ));
                 }
             } else {
                 if let Some(ref mtl) = multiple_tl {
-                    buf.push_str(&render_oval(
-                        mtl,
-                        width,
-                        height,
-                        &fill,
-                        "",
-                        &stroke,
-                        &style,
-                        inline_theme,
-                    ));
+                    let multi_box = d2_geo::Box2D::new(*mtl, width, height);
+                    buf.push_str(&render_oval(&multi_box, &oval_style_multi, inline_theme));
                 }
                 if let Some(sr) = sketch_runner {
                     buf.push_str(&d2_sketch::oval(sr, target_shape, diagram_hash)?);
                 } else {
-                    buf.push_str(&render_oval(
-                        &tl,
-                        width,
-                        height,
-                        &fill,
-                        &target_shape.fill_pattern,
-                        &stroke,
-                        &style,
-                        inline_theme,
-                    ));
+                    buf.push_str(&render_oval(&shape_box, &oval_style_main, inline_theme));
                 }
             }
         }
@@ -2101,20 +2076,18 @@ fn draw_shape(
             let mut s = d2_shape::Shape::new(shape_type, bbox);
             // Match Go d2svg.go: cloud picks one of three inner boxes based
             // on content aspect ratio, so propagate it before sizing.
-            if shape_type == d2_shape::CLOUD_TYPE {
-                if let Some(ar) = target_shape.content_aspect_ratio {
+            if shape_type == d2_shape::CLOUD_TYPE
+                && let Some(ar) = target_shape.content_aspect_ratio {
                     s.set_inner_box_aspect_ratio(ar);
                 }
-            }
 
             if let Some(ref mtl) = multiple_tl {
                 let m_bbox = d2_geo::Box2D::new(*mtl, width, height);
                 let mut ms = d2_shape::Shape::new(shape_type, m_bbox);
-                if shape_type == d2_shape::CLOUD_TYPE {
-                    if let Some(ar) = target_shape.content_aspect_ratio {
+                if shape_type == d2_shape::CLOUD_TYPE
+                    && let Some(ar) = target_shape.content_aspect_ratio {
                         ms.set_inner_box_aspect_ratio(ar);
                     }
-                }
                 let mut el = d2_themes::ThemableElement::new("path", inline_theme);
                 el.fill = fill.clone();
                 el.stroke = stroke.clone();
@@ -2161,13 +2134,12 @@ fn draw_shape(
         let icon_position = d2_label::Position::from_string(&target_shape.icon_position);
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
-        if shape_type == d2_shape::CLOUD_TYPE {
-            if let Some(ar) = target_shape.content_aspect_ratio {
+        if shape_type == d2_shape::CLOUD_TYPE
+            && let Some(ar) = target_shape.content_aspect_ratio {
                 s.set_inner_box_aspect_ratio(ar);
             }
-        }
         let the_box = if icon_position.is_outside() {
-            s.get_box().clone()
+            *s.get_box()
         } else {
             s.get_inner_box()
         };
@@ -2210,14 +2182,13 @@ fn draw_shape(
         let label_position = d2_label::Position::from_string(&target_shape.label_position);
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
-        if shape_type == d2_shape::CLOUD_TYPE {
-            if let Some(ar) = target_shape.content_aspect_ratio {
+        if shape_type == d2_shape::CLOUD_TYPE
+            && let Some(ar) = target_shape.content_aspect_ratio {
                 s.set_inner_box_aspect_ratio(ar);
             }
-        }
 
         let the_box = if label_position.is_outside() || label_position.is_border() {
-            let mut b = s.get_box().clone();
+            let mut b = *s.get_box();
             if target_shape.three_dee {
                 let offset_y = if target_shape.type_ == d2_target::SHAPE_HEXAGON {
                     d2_target::THREE_DEE_OFFSET / 2
@@ -2289,7 +2260,7 @@ fn draw_shape(
                 }
             };
             let box_ = if label_position.is_outside() {
-                s.get_box().clone()
+                *s.get_box()
             } else {
                 s.get_inner_box()
             };
@@ -2510,11 +2481,10 @@ fn draw_shape(
     {
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
-        if shape_type == d2_shape::CLOUD_TYPE {
-            if let Some(ar) = target_shape.content_aspect_ratio {
+        if shape_type == d2_shape::CLOUD_TYPE
+            && let Some(ar) = target_shape.content_aspect_ratio {
                 s.set_inner_box_aspect_ratio(ar);
             }
-        }
         add_appendix_items(appendix_buf, diagram_hash, target_shape, &s)?;
     }
 
@@ -2589,65 +2559,58 @@ fn make_border_label_mask(
 // Oval rendering
 // ---------------------------------------------------------------------------
 
+/// Styling bundle for oval/double-oval rendering.
+struct OvalStyle<'a> {
+    fill: &'a str,
+    fill_pattern: &'a str,
+    stroke: &'a str,
+    css_style: &'a str,
+}
+
 fn render_oval(
-    tl: &d2_geo::Point,
-    width: f64,
-    height: f64,
-    fill: &str,
-    fill_pattern: &str,
-    stroke: &str,
-    style: &str,
+    shape_box: &d2_geo::Box2D,
+    style: &OvalStyle<'_>,
     inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
     let mut el = d2_themes::ThemableElement::new("ellipse", inline_theme);
-    let rx = width / 2.0;
-    let ry = height / 2.0;
+    let rx = shape_box.width / 2.0;
+    let ry = shape_box.height / 2.0;
     el.rx = Some(rx);
     el.ry = Some(ry);
-    el.cx = Some(tl.x + rx);
-    el.cy = Some(tl.y + ry);
-    el.fill = fill.to_owned();
-    el.stroke = stroke.to_owned();
-    el.fill_pattern = fill_pattern.to_owned();
+    el.cx = Some(shape_box.top_left.x + rx);
+    el.cy = Some(shape_box.top_left.y + ry);
+    el.fill = style.fill.to_owned();
+    el.stroke = style.stroke.to_owned();
+    el.fill_pattern = style.fill_pattern.to_owned();
     el.class_name = "shape".to_owned();
-    el.style = style.to_owned();
+    el.style = style.css_style.to_owned();
     el.render()
 }
 
 fn render_double_oval(
-    tl: &d2_geo::Point,
-    width: f64,
-    height: f64,
-    fill: &str,
-    fill_pattern: &str,
-    stroke: &str,
-    style: &str,
+    shape_box: &d2_geo::Box2D,
+    style: &OvalStyle<'_>,
     inline_theme: Option<&d2_themes::ResolvedTheme>,
 ) -> String {
-    let inner_tl = d2_geo::Point::new(
-        tl.x + d2_target::INNER_BORDER_OFFSET as f64,
-        tl.y + d2_target::INNER_BORDER_OFFSET as f64,
+    let inner_box = d2_geo::Box2D::new(
+        d2_geo::Point::new(
+            shape_box.top_left.x + d2_target::INNER_BORDER_OFFSET as f64,
+            shape_box.top_left.y + d2_target::INNER_BORDER_OFFSET as f64,
+        ),
+        shape_box.width - (d2_target::INNER_BORDER_OFFSET as f64) * 2.0,
+        shape_box.height - (d2_target::INNER_BORDER_OFFSET as f64) * 2.0,
     );
     format!(
         "{}{}",
+        render_oval(shape_box, style, inline_theme),
         render_oval(
-            tl,
-            width,
-            height,
-            fill,
-            fill_pattern,
-            stroke,
-            style,
-            inline_theme
-        ),
-        render_oval(
-            &inner_tl,
-            width - 10.0,
-            height - 10.0,
-            fill,
-            "",
-            stroke,
-            style,
+            &inner_box,
+            &OvalStyle {
+                fill: style.fill,
+                fill_pattern: "",
+                stroke: style.stroke,
+                css_style: style.css_style,
+            },
             inline_theme,
         )
     )
@@ -3050,8 +3013,8 @@ fn draw_class(
     }
 
     // Shape icon (matches Go class.go drawClass icon rendering)
-    if let Some(ref icon) = shape.icon {
-        if shape.type_ != d2_target::SHAPE_IMAGE {
+    if let Some(ref icon) = shape.icon
+        && shape.type_ != d2_target::SHAPE_IMAGE {
             let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
             let icon_pos = d2_label::Position::from_string(&shape.icon_position);
             let icon_size = get_icon_size(&bbox, &shape.icon_position);
@@ -3072,7 +3035,6 @@ fn draw_class(
             )
             .unwrap();
         }
-    }
 }
 
 /// Render the dark header rect + title text for a class shape.
@@ -3449,8 +3411,8 @@ fn draw_table(
     }
 
     // Shape icon (matches Go table.go/class.go icon rendering)
-    if let Some(ref icon) = shape.icon {
-        if shape.type_ != d2_target::SHAPE_IMAGE {
+    if let Some(ref icon) = shape.icon
+        && shape.type_ != d2_target::SHAPE_IMAGE {
             let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
             let icon_pos = d2_label::Position::from_string(&shape.icon_position);
             let icon_size = get_icon_size(&bbox, &shape.icon_position);
@@ -3471,7 +3433,6 @@ fn draw_table(
             )
             .unwrap();
         }
-    }
 }
 
 /// Render the table header rect + title text (port of Go `tableHeader`).
@@ -3751,9 +3712,9 @@ fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
     // Port of Go d2svg.dimensions: widen bounding box to include the legend
     // on the right-hand side (and top-stretch when the legend is taller
     // than the diagram's existing bbox).
-    if let Some(ref legend) = diagram.legend {
-        if !legend.shapes.is_empty() || !legend.connections.is_empty() {
-            if let Some((legend_width, total_height)) = legend_dimensions(legend) {
+    if let Some(ref legend) = diagram.legend
+        && (!legend.shapes.is_empty() || !legend.connections.is_empty())
+            && let Some((legend_width, total_height)) = legend_dimensions(legend) {
                 let mut legend_y = br.y - total_height;
                 if legend_y < tl.y {
                     legend_y = tl.y;
@@ -3772,8 +3733,6 @@ fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
                     height = legend_bottom - top + pad / 2;
                 }
             }
-        }
-    }
     (left, top, width, height)
 }
 

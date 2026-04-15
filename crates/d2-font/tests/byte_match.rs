@@ -114,8 +114,9 @@ fn woff_roundtrip_contains_matching_tables_for_ab_bold() {
 /// fields we know diverge:
 /// - The `name` entry's compressed length (comp-stream byte count).
 /// - The `post` entry's offset and compressed length.
+///
 /// Everything else — tags, original lengths, checksums, the OS/2/cmap/glyf/
-/// head/hhea/hmtx/loca/maxp/name-offset entries — must match byte-for-byte.
+///   head/hhea/hmtx/loca/maxp/name-offset entries — must match byte-for-byte.
 ///
 /// This catches regressions where the table directory order, length
 /// computation, or stored-vs-compressed decision drifts from Go's behavior.

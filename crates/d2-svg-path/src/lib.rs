@@ -95,9 +95,9 @@ impl SvgPathContext {
 
     /// Cubic Bezier curve command (SVG "C").
     ///
-    /// Three control-point pairs: (x1,y1), (x2,y2), (x3,y3).
+    /// `ctrls` are three control-point pairs `[(x1,y1), (x2,y2), (x3,y3)]`.
     /// If `is_lower_case`, offsets are relative to the current point.
-    pub fn c(&mut self, is_lower_case: bool, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64) {
+    pub fn c(&mut self, is_lower_case: bool, ctrls: [(f64, f64); 3]) {
         let current = self.current.expect("C called without current point");
         let p = |x: f64, y: f64| -> Point {
             if is_lower_case {
@@ -107,9 +107,9 @@ impl SvgPathContext {
             }
         };
         let p1 = current;
-        let p2 = p(x1, y1);
-        let p3 = p(x2, y2);
-        let p4 = p(x3, y3);
+        let p2 = p(ctrls[0].0, ctrls[0].1);
+        let p3 = p(ctrls[1].0, ctrls[1].1);
+        let p4 = p(ctrls[2].0, ctrls[2].1);
         let points = vec![p1, p2, p3, p4];
         self.path
             .push(PathElement::Bezier(BezierCurve::new(points.clone())));
@@ -280,7 +280,7 @@ impl SvgPathCommand {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "M" => Some(Self::M),
             "L" => Some(Self::L),
@@ -326,7 +326,7 @@ pub fn path_length(path_data: &[&str]) -> Result<f64, String> {
     let mut i = 0;
 
     while i < path_data.len() {
-        let cmd = SvgPathCommand::from_str(path_data[i])
+        let cmd = SvgPathCommand::parse(path_data[i])
             .ok_or_else(|| format!("unknown svg path command \"{}\"", path_data[i]))?;
         match cmd {
             SvgPathCommand::M => {
@@ -375,7 +375,7 @@ pub fn split_path(path: &str, percentage: f64) -> Result<(String, String), Strin
     let mut i = 0;
 
     while i < tokens.len() {
-        let cmd = SvgPathCommand::from_str(tokens[i])
+        let cmd = SvgPathCommand::parse(tokens[i])
             .ok_or_else(|| format!("unknown svg path command \"{}\"", tokens[i]))?;
 
         match cmd {
@@ -507,7 +507,7 @@ mod tests {
     fn test_svg_path_context_cubic() {
         let mut ctx = SvgPathContext::new(Point::new(0.0, 0.0), 1.0, 1.0);
         ctx.start_at(Point::new(0.0, 0.0));
-        ctx.c(false, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0);
+        ctx.c(false, [(10.0, 20.0), (30.0, 40.0), (50.0, 60.0)]);
         let data = ctx.path_data();
         assert!(data.starts_with("M 0 0 C 10 20 30 40 50 60"));
     }

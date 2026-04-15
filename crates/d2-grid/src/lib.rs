@@ -60,7 +60,7 @@ fn new_grid_diagram(g: &mut Graph, root: ObjId) -> GridDiagram {
         // Mirror Go d2grid: if the `grid-rows` key appears before
         // `grid-columns` in source order, the layout is row-directed.
         // Otherwise it is column-directed.
-        if let (Some(ref rr), Some(ref cr)) = (
+        if let (Some(rr), Some(cr)) = (
             obj.grid_rows_range.as_ref(),
             obj.grid_columns_range.as_ref(),
         ) {
@@ -87,10 +87,8 @@ fn new_grid_diagram(g: &mut Graph, root: ObjId) -> GridDiagram {
         if children.len() < rows {
             rows = children.len();
         }
-    } else {
-        if children.len() < columns {
-            columns = children.len();
-        }
+    } else if children.len() < columns {
+        columns = children.len();
     }
 
     // Parse gap settings
@@ -311,11 +309,11 @@ pub fn layout(g: &mut Graph) -> Result<(), String> {
 
         let src_in_grid = src_parent == Some(root) || {
             let sp = g.objects[g.edges[ei].src].parent;
-            sp.map_or(false, |p| is_descendant_of(g, p, root))
+            sp.is_some_and(|p| is_descendant_of(g, p, root))
         };
         let dst_in_grid = dst_parent == Some(root) || {
             let dp = g.objects[g.edges[ei].dst].parent;
-            dp.map_or(false, |p| is_descendant_of(g, p, root))
+            dp.is_some_and(|p| is_descendant_of(g, p, root))
         };
 
         if !src_in_grid && !dst_in_grid {
@@ -478,12 +476,12 @@ fn layout_evenly(g: &mut Graph, gd: &mut GridDiagram) {
     let mut row_heights = vec![0.0f64; gd.rows];
     let mut col_widths = vec![0.0f64; gd.columns];
 
-    for i in 0..gd.rows {
-        for j in 0..gd.columns {
+    for (i, row) in row_heights.iter_mut().enumerate() {
+        for (j, col) in col_widths.iter_mut().enumerate() {
             if let Some(idx) = get_index(i, j) {
                 let obj = &g.objects[gd.objects[idx]];
-                row_heights[i] = row_heights[i].max(obj.height);
-                col_widths[j] = col_widths[j].max(obj.width);
+                *row = row.max(obj.height);
+                *col = col.max(obj.width);
             }
         }
     }
@@ -493,33 +491,33 @@ fn layout_evenly(g: &mut Graph, gd: &mut GridDiagram) {
 
     if gd.row_directed {
         let mut y = 0.0;
-        for i in 0..gd.rows {
+        for (i, &row_h) in row_heights.iter().enumerate() {
             let mut x = 0.0;
-            for j in 0..gd.columns {
+            for (j, &col_w) in col_widths.iter().enumerate() {
                 if let Some(idx) = get_index(i, j) {
                     let oid = gd.objects[idx];
-                    g.objects[oid].width = col_widths[j];
-                    g.objects[oid].height = row_heights[i];
+                    g.objects[oid].width = col_w;
+                    g.objects[oid].height = row_h;
                     d2_graph::move_obj_with_descendants_to(g, oid, x, y);
-                    x += col_widths[j] + h_gap;
+                    x += col_w + h_gap;
                 }
             }
-            y += row_heights[i] + v_gap;
+            y += row_h + v_gap;
         }
     } else {
         let mut x = 0.0;
-        for j in 0..gd.columns {
+        for (j, &col_w) in col_widths.iter().enumerate() {
             let mut y = 0.0;
-            for i in 0..gd.rows {
+            for (i, &row_h) in row_heights.iter().enumerate() {
                 if let Some(idx) = get_index(i, j) {
                     let oid = gd.objects[idx];
-                    g.objects[oid].width = col_widths[j];
-                    g.objects[oid].height = row_heights[i];
+                    g.objects[oid].width = col_w;
+                    g.objects[oid].height = row_h;
                     d2_graph::move_obj_with_descendants_to(g, oid, x, y);
-                    y += row_heights[i] + v_gap;
+                    y += row_h + v_gap;
                 }
             }
-            x += col_widths[j] + h_gap;
+            x += col_w + h_gap;
         }
     }
 
@@ -757,9 +755,8 @@ fn get_best_layout(
         .collect();
     let sd = stddev(&sizes);
 
-    let mut threshold_attempts = (sd.ceil() as usize)
-        .max(MIN_THRESHOLD_ATTEMPTS)
-        .min(MAX_THRESHOLD_ATTEMPTS);
+    let mut threshold_attempts =
+        (sd.ceil() as usize).clamp(MIN_THRESHOLD_ATTEMPTS, MAX_THRESHOLD_ATTEMPTS);
     let mut ok_threshold = STARTING_THRESHOLD;
 
     let mut attempt = 0;
@@ -767,18 +764,15 @@ fn get_best_layout(
         state.count = 0;
         state.skip_count = 0;
 
-        iter_divisions_search(
-            &sizes,
-            n_cuts,
-            &mut Vec::new(),
+        let params = DivisionSearchParams {
             g,
             gd,
             target_size,
             columns,
             gap,
             ok_threshold,
-            &mut state,
-        );
+        };
+        iter_divisions_search(&sizes, n_cuts, &mut Vec::new(), &params, &mut state);
 
         ok_threshold += THRESHOLD_STEP_SIZE;
         state.starting_cache.clear();
@@ -797,17 +791,22 @@ fn get_best_layout(
         .unwrap_or_else(|| vec![gd.objects.clone()])
 }
 
+/// Immutable search context threaded through `iter_divisions_search` recursion.
+struct DivisionSearchParams<'a> {
+    g: &'a Graph,
+    gd: &'a GridDiagram,
+    target_size: f64,
+    columns: bool,
+    gap: f64,
+    ok_threshold: f64,
+}
+
 /// Port of Go `iterDivisions`, carrying pending outer cuts in reverse order.
 fn iter_divisions_search(
     sizes: &[f64],
     n_cuts: usize,
     pending_suffix: &mut Vec<usize>,
-    g: &Graph,
-    gd: &GridDiagram,
-    target_size: f64,
-    columns: bool,
-    gap: f64,
-    ok_threshold: f64,
+    params: &DivisionSearchParams<'_>,
     state: &mut SearchState,
 ) -> bool {
     if sizes.len() < 2 || n_cuts == 0 {
@@ -818,46 +817,43 @@ fn iter_divisions_search(
         if !check_cut(
             &sizes[index..],
             false,
-            gap,
-            ok_threshold,
-            target_size,
+            params.gap,
+            params.ok_threshold,
+            params.target_size,
             state,
         ) {
             continue;
         }
         if n_cuts > 1 {
             pending_suffix.push(index - 1);
-            let done = iter_divisions_search(
-                &sizes[..index],
-                n_cuts - 1,
-                pending_suffix,
-                g,
-                gd,
-                target_size,
-                columns,
-                gap,
-                ok_threshold,
-                state,
-            );
+            let done =
+                iter_divisions_search(&sizes[..index], n_cuts - 1, pending_suffix, params, state);
             pending_suffix.pop();
             if done {
                 return true;
             }
         } else {
-            if !check_cut(&sizes[..index], true, gap, ok_threshold, target_size, state) {
+            if !check_cut(
+                &sizes[..index],
+                true,
+                params.gap,
+                params.ok_threshold,
+                params.target_size,
+                state,
+            ) {
                 continue;
             }
             let mut division = Vec::with_capacity(pending_suffix.len() + 1);
             division.push(index - 1);
             division.extend(pending_suffix.iter().rev().copied());
-            let layout = gen_layout(&gd.objects, &division);
+            let layout = gen_layout(&params.gd.objects, &division);
             let dist = get_dist_to_target(
-                g,
+                params.g,
                 &layout,
-                target_size,
-                gd.horizontal_gap as f64,
-                gd.vertical_gap as f64,
-                columns,
+                params.target_size,
+                params.gd.horizontal_gap as f64,
+                params.gd.vertical_gap as f64,
+                params.columns,
             );
             if dist < state.best_dist || (state.fast_is_best && dist == state.best_dist) {
                 state.best_layout = Some(layout);
@@ -1116,10 +1112,7 @@ mod tests {
     fn test_new_grid_diagram_rows_only() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
-            value: "3".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
 
         // Add 5 children
         for i in 0..5 {
@@ -1143,10 +1136,7 @@ mod tests {
     fn test_new_grid_diagram_cols_only() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
-            value: "2".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
 
         for i in 0..4 {
             let id = g.objects.len();
@@ -1169,14 +1159,8 @@ mod tests {
     fn test_layout_evenly_2x2() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
-            value: "2".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
-            value: "2".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "2".to_owned() });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
 
         // Add 4 children with different sizes
         let sizes = [(50.0, 30.0), (80.0, 40.0), (60.0, 50.0), (70.0, 35.0)];
@@ -1221,18 +1205,9 @@ mod integration_tests {
         // Mirrors grid_rows_gap_bug: 3 rows, 3 items, h-gap=100, v-gap=0
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
-            value: "3".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
-            value: "100".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
-            value: "0".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue { value: "100".to_owned() });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
 
         let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)]; // typical measured sizes
         for (i, &(w, h)) in sizes.iter().enumerate() {
@@ -1262,18 +1237,9 @@ mod integration_tests {
     fn test_3_rows_layout_dimensions() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
-            value: "3".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
-            value: "100".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
-            value: "0".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue { value: "100".to_owned() });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
 
         let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)];
         for (i, &(w, h)) in sizes.iter().enumerate() {
@@ -1322,18 +1288,9 @@ mod integration_tests {
     fn test_2x2_evenly_layout_full() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
-            value: "2".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
-            value: "2".to_owned(),
-            ..Default::default()
-        });
-        g.objects[root].grid_gap = Some(d2_graph::ScalarValue {
-            value: "0".to_owned(),
-            ..Default::default()
-        });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "2".to_owned() });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
+        g.objects[root].grid_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
 
         let sizes = [(100.0, 100.0); 4];
         for (i, &(w, h)) in sizes.iter().enumerate() {

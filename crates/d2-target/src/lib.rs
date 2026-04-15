@@ -6,8 +6,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use d2_color;
-use d2_themes;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -305,7 +303,9 @@ impl TextDimensions {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum Arrowhead {
+    #[default]
     None,
     Arrow,
     UnfilledTriangle,
@@ -324,11 +324,6 @@ pub enum Arrowhead {
     CfManyRequired,
 }
 
-impl Default for Arrowhead {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 impl Arrowhead {
     pub const DEFAULT: Arrowhead = Arrowhead::Triangle;
@@ -943,14 +938,15 @@ fn fnv1a32_mix(mut h: u32, data: &[u8]) -> u32 {
 /// bounding box. Mirrors Go `label.Position.GetPointOnBox`.
 fn label_top_left(
     pos: &str,
-    sx: f64,
-    sy: f64,
-    sw: f64,
-    sh: f64,
+    shape_box: &d2_geo::Box2D,
     padding: f64,
     lw: f64,
     lh: f64,
 ) -> (f64, f64) {
+    let sx = shape_box.top_left.x;
+    let sy = shape_box.top_left.y;
+    let sw = shape_box.width;
+    let sh = shape_box.height;
     let cx = sx + sw / 2.0;
     let cy = sy + sh / 2.0;
     let (mut x, mut y) = (sx, sy);
@@ -1427,16 +1423,13 @@ impl Diagram {
                 let lh = s.text.label_height as f64;
                 // label.PADDING from Go d2's lib/label = 5.
                 const LABEL_PADDING: f64 = 5.0;
-                let label_tl = label_top_left(
-                    &s.label_position,
-                    s.pos.x as f64,
-                    s.pos.y as f64,
+                let shape_box = d2_geo::Box2D::new(
+                    d2_geo::Point::new(s.pos.x as f64, s.pos.y as f64),
                     s.width as f64,
                     s.height as f64,
-                    LABEL_PADDING,
-                    lw,
-                    lh,
                 );
+                let label_tl =
+                    label_top_left(&s.label_position, &shape_box, LABEL_PADDING, lw, lh);
                 let mut label_x = label_tl.0;
                 let mut label_y = label_tl.1;
 
@@ -1505,26 +1498,22 @@ impl Diagram {
             }
 
             // Include arrowhead labels (src/dst) in the bounding box.
-            if let Some(ref l) = c.src_label {
-                if !l.label.is_empty() && !c.route.is_empty() {
-                    if let Some(tl) = arrowhead_label_tl(c, false) {
+            if let Some(ref l) = c.src_label
+                && !l.label.is_empty() && !c.route.is_empty()
+                    && let Some(tl) = arrowhead_label_tl(c, false) {
                         x1 = x1.min(tl.0 as i64);
                         y1 = y1.min(tl.1 as i64);
                         x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
                         y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
                     }
-                }
-            }
-            if let Some(ref l) = c.dst_label {
-                if !l.label.is_empty() && !c.route.is_empty() {
-                    if let Some(tl) = arrowhead_label_tl(c, true) {
+            if let Some(ref l) = c.dst_label
+                && !l.label.is_empty() && !c.route.is_empty()
+                    && let Some(tl) = arrowhead_label_tl(c, true) {
                         x1 = x1.min(tl.0 as i64);
                         y1 = y1.min(tl.1 as i64);
                         x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
                         y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
                     }
-                }
-            }
 
             // Include the connection's label in the bounding box.
             if !c.text.label.is_empty() && !c.label_position.is_empty() && !c.route.is_empty() {
@@ -1712,7 +1701,7 @@ pub mod go_json {
         // Range of plain-decimal output Go uses: roughly 10⁻⁴ ≤ |f| < 10²¹
         // for 'g' fmt with prec=-1. Outside that range Go switches to
         // scientific (with `e+XX`). Mirror that switch here.
-        if dp17 < -3 || dp17 > 21 {
+        if !(-3..=21).contains(&dp17) {
             return format_f64_scientific_go(f, neg, &digits, dp17);
         }
 
@@ -1758,11 +1747,10 @@ pub mod go_json {
                         // 9999... → 10000..., shift dp by 1.
                         rounded.insert(0, b'1');
                         // dp shifts right by 1
-                        if let Ok(s) = format_decimal(neg, &rounded, dp17 + 1).parse::<f64>() {
-                            if s == f {
+                        if let Ok(s) = format_decimal(neg, &rounded, dp17 + 1).parse::<f64>()
+                            && s == f {
                                 return format_decimal(neg, &rounded, dp17 + 1);
                             }
-                        }
                         continue;
                     }
                 }
@@ -1784,8 +1772,7 @@ pub mod go_json {
         if dp <= 0 {
             // 0.000ddd...
             let zeros = (-dp) as usize;
-            let frac: String = std::iter::repeat('0')
-                .take(zeros)
+            let frac: String = std::iter::repeat_n('0', zeros)
                 .chain(digits.iter().map(|&b| b as char))
                 .collect();
             // Trim trailing zeros from frac.
@@ -1800,7 +1787,7 @@ pub mod go_json {
             let int: String = digits
                 .iter()
                 .map(|&b| b as char)
-                .chain(std::iter::repeat('0').take(extra))
+                .chain(std::iter::repeat_n('0', extra))
                 .collect();
             format!("{}{}", sign, int)
         } else {

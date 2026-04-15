@@ -203,15 +203,15 @@ fn path_elements_to_intersectables(elements: Vec<PathElement>) -> Vec<Box<dyn In
 fn diamond_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, bbox.width / 77.0, bbox.height / 76.9);
     pc.start_at(pc.absolute(38.5, 76.9));
-    pc.c(true, -0.3, 0.0, -0.5, -0.1, -0.7, -0.3);
+    pc.c(true, [(-0.3, 0.0), (-0.5, -0.1), (-0.7, -0.3)]);
     pc.l(false, 0.3, 39.2);
-    pc.c(true, -0.4, -0.4, -0.4, -1.0, 0.0, -1.4);
+    pc.c(true, [(-0.4, -0.4), (-0.4, -1.0), (0.0, -1.4)]);
     pc.l(false, 37.8, 0.3);
-    pc.c(true, 0.4, -0.4, 1.0, -0.4, 1.4, 0.0);
+    pc.c(true, [(0.4, -0.4), (1.0, -0.4), (1.4, 0.0)]);
     pc.l(true, 37.5, 37.5);
-    pc.c(true, 0.4, 0.4, 0.4, 1.0, 0.0, 1.4);
+    pc.c(true, [(0.4, 0.4), (0.4, 1.0), (0.0, 1.4)]);
     pc.l(false, 39.2, 76.6);
-    pc.c(false, 39.0, 76.8, 38.8, 76.9, 38.5, 76.9);
+    pc.c(false, [(39.0, 76.8), (38.8, 76.9), (38.5, 76.9)]);
     pc.z();
     pc
 }
@@ -255,18 +255,18 @@ const CLOUD_SQUARE_INNER_HEIGHT: f64 = 0.663;
 fn cloud_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, bbox.width / 834.0, bbox.height / 523.0);
     pc.start_at(pc.absolute(137.833, 182.833));
-    pc.c(true, 0.0, 5.556, -5.556, 11.111, -11.111, 11.111);
-    pc.c(true, -70.833, 6.944, -126.389, 77.778, -126.389, 163.889);
-    pc.c(true, 0.0, 91.667, 62.5, 165.278, 141.667, 165.278);
+    pc.c(true, [(0.0, 5.556), (-5.556, 11.111), (-11.111, 11.111)]);
+    pc.c(true, [(-70.833, 6.944), (-126.389, 77.778), (-126.389, 163.889)]);
+    pc.c(true, [(0.0, 91.667), (62.5, 165.278), (141.667, 165.278)]);
     pc.h(true, 537.5);
-    pc.c(true, 84.723, 0.0, 154.167, -79.167, 154.167, -175.0);
-    pc.c(true, 0.0, -91.667, -63.89, -168.056, -144.444, -173.611);
-    pc.c(true, -5.556, 0.0, -11.111, -4.167, -12.5, -11.111);
-    pc.c(true, -18.056, -93.055, -101.39, -162.5, -198.611, -162.5);
-    pc.c(true, -63.889, 0.0, -120.834, 29.167, -156.944, 75.0);
-    pc.c(true, -4.167, 5.556, -11.111, 6.945, -15.278, 5.556);
-    pc.c(true, -13.889, -5.556, -29.166, -8.333, -45.833, -8.333);
-    pc.c(false, 196.167, 71.722, 143.389, 120.333, 137.833, 182.833);
+    pc.c(true, [(84.723, 0.0), (154.167, -79.167), (154.167, -175.0)]);
+    pc.c(true, [(0.0, -91.667), (-63.89, -168.056), (-144.444, -173.611)]);
+    pc.c(true, [(-5.556, 0.0), (-11.111, -4.167), (-12.5, -11.111)]);
+    pc.c(true, [(-18.056, -93.055), (-101.39, -162.5), (-198.611, -162.5)]);
+    pc.c(true, [(-63.889, 0.0), (-120.834, 29.167), (-156.944, 75.0)]);
+    pc.c(true, [(-4.167, 5.556), (-11.111, 6.945), (-15.278, 5.556)]);
+    pc.c(true, [(-13.889, -5.556), (-29.166, -8.333), (-45.833, -8.333)]);
+    pc.c(false, [(196.167, 71.722), (143.389, 120.333), (137.833, 182.833)]);
     pc.z();
     pc
 }
@@ -331,13 +331,13 @@ fn person_path(bbox: &Box2D) -> SvgPathContext {
     pc.start_at(pc.absolute(68.3, 77.4));
     pc.h(false, 0.0);
     pc.v(true, -1.1);
-    pc.c(true, 0.0, -13.2, 7.5, -25.1, 19.3, -30.8);
-    pc.c(false, 12.8, 40.9, 8.9, 33.4, 8.9, 25.2);
-    pc.c(false, 8.9, 11.3, 20.2, 0.0, 34.1, 0.0);
+    pc.c(true, [(0.0, -13.2), (7.5, -25.1), (19.3, -30.8)]);
+    pc.c(false, [(12.8, 40.9), (8.9, 33.4), (8.9, 25.2)]);
+    pc.c(false, [(8.9, 11.3), (20.2, 0.0), (34.1, 0.0)]);
     // s 25.2,11.3, 25.2,25.2 -> mirrored last control point
-    pc.c(true, 13.9, 0.0, 25.2, 11.3, 25.2, 25.2);
-    pc.c(true, 0.0, 8.2, -3.8, 15.6, -10.4, 20.4);
-    pc.c(true, 11.8, 5.7, 19.3, 17.6, 19.3, 30.8);
+    pc.c(true, [(13.9, 0.0), (25.2, 11.3), (25.2, 25.2)]);
+    pc.c(true, [(0.0, 8.2), (-3.8, 15.6), (-10.4, 20.4)]);
+    pc.c(true, [(11.8, 5.7), (19.3, 17.6), (19.3, 30.8)]);
     pc.v(true, 1.0);
     pc.h(false, 68.3);
     pc.z();
@@ -367,45 +367,13 @@ fn c4_person_body_path(bbox: &Box2D) -> SvgPathContext {
     let k = 4.0 * (std::f64::consts::SQRT_2 - 1.0) / 3.0;
 
     pc.start_at(pc.absolute(body_left, body_top + corner_radius));
-    pc.c(
-        true,
-        0.0,
-        -k * corner_radius,
-        k * corner_radius,
-        -corner_radius,
-        corner_radius,
-        -corner_radius,
-    );
+    pc.c(true, [(0.0, -k * corner_radius), (k * corner_radius, -corner_radius), (corner_radius, -corner_radius)]);
     pc.h(true, body_width - 2.0 * corner_radius);
-    pc.c(
-        true,
-        k * corner_radius,
-        0.0,
-        corner_radius,
-        k * corner_radius,
-        corner_radius,
-        corner_radius,
-    );
+    pc.c(true, [(k * corner_radius, 0.0), (corner_radius, k * corner_radius), (corner_radius, corner_radius)]);
     pc.v(true, body_height - 2.0 * corner_radius);
-    pc.c(
-        true,
-        0.0,
-        k * corner_radius,
-        -k * corner_radius,
-        corner_radius,
-        -corner_radius,
-        corner_radius,
-    );
+    pc.c(true, [(0.0, k * corner_radius), (-k * corner_radius, corner_radius), (-corner_radius, corner_radius)]);
     pc.h(true, -(body_width - 2.0 * corner_radius));
-    pc.c(
-        true,
-        -k * corner_radius,
-        0.0,
-        -corner_radius,
-        -k * corner_radius,
-        -corner_radius,
-        -corner_radius,
-    );
+    pc.c(true, [(-k * corner_radius, 0.0), (-corner_radius, -k * corner_radius), (-corner_radius, -corner_radius)]);
     pc.z();
     pc
 }
@@ -420,42 +388,10 @@ fn c4_person_head_path(bbox: &Box2D) -> SvgPathContext {
     let k = 4.0 * (std::f64::consts::SQRT_2 - 1.0) / 3.0;
 
     pc.start_at(pc.absolute(head_center_x, head_center_y - head_radius));
-    pc.c(
-        false,
-        head_center_x + head_radius * k,
-        head_center_y - head_radius,
-        head_center_x + head_radius,
-        head_center_y - head_radius * k,
-        head_center_x + head_radius,
-        head_center_y,
-    );
-    pc.c(
-        false,
-        head_center_x + head_radius,
-        head_center_y + head_radius * k,
-        head_center_x + head_radius * k,
-        head_center_y + head_radius,
-        head_center_x,
-        head_center_y + head_radius,
-    );
-    pc.c(
-        false,
-        head_center_x - head_radius * k,
-        head_center_y + head_radius,
-        head_center_x - head_radius,
-        head_center_y + head_radius * k,
-        head_center_x - head_radius,
-        head_center_y,
-    );
-    pc.c(
-        false,
-        head_center_x - head_radius,
-        head_center_y - head_radius * k,
-        head_center_x - head_radius * k,
-        head_center_y - head_radius,
-        head_center_x,
-        head_center_y - head_radius,
-    );
+    pc.c(false, [(head_center_x + head_radius * k, head_center_y - head_radius), (head_center_x + head_radius, head_center_y - head_radius * k), (head_center_x + head_radius, head_center_y)]);
+    pc.c(false, [(head_center_x + head_radius, head_center_y + head_radius * k), (head_center_x + head_radius * k, head_center_y + head_radius), (head_center_x, head_center_y + head_radius)]);
+    pc.c(false, [(head_center_x - head_radius * k, head_center_y + head_radius), (head_center_x - head_radius, head_center_y + head_radius * k), (head_center_x - head_radius, head_center_y)]);
+    pc.c(false, [(head_center_x - head_radius, head_center_y - head_radius * k), (head_center_x - head_radius * k, head_center_y - head_radius), (head_center_x, head_center_y - head_radius)]);
     pc
 }
 
@@ -476,43 +412,11 @@ fn cylinder_outer_path(bbox: &Box2D) -> SvgPathContext {
     let multiplier = 0.45;
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(0.0, arc_height));
-    pc.c(
-        false,
-        0.0,
-        0.0,
-        bbox.width * multiplier,
-        0.0,
-        bbox.width / 2.0,
-        0.0,
-    );
-    pc.c(
-        false,
-        bbox.width - bbox.width * multiplier,
-        0.0,
-        bbox.width,
-        0.0,
-        bbox.width,
-        arc_height,
-    );
+    pc.c(false, [(0.0, 0.0), (bbox.width * multiplier, 0.0), (bbox.width / 2.0, 0.0)]);
+    pc.c(false, [(bbox.width - bbox.width * multiplier, 0.0), (bbox.width, 0.0), (bbox.width, arc_height)]);
     pc.v(true, bbox.height - arc_height * 2.0);
-    pc.c(
-        false,
-        bbox.width,
-        bbox.height,
-        bbox.width - bbox.width * multiplier,
-        bbox.height,
-        bbox.width / 2.0,
-        bbox.height,
-    );
-    pc.c(
-        false,
-        bbox.width * multiplier,
-        bbox.height,
-        0.0,
-        bbox.height,
-        0.0,
-        bbox.height - arc_height,
-    );
+    pc.c(false, [(bbox.width, bbox.height), (bbox.width - bbox.width * multiplier, bbox.height), (bbox.width / 2.0, bbox.height)]);
+    pc.c(false, [(bbox.width * multiplier, bbox.height), (0.0, bbox.height), (0.0, bbox.height - arc_height)]);
     pc.v(true, -(bbox.height - arc_height * 2.0));
     pc.z();
     pc
@@ -523,24 +427,8 @@ fn cylinder_inner_path(bbox: &Box2D) -> SvgPathContext {
     let multiplier = 0.45;
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(0.0, arc_height));
-    pc.c(
-        false,
-        0.0,
-        arc_height * 2.0,
-        bbox.width * multiplier,
-        arc_height * 2.0,
-        bbox.width / 2.0,
-        arc_height * 2.0,
-    );
-    pc.c(
-        false,
-        bbox.width - bbox.width * multiplier,
-        arc_height * 2.0,
-        bbox.width,
-        arc_height * 2.0,
-        bbox.width,
-        arc_height,
-    );
+    pc.c(false, [(0.0, arc_height * 2.0), (bbox.width * multiplier, arc_height * 2.0), (bbox.width / 2.0, arc_height * 2.0)]);
+    pc.c(false, [(bbox.width - bbox.width * multiplier, arc_height * 2.0), (bbox.width, arc_height * 2.0), (bbox.width, arc_height)]);
     pc
 }
 
@@ -560,43 +448,11 @@ fn queue_outer_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(arc_width, 0.0));
     pc.h(true, bbox.width - 2.0 * arc_width);
-    pc.c(
-        false,
-        bbox.width,
-        0.0,
-        bbox.width,
-        bbox.height * multiplier,
-        bbox.width,
-        bbox.height / 2.0,
-    );
-    pc.c(
-        false,
-        bbox.width,
-        bbox.height - bbox.height * multiplier,
-        bbox.width,
-        bbox.height,
-        bbox.width - arc_width,
-        bbox.height,
-    );
-    pc.h(true, -1.0 * (bbox.width - 2.0 * arc_width));
-    pc.c(
-        false,
-        0.0,
-        bbox.height,
-        0.0,
-        bbox.height - bbox.height * multiplier,
-        0.0,
-        bbox.height / 2.0,
-    );
-    pc.c(
-        false,
-        0.0,
-        bbox.height * multiplier,
-        0.0,
-        0.0,
-        arc_width,
-        0.0,
-    );
+    pc.c(false, [(bbox.width, 0.0), (bbox.width, bbox.height * multiplier), (bbox.width, bbox.height / 2.0)]);
+    pc.c(false, [(bbox.width, bbox.height - bbox.height * multiplier), (bbox.width, bbox.height), (bbox.width - arc_width, bbox.height)]);
+    pc.h(true, -(bbox.width - 2.0 * arc_width));
+    pc.c(false, [(0.0, bbox.height), (0.0, bbox.height - bbox.height * multiplier), (0.0, bbox.height / 2.0)]);
+    pc.c(false, [(0.0, bbox.height * multiplier), (0.0, 0.0), (arc_width, 0.0)]);
     pc.z();
     pc
 }
@@ -606,24 +462,8 @@ fn queue_inner_path(bbox: &Box2D) -> SvgPathContext {
     let multiplier = 0.45;
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(bbox.width - arc_width, 0.0));
-    pc.c(
-        false,
-        bbox.width - 2.0 * arc_width,
-        0.0,
-        bbox.width - 2.0 * arc_width,
-        bbox.height * multiplier,
-        bbox.width - 2.0 * arc_width,
-        bbox.height / 2.0,
-    );
-    pc.c(
-        false,
-        bbox.width - 2.0 * arc_width,
-        bbox.height - bbox.height * multiplier,
-        bbox.width - 2.0 * arc_width,
-        bbox.height,
-        bbox.width - arc_width,
-        bbox.height,
-    );
+    pc.c(false, [(bbox.width - 2.0 * arc_width, 0.0), (bbox.width - 2.0 * arc_width, bbox.height * multiplier), (bbox.width - 2.0 * arc_width, bbox.height / 2.0)]);
+    pc.c(false, [(bbox.width - 2.0 * arc_width, bbox.height - bbox.height * multiplier), (bbox.width - 2.0 * arc_width, bbox.height), (bbox.width - arc_width, bbox.height)]);
     pc
 }
 
@@ -639,7 +479,7 @@ const PACKAGE_VERTICAL_SCALAR: f64 = 0.2;
 fn get_top_dimensions(bbox: &Box2D) -> (f64, f64) {
     let mut width = bbox.width * PACKAGE_HORIZONTAL_SCALAR;
     if bbox.width >= 2.0 * PACKAGE_TOP_MIN_WIDTH {
-        width = width.max(PACKAGE_TOP_MIN_WIDTH).min(PACKAGE_TOP_MAX_WIDTH);
+        width = width.clamp(PACKAGE_TOP_MIN_WIDTH, PACKAGE_TOP_MAX_WIDTH);
     }
     let height = (bbox.height * PACKAGE_VERTICAL_SCALAR).min(PACKAGE_TOP_MAX_HEIGHT);
     (width, height)
@@ -730,43 +570,11 @@ fn stored_data_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(wedge_width, 0.0));
     pc.h(true, bbox.width - wedge_width);
-    pc.c(
-        false,
-        bbox.width - wedge_width * multiplier,
-        0.0,
-        bbox.width - wedge_width,
-        bbox.height * multiplier,
-        bbox.width - wedge_width,
-        bbox.height / 2.0,
-    );
-    pc.c(
-        false,
-        bbox.width - wedge_width,
-        bbox.height - bbox.height * multiplier,
-        bbox.width - wedge_width * multiplier,
-        bbox.height,
-        bbox.width,
-        bbox.height,
-    );
+    pc.c(false, [(bbox.width - wedge_width * multiplier, 0.0), (bbox.width - wedge_width, bbox.height * multiplier), (bbox.width - wedge_width, bbox.height / 2.0)]);
+    pc.c(false, [(bbox.width - wedge_width, bbox.height - bbox.height * multiplier), (bbox.width - wedge_width * multiplier, bbox.height), (bbox.width, bbox.height)]);
     pc.h(true, -(bbox.width - wedge_width));
-    pc.c(
-        false,
-        wedge_width - wedge_width * multiplier,
-        bbox.height,
-        0.0,
-        bbox.height - bbox.height * multiplier,
-        0.0,
-        bbox.height / 2.0,
-    );
-    pc.c(
-        false,
-        0.0,
-        bbox.height * multiplier,
-        wedge_width - wedge_width * multiplier,
-        0.0,
-        wedge_width,
-        0.0,
-    );
+    pc.c(false, [(wedge_width - wedge_width * multiplier, bbox.height), (0.0, bbox.height - bbox.height * multiplier), (0.0, bbox.height / 2.0)]);
+    pc.c(false, [(0.0, bbox.height * multiplier), (wedge_width - wedge_width * multiplier, 0.0), (wedge_width, 0.0)]);
     pc.z();
     pc
 }
@@ -780,47 +588,15 @@ fn page_outer_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(0.5, 0.0));
     pc.h(false, bbox.width - 20.8164);
-    pc.c(
-        false,
-        bbox.width - 19.6456,
-        0.0,
-        bbox.width - 18.521,
-        0.456297,
-        bbox.width - 17.6811,
-        1.27202,
-    );
+    pc.c(false, [(bbox.width - 19.6456, 0.0), (bbox.width - 18.521, 0.456297), (bbox.width - 17.6811, 1.27202)]);
     pc.l(false, bbox.width - 1.3647, 17.12);
-    pc.c(
-        false,
-        bbox.width - 0.4923,
-        17.9674,
-        bbox.width,
-        19.1318,
-        bbox.width,
-        20.348,
-    );
+    pc.c(false, [(bbox.width - 0.4923, 17.9674), (bbox.width, 19.1318), (bbox.width, 20.348)]);
     pc.v(false, bbox.height - 0.5);
-    pc.c(
-        false,
-        bbox.width,
-        bbox.height - 0.2239,
-        bbox.width - 0.2239,
-        bbox.height,
-        bbox.width - 0.5,
-        bbox.height,
-    );
+    pc.c(false, [(bbox.width, bbox.height - 0.2239), (bbox.width - 0.2239, bbox.height), (bbox.width - 0.5, bbox.height)]);
     pc.h(false, 0.499999);
-    pc.c(
-        false,
-        0.223857,
-        bbox.height,
-        0.0,
-        bbox.height - 0.2239,
-        0.0,
-        bbox.height - 0.5,
-    );
+    pc.c(false, [(0.223857, bbox.height), (0.0, bbox.height - 0.2239), (0.0, bbox.height - 0.5)]);
     pc.v(false, 0.499999);
-    pc.c(false, 0.0, 0.223857, 0.223857, 0.0, 0.5, 0.0);
+    pc.c(false, [(0.0, 0.223857), (0.223857, 0.0), (0.5, 0.0)]);
     pc.z();
     pc
 }
@@ -829,25 +605,17 @@ fn page_inner_path(bbox: &Box2D) -> SvgPathContext {
     let mut pc = SvgPathContext::new(bbox.top_left, 1.0, 1.0);
     pc.start_at(pc.absolute(bbox.width - 1.08197, bbox.height));
     pc.h(false, 1.08196);
-    pc.c(true, -0.64918, 0.0, -1.08196, -0.43287, -1.08196, -1.08219);
+    pc.c(true, [(-0.64918, 0.0), (-1.08196, -0.43287), (-1.08196, -1.08219)]);
     pc.v(false, 1.08219);
-    pc.c(true, 0.0, -0.64931, 0.43278, -1.08219, 1.08196, -1.08219);
+    pc.c(true, [(0.0, -0.64931), (0.43278, -1.08219), (1.08196, -1.08219)]);
     pc.h(true, bbox.width - 22.72132);
-    pc.c(true, 0.64918, 0.0, 1.08196, 0.43287, 1.08196, 1.08219);
+    pc.c(true, [(0.64918, 0.0), (1.08196, 0.43287), (1.08196, 1.08219)]);
     pc.v(true, 17.09863);
-    pc.c(true, 0.0, 1.29863, 0.86557, 2.38082, 2.38032, 2.38082);
+    pc.c(true, [(0.0, 1.29863), (0.86557, 2.38082), (2.38032, 2.38082)]);
     pc.h(false, bbox.width - 1.08197);
-    pc.c(true, 0.64918, 0.0, 1.08196, 0.43287, 1.08196, 1.08196);
+    pc.c(true, [(0.64918, 0.0), (1.08196, 0.43287), (1.08196, 1.08196)]);
     pc.v(false, bbox.height - 1.0822);
-    pc.c(
-        false,
-        bbox.width - 1.0,
-        bbox.height - 0.43288,
-        bbox.width - 0.43279,
-        bbox.height,
-        bbox.width - 1.08197,
-        bbox.height,
-    );
+    pc.c(false, [(bbox.width - 1.0, bbox.height - 0.43288), (bbox.width - 0.43279, bbox.height), (bbox.width - 1.08197, bbox.height)]);
     pc.z();
     pc
 }
@@ -883,24 +651,8 @@ fn document_path(bbox: &Box2D) -> SvgPathContext {
     pc.l(false, 0.0, 0.0);
     pc.l(false, 1.0, 0.0);
     pc.l(false, 1.0, DOC_PATH_BOTTOM / DOC_PATH_HEIGHT);
-    pc.c(
-        false,
-        5.0 / 6.0,
-        12.8 / DOC_PATH_HEIGHT,
-        2.0 / 3.0,
-        12.8 / DOC_PATH_HEIGHT,
-        1.0 / 2.0,
-        DOC_PATH_BOTTOM / DOC_PATH_HEIGHT,
-    );
-    pc.c(
-        false,
-        1.0 / 3.0,
-        19.8 / DOC_PATH_HEIGHT,
-        1.0 / 6.0,
-        19.8 / DOC_PATH_HEIGHT,
-        0.0,
-        DOC_PATH_BOTTOM / DOC_PATH_HEIGHT,
-    );
+    pc.c(false, [(5.0 / 6.0, 12.8 / DOC_PATH_HEIGHT), (2.0 / 3.0, 12.8 / DOC_PATH_HEIGHT), (1.0 / 2.0, DOC_PATH_BOTTOM / DOC_PATH_HEIGHT)]);
+    pc.c(false, [(1.0 / 3.0, 19.8 / DOC_PATH_HEIGHT), (1.0 / 6.0, 19.8 / DOC_PATH_HEIGHT), (0.0, DOC_PATH_BOTTOM / DOC_PATH_HEIGHT)]);
     pc.z();
     pc
 }

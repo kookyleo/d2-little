@@ -186,11 +186,10 @@ pub struct UnquotedString {
 
 impl UnquotedString {
     pub fn scalar_string(&self) -> &str {
-        if let Some(first) = self.value.first() {
-            if let Some(ref s) = first.string {
+        if let Some(first) = self.value.first()
+            && let Some(ref s) = first.string {
                 return s.as_str();
             }
-        }
         ""
     }
 
@@ -224,11 +223,10 @@ pub struct DoubleQuotedString {
 
 impl DoubleQuotedString {
     pub fn scalar_string(&self) -> &str {
-        if let Some(first) = self.value.first() {
-            if let Some(ref s) = first.string {
+        if let Some(first) = self.value.first()
+            && let Some(ref s) = first.string {
                 return s.as_str();
             }
-        }
         ""
     }
 
@@ -528,14 +526,16 @@ impl StringBox {
     }
 }
 
-/// A node that can appear inside a Map.
+/// A node that can appear inside a Map. `Key` is boxed because it is much
+/// larger than the other variants (~680 B vs ~128 B), which would otherwise
+/// balloon every `MapNode` in the AST.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MapNode {
     Comment(Comment),
     BlockComment(BlockComment),
     Substitution(Substitution),
     Import(Import),
-    Key(Key),
+    Key(Box<Key>),
 }
 
 impl MapNode {

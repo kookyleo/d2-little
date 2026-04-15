@@ -181,8 +181,8 @@ fn get_longest_edge_chain_head(g: &Graph, container: ObjId) -> ObjId {
                 if dst_child == Some(curr) {
                     continue;
                 }
-                if let Some(dc) = dst_child {
-                    if in_container(edge.src, curr, g).is_some() {
+                if let Some(dc) = dst_child
+                    && in_container(edge.src, curr, g).is_some() {
                         let new_rank = rank.get(&curr).copied().unwrap_or(0) + 1;
                         if new_rank > rank.get(&dc).copied().unwrap_or(0) {
                             rank.insert(dc, new_rank);
@@ -191,7 +191,6 @@ fn get_longest_edge_chain_head(g: &Graph, container: ObjId) -> ObjId {
                         }
                         queue.push(dc);
                     }
-                }
             }
         }
     }
@@ -256,14 +255,13 @@ fn get_longest_edge_chain_tail(g: &Graph, container: ObjId) -> ObjId {
                 if dst_child == Some(curr) {
                     continue;
                 }
-                if let Some(dc) = dst_child {
-                    if in_container(edge.src, curr, g).is_some() {
+                if let Some(dc) = dst_child
+                    && in_container(edge.src, curr, g).is_some() {
                         let new_rank = rank.get(&curr).copied().unwrap_or(0) + 1;
                         let old = rank.get(&dc).copied().unwrap_or(0);
                         rank.insert(dc, old.max(new_rank));
                         queue.push(dc);
                     }
-                }
             }
         }
     }
@@ -940,7 +938,7 @@ pub fn layout_with_exclude(
             }
             if let Some(parent_dagre) = mapper.dagre_id(parent_id) {
                 let child_dagre = mapper.to_dagre_id(obj_id).to_owned();
-                dagre_g.set_parent(&child_dagre, Some(&parent_dagre));
+                dagre_g.set_parent(&child_dagre, Some(parent_dagre));
                 break;
             }
             parent = g.objects[parent_id].parent;
@@ -1020,8 +1018,8 @@ pub fn layout_with_exclude(
     // Read back node positions
     for &obj_id in &obj_ids {
         let dagre_id = mapper.to_dagre_id(obj_id);
-        if let Some(node_label) = dagre_g.node(dagre_id) {
-            if let (Some(cx), Some(cy)) = (node_label.x, node_label.y) {
+        if let Some(node_label) = dagre_g.node(dagre_id)
+            && let (Some(cx), Some(cy)) = (node_label.x, node_label.y) {
                 let w = node_label.width;
                 let h = node_label.height;
                 let obj = &mut g.objects[obj_id];
@@ -1031,7 +1029,6 @@ pub fn layout_with_exclude(
                 obj.height = h.ceil();
                 obj.update_box();
             }
-        }
     }
 
     // Read back edge routes.
@@ -1590,8 +1587,8 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
     let mut container_icon_info: Option<(d2_geo::Box2D, d2_label::Position)> = None;
     {
         let obj = &g.objects[obj_id];
-        if obj.has_label() {
-            if let Some(lp_str) = obj.label_position.as_deref() {
+        if obj.has_label()
+            && let Some(lp_str) = obj.label_position.as_deref() {
                 let lp = d2_label::Position::from_string(lp_str);
                 use d2_label::Position::*;
                 let is_inside = matches!(
@@ -1605,17 +1602,15 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
                         | InsideMiddleLeft
                         | InsideMiddleRight
                 );
-                if is_inside {
-                    if let Some(tl) = obj.get_label_top_left() {
+                if is_inside
+                    && let Some(tl) = obj.get_label_top_left() {
                         let lw = obj.label_dimensions.width as f64 + 2.0 * d2_label::PADDING;
                         let lh = obj.label_dimensions.height as f64;
                         container_label_info = Some((d2_geo::Box2D::new(tl, lw, lh), lp));
                     }
-                }
             }
-        }
-        if obj.has_icon() {
-            if let Some(ip_str) = obj.icon_position.as_deref() {
+        if obj.has_icon()
+            && let Some(ip_str) = obj.icon_position.as_deref() {
                 let ip = d2_label::Position::from_string(ip_str);
                 use d2_label::Position::*;
                 let is_inside = matches!(
@@ -1629,14 +1624,12 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
                         | InsideMiddleLeft
                         | InsideMiddleRight
                 );
-                if is_inside {
-                    if let Some(tl) = obj.get_icon_top_left() {
+                if is_inside
+                    && let Some(tl) = obj.get_icon_top_left() {
                         let sz = d2_target::MAX_ICON_SIZE as f64;
                         container_icon_info = Some((d2_geo::Box2D::new(tl, sz, sz), ip));
                     }
-                }
             }
-        }
     }
     let needs_inner_boxes = container_label_info.is_some() || container_icon_info.is_some();
     let mut inner_boxes: Vec<d2_geo::Box2D> = Vec::new();
@@ -1650,31 +1643,27 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
         let (dx, dy) = c.get_modifier_element_adjustments();
 
         if needs_inner_boxes {
-            if c.has_label() {
-                if let Some(lp_str) = c.label_position.as_deref() {
+            if c.has_label()
+                && let Some(lp_str) = c.label_position.as_deref() {
                     let lp = d2_label::Position::from_string(lp_str);
-                    if lp.is_outside() {
-                        if let Some(tl) = c.get_label_top_left() {
+                    if lp.is_outside()
+                        && let Some(tl) = c.get_label_top_left() {
                             inner_boxes.push(d2_geo::Box2D::new(
                                 tl,
                                 c.label_dimensions.width as f64,
                                 c.label_dimensions.height as f64,
                             ));
                         }
-                    }
                 }
-            }
-            if c.has_icon() {
-                if let Some(ip_str) = c.icon_position.as_deref() {
+            if c.has_icon()
+                && let Some(ip_str) = c.icon_position.as_deref() {
                     let ip = d2_label::Position::from_string(ip_str);
-                    if ip.is_outside() {
-                        if let Some(tl) = c.get_icon_top_left() {
+                    if ip.is_outside()
+                        && let Some(tl) = c.get_icon_top_left() {
                             let sz = d2_target::MAX_ICON_SIZE as f64;
                             inner_boxes.push(d2_geo::Box2D::new(tl, sz, sz));
                         }
-                    }
                 }
-            }
         }
 
         inner_top = inner_top.min(c.top_left.y - dy - margin.top.max(pad_top));
@@ -1764,7 +1753,7 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
                 None => return,
             };
             // Move box by the projected shrink delta.
-            let mut moved = b.clone();
+            let mut moved = *b;
             match side {
                 0 => {
                     if top_delta > 0.0 {
@@ -1897,21 +1886,21 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
 fn adjust_edges(g: &mut Graph, obj_id: ObjId, obj_position: f64, delta: f64, is_horizontal: bool) {
     // Capture the object's rectangle before mutating so the side check
     // uses a consistent snapshot.
-    let tl_x = g.objects[obj_id].top_left.x;
-    let tl_y = g.objects[obj_id].top_left.y;
-    let w = g.objects[obj_id].width;
-    let h = g.objects[obj_id].height;
+    let shape_box = d2_geo::Box2D::new(
+        g.objects[obj_id].top_left,
+        g.objects[obj_id].width,
+        g.objects[obj_id].height,
+    );
     for ei in 0..g.edges.len() {
-        if g.edges[ei].src == obj_id {
-            if let Some(p) = g.edges[ei].route.first_mut() {
-                adjust_one_point(p, obj_position, delta, is_horizontal, tl_x, tl_y, w, h);
+        if g.edges[ei].src == obj_id
+            && let Some(p) = g.edges[ei].route.first_mut() {
+                adjust_one_point(p, obj_position, delta, is_horizontal, &shape_box);
             }
-        }
         if g.edges[ei].dst == obj_id {
             let last = g.edges[ei].route.len().saturating_sub(1);
             if !g.edges[ei].route.is_empty() {
                 let pt = &mut g.edges[ei].route[last];
-                adjust_one_point(pt, obj_position, delta, is_horizontal, tl_x, tl_y, w, h);
+                adjust_one_point(pt, obj_position, delta, is_horizontal, &shape_box);
             }
         }
     }
@@ -1922,10 +1911,7 @@ fn adjust_one_point(
     obj_position: f64,
     delta: f64,
     is_horizontal: bool,
-    tl_x: f64,
-    tl_y: f64,
-    w: f64,
-    h: f64,
+    shape_box: &d2_geo::Box2D,
 ) {
     let position = if is_horizontal { p.x } else { p.y };
     if precision_eq(position, obj_position) {
@@ -1935,10 +1921,12 @@ fn adjust_one_point(
             p.y += delta;
         }
     } else {
+        let tl_x = shape_box.top_left.x;
+        let tl_y = shape_box.top_left.y;
         let is_on_side = if is_horizontal {
-            precision_eq(p.y, tl_y) || precision_eq(p.y, tl_y + h)
+            precision_eq(p.y, tl_y) || precision_eq(p.y, tl_y + shape_box.height)
         } else {
-            precision_eq(p.x, tl_x) || precision_eq(p.x, tl_x + w)
+            precision_eq(p.x, tl_x) || precision_eq(p.x, tl_x + shape_box.width)
         };
         if is_on_side {
             let in_range = if delta > 0.0 {
@@ -1996,9 +1984,9 @@ fn adjust_delta_for_edges(
     let mut has_edge_on_collapsing_side = false;
     let mut outermost = obj_position + delta;
     for edge in &g.edges {
-        if edge.src == obj_id {
-            if let Some(p) = edge.route.first() {
-                if is_on_collapsing_side(p) {
+        if edge.src == obj_id
+            && let Some(p) = edge.route.first()
+                && is_on_collapsing_side(p) {
                     has_edge_on_collapsing_side = true;
                     let position = if is_horizontal { p.x } else { p.y };
                     if delta < 0.0 {
@@ -2007,11 +1995,9 @@ fn adjust_delta_for_edges(
                         outermost = outermost.min(position);
                     }
                 }
-            }
-        }
-        if edge.dst == obj_id {
-            if let Some(p) = edge.route.last() {
-                if is_on_collapsing_side(p) {
+        if edge.dst == obj_id
+            && let Some(p) = edge.route.last()
+                && is_on_collapsing_side(p) {
                     has_edge_on_collapsing_side = true;
                     let position = if is_horizontal { p.x } else { p.y };
                     if delta < 0.0 {
@@ -2020,8 +2006,6 @@ fn adjust_delta_for_edges(
                         outermost = outermost.min(position);
                     }
                 }
-            }
-        }
     }
 
     let mut new_magnitude = delta.abs();
@@ -2241,6 +2225,14 @@ fn child_outside_margin(obj: &d2_graph::Object) -> (d2_geo::Spacing, d2_geo::Spa
 
 use d2_geo::Spacing;
 
+/// (ranks, object_rank, container_min_rank, container_max_rank).
+type Ranks = (
+    Vec<Vec<ObjId>>,
+    HashMap<ObjId, usize>,
+    HashMap<ObjId, usize>,
+    HashMap<ObjId, usize>,
+);
+
 /// Build rank data for post-processing. Mirrors Go `getRanks` — groups
 /// non-container objects by their (post-dagre) center position along the
 /// cross-axis, then records, for every container, the min/max rank of its
@@ -2249,12 +2241,7 @@ fn get_ranks(
     g: &Graph,
     is_horizontal: bool,
     excluded_objects: &HashSet<ObjId>,
-) -> (
-    Vec<Vec<ObjId>>,
-    HashMap<ObjId, usize>,
-    HashMap<ObjId, usize>,
-    HashMap<ObjId, usize>,
-) {
+) -> Ranks {
     // i64-keyed buckets so ordering is deterministic and stable across runs.
     let mut aligned: std::collections::BTreeMap<i64, Vec<ObjId>> = Default::default();
     for (i, obj) in g.objects.iter().enumerate() {
@@ -2374,11 +2361,10 @@ fn shift_down(
                     route[last].x += distance;
                 }
             }
-            for i in 1..last {
-                if route[i].x < start {
-                    continue;
+            for pt in &mut route[1..last] {
+                if pt.x >= start {
+                    pt.x += distance;
                 }
-                route[i].x += distance;
             }
         }
         for i in 0..g.objects.len() {
@@ -2423,11 +2409,10 @@ fn shift_down(
                     route[last].y += distance;
                 }
             }
-            for i in 1..last {
-                if route[i].y < start {
-                    continue;
+            for pt in &mut route[1..last] {
+                if pt.y >= start {
+                    pt.y += distance;
                 }
-                route[i].y += distance;
             }
         }
         for i in 0..g.objects.len() {
@@ -2484,11 +2469,10 @@ fn shift_up(
                     route[last].x -= distance;
                 }
             }
-            for i in 1..last {
-                if start < route[i].x {
-                    continue;
+            for pt in &mut route[1..last] {
+                if start >= pt.x {
+                    pt.x -= distance;
                 }
-                route[i].x -= distance;
             }
         }
         for i in 0..g.objects.len() {
@@ -2535,11 +2519,10 @@ fn shift_up(
                     route[last].y -= distance;
                 }
             }
-            for i in 1..last {
-                if start < route[i].y {
-                    continue;
+            for pt in &mut route[1..last] {
+                if start >= pt.y {
+                    pt.y -= distance;
                 }
-                route[i].y -= distance;
             }
         }
         for i in 0..g.objects.len() {
@@ -2615,11 +2598,9 @@ fn shift_reachable_down(
                     && o.top_left.x < original_right + distance + THRESHOLD
                     && curr_obj.top_left.y < o.top_left.y + o.height
                     && o.top_left.y < curr_bottom
-                {
-                    if !seen.contains(&oi) {
+                    && !seen.contains(&oi) {
                         q.push(oi);
                     }
-                }
             }
         } else {
             let mut original_bottom = curr_bottom;
@@ -2641,11 +2622,9 @@ fn shift_reachable_down(
                     && o.top_left.y < original_bottom + distance + THRESHOLD
                     && curr_obj.top_left.x < o.top_left.x + o.width
                     && o.top_left.x < curr_right
-                {
-                    if !seen.contains(&oi) {
+                    && !seen.contains(&oi) {
                         q.push(oi);
                     }
-                }
             }
         }
     };
@@ -2953,7 +2932,7 @@ fn shift_reachable_down(
                 increased.insert(m);
             }
         }
-        return increased;
+        increased
     }
 }
 
@@ -3028,11 +3007,10 @@ fn adjust_rank_spacing(
                         *entry = child_start;
                     }
                 }
-                if let Some(pp) = g.objects[parent].parent {
-                    if pp != g.root {
+                if let Some(pp) = g.objects[parent].parent
+                    && pp != g.root {
                         ancestors.push(pp);
                     }
-                }
             }
             starting_parents = ancestors;
         }
@@ -3083,11 +3061,10 @@ fn adjust_rank_spacing(
                         *entry = child_end;
                     }
                 }
-                if let Some(pp) = g.objects[parent].parent {
-                    if pp != g.root {
+                if let Some(pp) = g.objects[parent].parent
+                    && pp != g.root {
                         ancestors.push(pp);
                     }
-                }
             }
             ending_parents = ancestors;
         }
@@ -3120,8 +3097,8 @@ fn adjust_rank_spacing(
                     }
                     let start = starting_parent_ranks.get(&oi).copied();
                     let end = ending_parent_ranks.get(&oi).copied();
-                    if let (Some(s), Some(e)) = (start, end) {
-                        if s <= rank && rank <= e {
+                    if let (Some(s), Some(e)) = (start, end)
+                        && s <= rank && rank <= e {
                             if is_horizontal
                                 && pos <= g.objects[oi].top_left.x + g.objects[oi].width
                             {
@@ -3132,7 +3109,6 @@ fn adjust_rank_spacing(
                                 g.objects[oi].height += end_delta;
                             }
                         }
-                    }
                 }
                 shift_down(g, pos, end_delta, is_horizontal, excluded_objects);
             }
@@ -3166,15 +3142,14 @@ fn adjust_rank_spacing(
                     }
                     let start = starting_parent_ranks.get(&oi).copied();
                     let end = ending_parent_ranks.get(&oi).copied();
-                    if let (Some(s), Some(e)) = (start, end) {
-                        if s <= rank && rank <= e {
+                    if let (Some(s), Some(e)) = (start, end)
+                        && s <= rank && rank <= e {
                             if is_horizontal && g.objects[oi].top_left.x <= pos {
                                 g.objects[oi].width += start_delta;
                             } else if !is_horizontal && g.objects[oi].top_left.y <= pos {
                                 g.objects[oi].height += start_delta;
                             }
                         }
-                    }
                 }
                 shift_up(g, pos, start_delta, is_horizontal, excluded_objects);
             }

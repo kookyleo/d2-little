@@ -4,12 +4,8 @@
 //! Ported from Go `d2compiler/compile.go`.
 
 use d2_ast::{self as ast};
-use d2_color;
-use d2_geo;
 use d2_graph::{self as graph, Graph, ObjId, ScalarValue};
 use d2_ir::{self as ir};
-use d2_target;
-use d2_themes;
 use roxmltree::Document;
 
 fn block_string_language(scalar: &ir::Scalar) -> Option<String> {
@@ -592,11 +588,10 @@ impl Compiler {
 
         // Mark as folder-only when the graph has boards but no objects of its
         // own (i.e. only the implicit root exists).
-        if !g.layers.is_empty() || !g.scenarios.is_empty() || !g.steps.is_empty() {
-            if g.objects.len() <= 1 && g.edges.is_empty() {
+        if (!g.layers.is_empty() || !g.scenarios.is_empty() || !g.steps.is_empty())
+            && g.objects.len() <= 1 && g.edges.is_empty() {
                 g.is_folder_only = true;
             }
-        }
     }
 
     /// Port of Go `compiler.compileLegend` (d2compiler/compile.go).
@@ -640,13 +635,11 @@ impl Compiler {
                 continue;
             }
             // Skip fully-transparent objects (opacity==0), matching Go.
-            if let Some(ref op) = obj.style.opacity {
-                if let Ok(v) = op.value.parse::<f64>() {
-                    if v == 0.0 {
+            if let Some(ref op) = obj.style.opacity
+                && let Ok(v) = op.value.parse::<f64>()
+                    && v == 0.0 {
                         continue;
                     }
-                }
-            }
             let mut cloned = obj.clone();
             cloned.top_left.x = 10.0;
             cloned.top_left.y = 10.0;
@@ -752,10 +745,10 @@ impl Compiler {
                 })
                 .collect();
             for &target in &targets {
-                self.apply_literal_star_template(g, star_id, target);
+                Self::apply_literal_star_template(g, star_id, target);
             }
             star_targets.insert(star_id, targets);
-            self.collect_descendants(g, star_id, &mut remove_ids);
+            Self::collect_descendants(g, star_id, &mut remove_ids);
         }
 
         // Walk edges in reverse: for each edge whose endpoint is a glob
@@ -840,9 +833,9 @@ impl Compiler {
                 if !Self::target_passes_filters(&g.objects[target], &filters) {
                     continue;
                 }
-                self.apply_literal_star_template(g, dbl_id, target);
+                Self::apply_literal_star_template(g, dbl_id, target);
             }
-            self.collect_descendants(g, dbl_id, &mut remove_ids);
+            Self::collect_descendants(g, dbl_id, &mut remove_ids);
         }
 
         self.compact_graph(g, &remove_ids);
@@ -962,7 +955,6 @@ impl Compiler {
     }
 
     fn collect_descendants(
-        &self,
         g: &Graph,
         obj: ObjId,
         remove_ids: &mut std::collections::HashSet<ObjId>,
@@ -971,11 +963,11 @@ impl Compiler {
             return;
         }
         for &child in &g.objects[obj].children_array {
-            self.collect_descendants(g, child, remove_ids);
+            Self::collect_descendants(g, child, remove_ids);
         }
     }
 
-    fn apply_literal_star_template(&self, g: &mut Graph, template_id: ObjId, target_id: ObjId) {
+    fn apply_literal_star_template(g: &mut Graph, template_id: ObjId, target_id: ObjId) {
         let template = g.objects[template_id].clone();
         // When the glob declaration (`**: {...}`) appears in the source
         // after the target's last explicit reference, Go's d2ir re-applies
@@ -1017,7 +1009,7 @@ impl Compiler {
                     })
                     .collect();
                 for m in matches {
-                    self.apply_literal_star_template(g, child_template, m);
+                    Self::apply_literal_star_template(g, child_template, m);
                 }
                 continue;
             }
@@ -1033,7 +1025,7 @@ impl Compiler {
                         r
                     }));
             }
-            self.apply_literal_star_template(g, child_template, child);
+            Self::apply_literal_star_template(g, child_template, child);
         }
     }
 
@@ -1053,7 +1045,7 @@ impl Compiler {
                     .get(r.key_path_index)
                     .map(|s| s.get_range().clone())
             })
-            .min_by(|a, b| graph::range_cmp(a, b));
+            .min_by(graph::range_cmp);
         let Some(tmpl_range) = tmpl_range else {
             return false;
         };
@@ -1334,13 +1326,11 @@ impl Compiler {
             Edge {
                 range: ast::Range,
                 value: bool,
-                scope: Vec<String>,
                 src_path: Vec<String>,
                 dst_path: Vec<String>,
                 src_arrow: bool,
                 dst_arrow: bool,
                 is_glob: bool,
-                filters: Vec<ir::Filter>,
             },
         }
 
@@ -1351,7 +1341,7 @@ impl Compiler {
                         .references
                         .iter()
                         .filter_map(|r| r.key_path.as_ref().map(|kp| kp.range.clone()))
-                        .min_by(|a, b| d2_graph::range_cmp(a, b))
+                        .min_by(d2_graph::range_cmp)
                         .unwrap_or_else(ast::Range::default);
                     let filters = f
                         .map()
@@ -1388,21 +1378,14 @@ impl Compiler {
                     let is_glob = e.id.glob
                         || e.id.src_path.iter().any(|s| s == "*" || s == "**")
                         || e.id.dst_path.iter().any(|s| s == "*" || s == "**");
-                    let filters = e
-                        .map
-                        .as_ref()
-                        .map(|sub| sub.filters.clone())
-                        .unwrap_or_default();
                     out.push(Decl::Edge {
                         range,
                         value: v,
-                        scope: scope.clone(),
                         src_path: e.id.src_path.clone(),
                         dst_path: e.id.dst_path.clone(),
                         src_arrow: e.id.src_arrow,
                         dst_arrow: e.id.dst_arrow,
                         is_glob,
-                        filters,
                     });
                 }
             }
@@ -1441,19 +1424,22 @@ impl Compiler {
                 }
                 Decl::Edge {
                     value,
-                    scope,
                     src_path,
                     dst_path,
                     src_arrow,
                     dst_arrow,
                     is_glob,
-                    filters,
                     ..
                 } => {
-                    self.apply_edge_suspension(
-                        g, &scope, &src_path, &dst_path, src_arrow, dst_arrow, is_glob, &filters,
-                        value,
-                    );
+                    let eid = ir::EdgeID {
+                        src_path,
+                        dst_path,
+                        src_arrow,
+                        dst_arrow,
+                        index: None,
+                        glob: is_glob,
+                    };
+                    self.apply_edge_suspension(g, &eid, value);
                 }
             }
         }
@@ -1549,32 +1535,13 @@ impl Compiler {
     /// test path-match; for non-glob edges we locate by exact endpoints.
     /// When `value == false` (unsuspend), we also lift suspension on the
     /// edge's endpoints and their ancestors — mirrors Go d2ir behavior.
-    fn apply_edge_suspension(
-        &self,
-        g: &mut Graph,
-        _scope: &[String],
-        src_path: &[String],
-        dst_path: &[String],
-        src_arrow: bool,
-        dst_arrow: bool,
-        is_glob: bool,
-        _filters: &[ir::Filter],
-        value: bool,
-    ) {
+    fn apply_edge_suspension(&self, g: &mut Graph, eid: &ir::EdgeID, value: bool) {
         let mut matches: Vec<usize> = Vec::new();
-        if is_glob {
-            let eid = ir::EdgeID {
-                src_path: src_path.to_vec(),
-                dst_path: dst_path.to_vec(),
-                src_arrow,
-                dst_arrow,
-                index: None,
-                glob: true,
-            };
+        if eid.glob {
             for (i, e) in g.edges.iter().enumerate() {
                 // Build the path segments for each endpoint from the graph,
-                // split on `.`. We compare against `src_path`/`dst_path`
-                // via EdgeID::matches which supports `*`/`**` wildcards.
+                // split on `.`. We compare against `eid.src_path` /
+                // `eid.dst_path` via EdgeID::matches which supports `*`/`**`.
                 let src_segs = Self::obj_abs_segments(g, e.src);
                 let dst_segs = Self::obj_abs_segments(g, e.dst);
                 let cand = ir::EdgeID {
@@ -1593,7 +1560,7 @@ impl Compiler {
             for (i, e) in g.edges.iter().enumerate() {
                 let src_segs = Self::obj_abs_segments(g, e.src);
                 let dst_segs = Self::obj_abs_segments(g, e.dst);
-                if src_segs == src_path && dst_segs == dst_path {
+                if src_segs == eid.src_path && dst_segs == eid.dst_path {
                     matches.push(i);
                 }
             }
@@ -1680,7 +1647,7 @@ impl Compiler {
                 continue;
             }
             if g.objects[id].suspended == Some(true) {
-                self.collect_descendants(g, id, &mut remove_ids);
+                Self::collect_descendants(g, id, &mut remove_ids);
             }
         }
         if remove_ids.is_empty() {
@@ -1850,8 +1817,8 @@ impl Compiler {
         // Apply referenced classes *first* so the object's own fields
         // override any class defaults. Mirrors Go d2compiler.compileMap's
         // top-of-function class-expansion step.
-        if !self.class_defs.is_empty() {
-            if let Some(class_field) = m.get_field("class") {
+        if !self.class_defs.is_empty()
+            && let Some(class_field) = m.get_field("class") {
                 let mut class_names: Vec<String> = Vec::new();
                 if let Some(ref primary) = class_field.primary {
                     class_names.push(primary.scalar_string());
@@ -1871,14 +1838,12 @@ impl Compiler {
                     }
                 }
             }
-        }
 
         // Process shape first (affects how children are handled)
-        if let Some(shape_field) = m.get_field("shape") {
-            if shape_field.primary.is_some() {
+        if let Some(shape_field) = m.get_field("shape")
+            && shape_field.primary.is_some() {
                 self.compile_field_scoped(g, obj, scope, shape_field);
             }
-        }
 
         // Process all other fields
         for f in &m.fields {
@@ -2075,7 +2040,7 @@ impl Compiler {
         let child = if f.name == "**" && f.name_is_unquoted {
             g.new_child_of(obj, &f.name)
         } else {
-            g.ensure_child_of(obj, &[f.name.clone()])
+            g.ensure_child_of(obj, std::slice::from_ref(&f.name))
         };
 
         // Propagate the IR suspension state onto the graph object. A `None`
@@ -2187,11 +2152,10 @@ impl Compiler {
                 self.compile_position(g, obj, "icon", f);
                 if let Some(fmap) = f.map() {
                     for sub in &fmap.fields {
-                        if sub.name == "style" && sub.name_is_unquoted {
-                            if let Some(style_map) = sub.map() {
+                        if sub.name == "style" && sub.name_is_unquoted
+                            && let Some(style_map) = sub.map() {
                                 self.compile_icon_style(g, obj, style_map);
                             }
-                        }
                     }
                 }
             }
@@ -2264,15 +2228,14 @@ impl Compiler {
             "constraint" => {
                 if let Some(val) = primary_str {
                     g.objects[obj].constraint.push(val);
-                } else if let Some(ref comp) = f.composite {
-                    if let ir::Composite::Array(arr) = comp {
+                } else if let Some(ref comp) = f.composite
+                    && let ir::Composite::Array(arr) = comp {
                         for v in &arr.values {
                             if let ir::Value::Scalar(s) = v {
                                 g.objects[obj].constraint.push(s.scalar_string());
                             }
                         }
                     }
-                }
             }
             "class" => {
                 // The object's own `class:` declaration. Mirrors Go d2ir's
@@ -2287,72 +2250,59 @@ impl Compiler {
                 }
                 if let Some(val) = primary_str {
                     g.objects[obj].classes.push(val);
-                } else if let Some(ref comp) = f.composite {
-                    if let ir::Composite::Array(arr) = comp {
+                } else if let Some(ref comp) = f.composite
+                    && let ir::Composite::Array(arr) = comp {
                         for v in &arr.values {
                             if let ir::Value::Scalar(s) = v {
                                 g.objects[obj].classes.push(s.scalar_string());
                             }
                         }
                     }
-                }
             }
             "grid-rows" => {
-                if let Some(val) = primary_str {
-                    if let Ok(v) = val.parse::<i32>() {
-                        if v > 0 {
+                if let Some(val) = primary_str
+                    && let Ok(v) = val.parse::<i32>()
+                        && v > 0 {
                             g.objects[obj].grid_rows = Some(ScalarValue { value: val });
                             // Track source range so grid layout can
                             // determine row- vs column-directed order.
-                            if let Some(fr) = f.references.first() {
-                                if let Some(ref kp) = fr.key_path {
+                            if let Some(fr) = f.references.first()
+                                && let Some(ref kp) = fr.key_path {
                                     g.objects[obj].grid_rows_range = Some(kp.range.clone());
                                 }
-                            }
                         }
-                    }
-                }
             }
             "grid-columns" => {
-                if let Some(val) = primary_str {
-                    if let Ok(v) = val.parse::<i32>() {
-                        if v > 0 {
+                if let Some(val) = primary_str
+                    && let Ok(v) = val.parse::<i32>()
+                        && v > 0 {
                             g.objects[obj].grid_columns = Some(ScalarValue { value: val });
-                            if let Some(fr) = f.references.first() {
-                                if let Some(ref kp) = fr.key_path {
+                            if let Some(fr) = f.references.first()
+                                && let Some(ref kp) = fr.key_path {
                                     g.objects[obj].grid_columns_range = Some(kp.range.clone());
                                 }
-                            }
                         }
-                    }
-                }
             }
             "grid-gap" => {
-                if let Some(val) = primary_str {
-                    if let Ok(v) = val.parse::<i32>() {
-                        if v >= 0 {
+                if let Some(val) = primary_str
+                    && let Ok(v) = val.parse::<i32>()
+                        && v >= 0 {
                             g.objects[obj].grid_gap = Some(ScalarValue { value: val });
                         }
-                    }
-                }
             }
             "vertical-gap" => {
-                if let Some(val) = primary_str {
-                    if let Ok(v) = val.parse::<i32>() {
-                        if v >= 0 {
+                if let Some(val) = primary_str
+                    && let Ok(v) = val.parse::<i32>()
+                        && v >= 0 {
                             g.objects[obj].vertical_gap = Some(ScalarValue { value: val });
                         }
-                    }
-                }
             }
             "horizontal-gap" => {
-                if let Some(val) = primary_str {
-                    if let Ok(v) = val.parse::<i32>() {
-                        if v >= 0 {
+                if let Some(val) = primary_str
+                    && let Ok(v) = val.parse::<i32>()
+                        && v >= 0 {
                             g.objects[obj].horizontal_gap = Some(ScalarValue { value: val });
                         }
-                    }
-                }
             }
             "vars" => {} // handled separately
             _ => {}
@@ -2503,8 +2453,8 @@ impl Compiler {
     fn compile_edge_map(&mut self, g: &mut Graph, edge_idx: usize, m: &ir::Map) {
         // Apply any referenced classes first — mirrors the class
         // expansion at the top of `compile_map`.
-        if !self.class_defs.is_empty() {
-            if let Some(class_field) = m.get_field("class") {
+        if !self.class_defs.is_empty()
+            && let Some(class_field) = m.get_field("class") {
                 let mut names: Vec<String> = Vec::new();
                 if let Some(ref primary) = class_field.primary {
                     names.push(primary.scalar_string());
@@ -2521,7 +2471,6 @@ impl Compiler {
                     }
                 }
             }
-        }
 
         for f in &m.fields {
             let keyword = f.name.to_lowercase();
@@ -2575,11 +2524,10 @@ impl Compiler {
                 }
                 if let Some(fmap) = f.map() {
                     for sub in &fmap.fields {
-                        if sub.name == "style" && sub.name_is_unquoted {
-                            if let Some(style_map) = sub.map() {
+                        if sub.name == "style" && sub.name_is_unquoted
+                            && let Some(style_map) = sub.map() {
                                 self.compile_edge_icon_style(g, edge_idx, style_map);
                             }
-                        }
                     }
                 }
             }
@@ -2623,10 +2571,8 @@ impl Compiler {
             if g.edges[edge_idx].src_arrowhead.is_none() {
                 g.edges[edge_idx].src_arrowhead = Some(graph::ArrowheadInfo::default());
             }
-        } else {
-            if g.edges[edge_idx].dst_arrowhead.is_none() {
-                g.edges[edge_idx].dst_arrowhead = Some(graph::ArrowheadInfo::default());
-            }
+        } else if g.edges[edge_idx].dst_arrowhead.is_none() {
+            g.edges[edge_idx].dst_arrowhead = Some(graph::ArrowheadInfo::default());
         }
 
         if let Some(ref primary) = f.primary {
@@ -2635,10 +2581,8 @@ impl Compiler {
                 if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                     ah.label.value = label;
                 }
-            } else {
-                if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
-                    ah.label.value = label;
-                }
+            } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                ah.label.value = label;
             }
         }
 
@@ -2667,10 +2611,8 @@ impl Compiler {
                             if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                                 ah.shape = Some(val);
                             }
-                        } else {
-                            if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
-                                ah.shape = Some(val);
-                            }
+                        } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                            ah.shape = Some(val);
                         }
                     }
                 } else if keyword == "style" && f2.name_is_unquoted {
@@ -2678,8 +2620,8 @@ impl Compiler {
                     // can distinguish outlined vs filled variants.
                     if let Some(smap) = f2.map() {
                         for sf in &smap.fields {
-                            if sf.name == "filled" && sf.name_is_unquoted {
-                                if let Some(val) = sf.primary_string() {
+                            if sf.name == "filled" && sf.name_is_unquoted
+                                && let Some(val) = sf.primary_string() {
                                     let b = val == "true";
                                     if is_src {
                                         if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
@@ -2690,10 +2632,9 @@ impl Compiler {
                                         ah.filled = Some(b);
                                     }
                                 }
-                            }
                             // Parse style.font-color for arrowhead labels
-                            if sf.name == "font-color" && sf.name_is_unquoted {
-                                if let Some(val) = sf.primary_string() {
+                            if sf.name == "font-color" && sf.name_is_unquoted
+                                && let Some(val) = sf.primary_string() {
                                     let sv = graph::ScalarValue { value: val };
                                     if is_src {
                                         if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
@@ -2704,7 +2645,6 @@ impl Compiler {
                                         ah.style.font_color = Some(sv);
                                     }
                                 }
-                            }
                         }
                     }
                 }

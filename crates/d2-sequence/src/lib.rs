@@ -6,8 +6,6 @@ use std::collections::{HashMap, HashSet};
 
 use d2_geo::Point;
 use d2_graph::{Edge, Graph, ObjId, Object, ScalarValue, Style};
-use d2_label;
-use d2_target;
 
 // ---------------------------------------------------------------------------
 // Constants (from Go d2sequence/constants.go)

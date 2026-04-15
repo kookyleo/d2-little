@@ -84,9 +84,15 @@ fn build_graph(tc: &TestCase) -> (Graph<NodeLabel, EdgeLabel>, LayoutOptions) {
             continue;
         }
         if let Some(ref_node) = tc.nodes.get(v.as_str()) {
-            let mut label = NodeLabel::default();
-            label.width = ref_node.width;
-            label.height = ref_node.height;
+            let label = NodeLabel {
+
+                width: ref_node.width,
+
+                height: ref_node.height,
+
+                ..Default::default()
+
+            };
             g.set_node(v.clone(), Some(label));
         }
     }
@@ -148,10 +154,17 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
             g.set_edge("d", "e", Some(EdgeLabel::default()), None);
         }
         "edge_label" => {
-            let mut el = EdgeLabel::default();
-            el.width = 80.0;
-            el.height = 20.0;
-            el.labelpos = LabelPos::Center;
+            let el = EdgeLabel {
+
+                width: 80.0,
+
+                height: 20.0,
+
+                labelpos: LabelPos::Center,
+
+                ..Default::default()
+
+            };
             g.set_edge("a", "b", Some(el), None);
         }
         "cycle" => {
@@ -172,9 +185,15 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
         }
         "self_loop" => {
             g.set_edge("a", "b", Some(EdgeLabel::default()), None);
-            let mut el = EdgeLabel::default();
-            el.width = 40.0;
-            el.height = 20.0;
+            let el = EdgeLabel {
+
+                width: 40.0,
+
+                height: 20.0,
+
+                ..Default::default()
+
+            };
             g.set_edge("a", "a", Some(el), None);
         }
         "long_edge" => {
@@ -184,7 +203,7 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
         }
         "fan_out" => {
             for i in 0..5 {
-                g.set_edge("root", &format!("n{}", i), Some(EdgeLabel::default()), None);
+                g.set_edge("root", format!("n{}", i), Some(EdgeLabel::default()), None);
             }
         }
         "varied_sizes" => {
@@ -213,8 +232,13 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
             g.set_edge("b", "c", Some(EdgeLabel::default()), None);
         }
         "minlen" => {
-            let mut el = EdgeLabel::default();
-            el.minlen = 3;
+            let el = EdgeLabel {
+
+                minlen: 3,
+
+                ..Default::default()
+
+            };
             g.set_edge("a", "b", Some(el), None);
         }
         _ => panic!("Unknown test case: {}", tc.name),
@@ -277,15 +301,14 @@ fn cross_validate_all_cases() {
             }
 
             // Compare rank
-            if let Some(ref_rank) = ref_node.rank {
-                if node.rank != Some(ref_rank) {
+            if let Some(ref_rank) = ref_node.rank
+                && node.rank != Some(ref_rank) {
                     failures.push(format!(
                         "[{}] node '{}' rank: dagre-rs={:?}, dagre.js={}",
                         tc.name, v, node.rank, ref_rank
                     ));
                     case_ok = false;
                 }
-            }
         }
 
         // Compare graph dimensions

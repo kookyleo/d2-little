@@ -10,9 +10,6 @@ use d2_fonts::{self, FONT_SIZE_M, FontFamily, FontStyle};
 use d2_geo::Point;
 use d2_graph::{self, Graph, ObjId};
 use d2_svg_render::{self, RenderOpts};
-use d2_target;
-use d2_textmeasure;
-use d2_themes;
 
 // ---------------------------------------------------------------------------
 // Constants (matching Go d2graph constants)
@@ -1622,11 +1619,10 @@ pub fn set_dimensions_with_font(
         // is no branch in Go that turns isBold off via the style attribute,
         // so leaf shapes with `style.bold: false` are still measured as
         // bold. Mirroring this quirk keeps label widths matching Go.
-        if let Some(v) = g.objects[i].style.bold.as_ref() {
-            if v.value == "true" {
+        if let Some(v) = g.objects[i].style.bold.as_ref()
+            && v.value == "true" {
                 is_bold = true;
             }
-        }
         if in_seq {
             is_bold = false;
         }
@@ -2104,15 +2100,12 @@ pub fn set_dimensions_with_font(
 
         // Cloud shapes store the content aspect ratio so the renderer
         // can size the inner content box (Go `SizeToContent` tail).
-        if shape == "cloud" {
-            if let Some(inner) =
+        if shape == "cloud"
+            && let Some(inner) =
                 d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h)
-            {
-                if inner.height > 0.0 {
+                && inner.height > 0.0 {
                     g.objects[i].content_aspect_ratio = Some(inner.width / inner.height);
                 }
-            }
-        }
 
         g.objects[i].update_box();
     }
@@ -2150,7 +2143,7 @@ pub fn set_dimensions_with_font(
             .style
             .italic
             .as_ref()
-            .map_or(true, |v| v.value == "true");
+            .is_none_or(|v| v.value == "true");
         let font_size: i32 = g.edges[i]
             .style
             .font_size
