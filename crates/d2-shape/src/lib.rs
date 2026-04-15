@@ -1181,13 +1181,14 @@ mod tests {
         let paths = s.get_svg_path_data();
         assert_eq!(paths.len(), 1);
         let path = &paths[0];
-        // The path should start with M and contain Z
+        // The path should start with M and end with Z.
         assert!(path.starts_with("M "), "path should start with M: {}", path);
         assert!(path.ends_with("Z"), "path should end with Z: {}", path);
-        // Check it has the expected coordinates for a 77x76.9 diamond (1:1 scale)
+        // After Go's chopPrecision the midpoint of a 77x76.9 diamond rounds
+        // to (39, 77); make sure that landmark is present in the output.
         assert!(
-            path.contains("38.5"),
-            "path should contain midpoint: {}",
+            path.contains("39 77"),
+            "path should contain rounded midpoint 39 77: {}",
             path
         );
     }

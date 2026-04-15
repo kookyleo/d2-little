@@ -651,6 +651,10 @@ mod tests {
             dst: b,
             src_arrow: true,
             dst_arrow: true,
+            route: vec![
+                d2_geo::Point::new(80.0, 20.0),
+                d2_geo::Point::new(160.0, 20.0),
+            ],
             ..Default::default()
         });
 

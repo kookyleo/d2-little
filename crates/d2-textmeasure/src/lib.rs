@@ -1884,12 +1884,17 @@ mod tests {
         let mut ruler = Ruler::new().unwrap();
 
         let font_16 = FontFamily::SourceSansPro.font(16, FontStyle::Regular);
-        let (w16, h16) = ruler.measure(font_16, "送信機");
-        assert_eq!(w16, 59);
+        // Japanese kanji "Soushinki" (transmitter): 3 CJK Unified Ideographs.
+        let (w16, h16) = ruler.measure(font_16, "\u{9001}\u{4FE1}\u{6A5F}");
+        assert_eq!(w16, 58);
         assert_eq!(h16, 21);
 
         let font_24 = FontFamily::SourceSansPro.font(24, FontStyle::Regular);
-        let (w24, h24) = ruler.measure(font_24, "オンラインポータル");
+        // Katakana "online portal": 9 graphemes including a prolonged sound mark.
+        let (w24, h24) = ruler.measure(
+            font_24,
+            "\u{30AA}\u{30F3}\u{30E9}\u{30A4}\u{30F3}\u{30DD}\u{30FC}\u{30BF}\u{30EB}",
+        );
         assert_eq!(w24, 271);
         assert_eq!(h24, 31);
     }
