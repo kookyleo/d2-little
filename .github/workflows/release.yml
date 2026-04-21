@@ -2,21 +2,18 @@ name: Release
 
 # Tag-driven publish to crates.io + npm.
 #
-# Push a `vX.Y.Z` tag to main to trigger. The workspace version in the
-# root `Cargo.toml` `[workspace.package]` must already match (e.g. `0.7.1`
-# for tag `v0.7.1`). The `packages/web/package.json` version must also
-# match — both artefacts ship under the same version, same tag.
+# Push a `vX.Y.Z` tag to main to trigger. The root `Cargo.toml`
+# `[package].version` must already match (e.g. `0.7.2` for tag
+# `v0.7.2`). The `packages/web/package.json` version must also match —
+# both artefacts ship under the same version, same tag.
 #
-# Publish is gated behind the full quality suite: fmt, clippy (-D warnings),
-# unit tests, and integration tests. If the gate trips, the tag publishes
-# nothing.
+# Publish is gated behind the full quality suite: fmt, clippy
+# (-D warnings), unit tests, and integration tests. If the gate trips,
+# the tag publishes nothing.
 #
-# Note: `d2-lib` depends on 23 other workspace crates by path. Publishing
-# the facade crate to crates.io with `--no-verify` skips dependency
-# verification, but downstream consumers pinning `d2-lib = "0.7.1"` from
-# crates.io cannot resolve those siblings. The npm wasm package is what
-# integrators actually consume; the crates.io publish is nice-to-have
-# and is kept idempotent so missing siblings don't block re-tags.
+# Since the 0.7.2 flatten, `d2-little` is a single crate with no path
+# siblings, so `cargo publish -p d2-little` can now verify and publish
+# cleanly without any `--no-verify` workaround.
 
 on:
   push:
@@ -44,12 +41,12 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Verify tag matches workspace + packages/web versions
+      - name: Verify tag matches package + packages/web versions
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          ws_version=$(awk -F'"' '/^\[workspace.package\]/ {f=1} f && /^version = / {print $2; exit}' Cargo.toml)
-          if [ "$tag" != "$ws_version" ]; then
-            echo "::error::Tag v${tag} does not match [workspace.package] version ${ws_version} in Cargo.toml"
+          pkg_version=$(awk -F'"' '/^\[package\]/ {f=1} f && /^version = / {print $2; exit}' Cargo.toml)
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "::error::Tag v${tag} does not match [package] version ${pkg_version} in Cargo.toml"
             exit 1
           fi
           web_version=$(node -p "require('./packages/web/package.json').version")
@@ -57,7 +54,7 @@ jobs:
             echo "::error::Tag v${tag} does not match packages/web/package.json version ${web_version}"
             exit 1
           fi
-          echo "Publishing d2-little ${ws_version} (crates.io + npm)"
+          echo "Publishing d2-little ${pkg_version} (crates.io + npm)"
 
       - name: Format check
         run: cargo fmt --check
@@ -66,13 +63,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test --lib -p d2-lib
+        run: cargo test --lib -p d2-little
 
       - name: Integration tests
-        run: cargo test --test '*' -p d2-lib
+        run: cargo test --test '*' -p d2-little
 
   publish-crates-io:
-    name: Publish d2-lib to crates.io
+    name: Publish d2-little to crates.io
     runs-on: ubuntu-latest
     needs: gate
     steps:
@@ -81,21 +78,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Publish to crates.io
-        # --no-verify: d2-lib depends on 23 sibling workspace crates by
-        # path. Verifying would require publishing all siblings first,
-        # which is out of scope for this release. The gate job already
-        # ran the full test suite.
-        #
         # Idempotent: treat "already exists on crates.io" as a no-op
         # success so re-pushing the same tag (e.g. to retry an npm
         # publish after a token fix) doesn't cascade a cosmetic failure.
-        #
-        # Also idempotent on the "all dependencies must have versions"
-        # class of errors that the unpublished siblings trigger — we
-        # log and continue so the npm publish job still runs.
         run: |
           set +e
-          out=$(cargo publish -p d2-lib --no-verify --token "${{ secrets.CARGO_TOKEN }}" 2>&1)
+          out=$(cargo publish -p d2-little --token "${{ secrets.CARGO_TOKEN }}" 2>&1)
           rc=$?
           echo "$out"
           if [ $rc -eq 0 ]; then exit 0; fi
@@ -103,14 +91,10 @@ jobs:
             echo "::notice::crates.io already has this version — skipping publish."
             exit 0
           fi
-          if echo "$out" | grep -qE "all dependencies must have a version|no matching package (named|found)"; then
-            echo "::warning::crates.io publish of d2-lib skipped — sibling workspace crates are unpublished. The npm wasm package is the primary artefact."
-            exit 0
-          fi
           exit "$rc"
 
   publish-npm-web:
-    name: Publish @kookyleo/d2-lib-web to npm
+    name: Publish @kookyleo/d2-little-web to npm
     runs-on: ubuntu-latest
     needs: gate
     steps:
@@ -137,7 +121,7 @@ jobs:
       - name: Build wasm (packages/web)
         working-directory: packages/web
         run: |
-          wasm-pack build --target bundler --out-dir dist/wasm --out-name d2_lib_web
+          wasm-pack build --target bundler --out-dir dist/wasm --out-name d2_little_web
           rm -f dist/wasm/package.json dist/wasm/.gitignore dist/wasm/README.md
 
       - name: Install & build TypeScript wrapper
@@ -153,8 +137,8 @@ jobs:
           ls -la dist/wasm
           test -f dist/index.js
           test -f dist/index.d.ts
-          test -f dist/wasm/d2_lib_web.js
-          test -f dist/wasm/d2_lib_web_bg.wasm
+          test -f dist/wasm/d2_little_web.js
+          test -f dist/wasm/d2_little_web_bg.wasm
 
       - name: Publish to npm
         working-directory: packages/web
