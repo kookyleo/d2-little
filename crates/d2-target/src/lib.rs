@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -302,8 +301,7 @@ impl TextDimensions {
 // Arrowhead
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum Arrowhead {
     #[default]
     None,
@@ -323,7 +321,6 @@ pub enum Arrowhead {
     CfOneRequired,
     CfManyRequired,
 }
-
 
 impl Arrowhead {
     pub const DEFAULT: Arrowhead = Arrowhead::Triangle;
@@ -1428,8 +1425,7 @@ impl Diagram {
                     s.width as f64,
                     s.height as f64,
                 );
-                let label_tl =
-                    label_top_left(&s.label_position, &shape_box, LABEL_PADDING, lw, lh);
+                let label_tl = label_top_left(&s.label_position, &shape_box, LABEL_PADDING, lw, lh);
                 let mut label_x = label_tl.0;
                 let mut label_y = label_tl.1;
 
@@ -1499,21 +1495,25 @@ impl Diagram {
 
             // Include arrowhead labels (src/dst) in the bounding box.
             if let Some(ref l) = c.src_label
-                && !l.label.is_empty() && !c.route.is_empty()
-                    && let Some(tl) = arrowhead_label_tl(c, false) {
-                        x1 = x1.min(tl.0 as i64);
-                        y1 = y1.min(tl.1 as i64);
-                        x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
-                        y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
-                    }
+                && !l.label.is_empty()
+                && !c.route.is_empty()
+                && let Some(tl) = arrowhead_label_tl(c, false)
+            {
+                x1 = x1.min(tl.0 as i64);
+                y1 = y1.min(tl.1 as i64);
+                x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
+                y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
+            }
             if let Some(ref l) = c.dst_label
-                && !l.label.is_empty() && !c.route.is_empty()
-                    && let Some(tl) = arrowhead_label_tl(c, true) {
-                        x1 = x1.min(tl.0 as i64);
-                        y1 = y1.min(tl.1 as i64);
-                        x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
-                        y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
-                    }
+                && !l.label.is_empty()
+                && !c.route.is_empty()
+                && let Some(tl) = arrowhead_label_tl(c, true)
+            {
+                x1 = x1.min(tl.0 as i64);
+                y1 = y1.min(tl.1 as i64);
+                x2 = x2.max(tl.0 as i64 + i64::from(l.label_width));
+                y2 = y2.max(tl.1 as i64 + i64::from(l.label_height));
+            }
 
             // Include the connection's label in the bounding box.
             if !c.text.label.is_empty() && !c.label_position.is_empty() && !c.route.is_empty() {
@@ -1748,9 +1748,10 @@ pub mod go_json {
                         rounded.insert(0, b'1');
                         // dp shifts right by 1
                         if let Ok(s) = format_decimal(neg, &rounded, dp17 + 1).parse::<f64>()
-                            && s == f {
-                                return format_decimal(neg, &rounded, dp17 + 1);
-                            }
+                            && s == f
+                        {
+                            return format_decimal(neg, &rounded, dp17 + 1);
+                        }
                         continue;
                     }
                 }
@@ -2459,7 +2460,7 @@ pub mod go_json {
         out.push(b'{');
         let mut first = true;
         let mut entries: Vec<_> = m.iter().collect();
-        entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        entries.sort_by_key(|(ka, _)| *ka);
         for (k, v) in entries {
             write_field_name(out, &mut first, k);
             write_string(out, v);

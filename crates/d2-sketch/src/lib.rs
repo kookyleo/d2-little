@@ -15,7 +15,7 @@
 use std::fmt::Write as _;
 
 use d2_geo::{Point, Segment};
-use d2_target::{Arrowhead, Connection, Shape, INNER_BORDER_OFFSET};
+use d2_target::{Arrowhead, Connection, INNER_BORDER_OFFSET, Shape};
 use d2_themes::ThemableElement;
 
 pub mod rough;
@@ -269,7 +269,8 @@ fn render_sketch_overlay(el: &mut ThemableElement, fill: &str) -> Result<String,
     } else {
         let lc = d2_color::luminance_category(fill)
             .map_err(|e| format!("luminance_category({fill}): {e}"))?;
-        el.class_name.push_str(&format!(" sketch-overlay-{}", lc.as_str()));
+        el.class_name
+            .push_str(&format!(" sketch-overlay-{}", lc.as_str()));
     }
     Ok(el.render())
 }
@@ -590,7 +591,11 @@ pub fn connection(
     path: &str,
     attrs: &str,
 ) -> Result<String, String> {
-    let animated_class = if connection.animated { " animated-connection" } else { "" };
+    let animated_class = if connection.animated {
+        " animated-connection"
+    } else {
+        ""
+    };
 
     if connection.animated {
         // Mirror Go: bidirectional or absent arrows → split path into two
@@ -598,8 +603,7 @@ pub fn connection(
         // sketched path.
         let bidirectional = (connection.dst_arrow == Arrowhead::None
             && connection.src_arrow == Arrowhead::None)
-            || (connection.dst_arrow != Arrowhead::None
-                && connection.src_arrow != Arrowhead::None);
+            || (connection.dst_arrow != Arrowhead::None && connection.src_arrow != Arrowhead::None);
 
         if bidirectional {
             let (p1, p2) =
@@ -713,7 +717,13 @@ fn arrowhead_paths(
             o.fill_style = "solid".into();
             o.seed = 1;
             let primary = rough::draw_polygon(
-                &[(-20.0, 0.0), (-10.0, 5.0), (0.0, 0.0), (-10.0, -5.0), (-20.0, 0.0)],
+                &[
+                    (-20.0, 0.0),
+                    (-10.0, 5.0),
+                    (0.0, 0.0),
+                    (-10.0, -5.0),
+                    (-20.0, 0.0),
+                ],
                 &o,
             );
             (to_paths(primary), Vec::new())
@@ -725,7 +735,13 @@ fn arrowhead_paths(
             o.fill_weight = 4.0;
             o.seed = 1;
             let primary = rough::draw_polygon(
-                &[(-20.0, 0.0), (-10.0, 5.0), (0.0, 0.0), (-10.0, -5.0), (-20.0, 0.0)],
+                &[
+                    (-20.0, 0.0),
+                    (-10.0, 5.0),
+                    (0.0, 0.0),
+                    (-10.0, -5.0),
+                    (-20.0, 0.0),
+                ],
                 &o,
             );
             (to_paths(primary), Vec::new())
@@ -734,7 +750,14 @@ fn arrowhead_paths(
             let mut o = base(stroke, stroke_width);
             o.seed = 3;
             let primary = rough::draw_linear_path(
-                &[(-6.0, -6.0), (6.0, 6.0), (0.0, 0.0), (-6.0, 6.0), (0.0, 0.0), (6.0, -6.0)],
+                &[
+                    (-6.0, -6.0),
+                    (6.0, 6.0),
+                    (0.0, 0.0),
+                    (-6.0, 6.0),
+                    (0.0, 0.0),
+                    (6.0, -6.0),
+                ],
                 &o,
             );
             (to_paths(primary), Vec::new())
@@ -831,7 +854,11 @@ fn fmt_v(f: f64) -> String {
         return "NaN".to_owned();
     }
     if f.is_infinite() {
-        return if f > 0.0 { "+Inf".to_owned() } else { "-Inf".to_owned() };
+        return if f > 0.0 {
+            "+Inf".to_owned()
+        } else {
+            "-Inf".to_owned()
+        };
     }
     // Go `%v` keeps -0 as "-0"; handle explicitly.
     if f == 0.0 {

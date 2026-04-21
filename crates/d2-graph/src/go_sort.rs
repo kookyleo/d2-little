@@ -113,7 +113,13 @@ enum SortedHint {
     Decreasing,
 }
 
-fn order2_func<L, S>(less: &mut L, _swap: &mut S, a: usize, b: usize, swaps: &mut usize) -> (usize, usize)
+fn order2_func<L, S>(
+    less: &mut L,
+    _swap: &mut S,
+    a: usize,
+    b: usize,
+    swaps: &mut usize,
+) -> (usize, usize)
 where
     L: FnMut(usize, usize) -> bool,
     S: FnMut(usize, usize),
@@ -126,7 +132,14 @@ where
     }
 }
 
-fn median_func<L, S>(less: &mut L, swap: &mut S, a: usize, b: usize, c: usize, swaps: &mut usize) -> usize
+fn median_func<L, S>(
+    less: &mut L,
+    swap: &mut S,
+    a: usize,
+    b: usize,
+    c: usize,
+    swaps: &mut usize,
+) -> usize
 where
     L: FnMut(usize, usize) -> bool,
     S: FnMut(usize, usize),
@@ -244,7 +257,13 @@ where
     }
 }
 
-fn partition_func<L, S>(less: &mut L, swap: &mut S, a: usize, b: usize, pivot: usize) -> (usize, bool)
+fn partition_func<L, S>(
+    less: &mut L,
+    swap: &mut S,
+    a: usize,
+    b: usize,
+    pivot: usize,
+) -> (usize, bool)
 where
     L: FnMut(usize, usize) -> bool,
     S: FnMut(usize, usize),
@@ -460,21 +479,81 @@ mod tests {
         // (positions 91-93) rather than Go's positions 18-20. Either way,
         // Go's `sort.Slice` produces `tala, dagre, elk`.
         let linemap: std::collections::HashMap<u32, u32> = [
-            (20, 78), (21, 78), (22, 79), (23, 79), (24, 80), (25, 80),
-            (26, 81), (27, 81), (28, 82), (29, 82), (30, 83),
-            (31, 93), (32, 93), (33, 94), (34, 98), (35, 98), (36, 99),
-            (37, 106), (38, 106), (39, 107), (40, 111), (41, 111), (42, 112),
-            (43, 123), (44, 123), (45, 123), (46, 123),
-            (47, 141), (48, 144), (49, 145), (50, 146), (51, 147), (52, 148),
-            (53, 150), (54, 152), (55, 153), (56, 183),
-            (57, 199), (58, 200), (59, 202), (60, 203), (61, 205), (62, 206),
-            (63, 207), (64, 208),
-            (65, 236), (66, 237), (67, 238), (68, 239), (69, 240), (70, 241),
-            (71, 242), (72, 243), (73, 211), (74, 212), (75, 213), (76, 233),
-            (77, 192), (78, 57), (79, 127), (80, 156), (81, 247), (82, 248),
-            (83, 249), (84, 250), (85, 251), (86, 252), (87, 254), (88, 255),
-            (89, 256), (90, 262),
-        ].iter().copied().collect();
+            (20, 78),
+            (21, 78),
+            (22, 79),
+            (23, 79),
+            (24, 80),
+            (25, 80),
+            (26, 81),
+            (27, 81),
+            (28, 82),
+            (29, 82),
+            (30, 83),
+            (31, 93),
+            (32, 93),
+            (33, 94),
+            (34, 98),
+            (35, 98),
+            (36, 99),
+            (37, 106),
+            (38, 106),
+            (39, 107),
+            (40, 111),
+            (41, 111),
+            (42, 112),
+            (43, 123),
+            (44, 123),
+            (45, 123),
+            (46, 123),
+            (47, 141),
+            (48, 144),
+            (49, 145),
+            (50, 146),
+            (51, 147),
+            (52, 148),
+            (53, 150),
+            (54, 152),
+            (55, 153),
+            (56, 183),
+            (57, 199),
+            (58, 200),
+            (59, 202),
+            (60, 203),
+            (61, 205),
+            (62, 206),
+            (63, 207),
+            (64, 208),
+            (65, 236),
+            (66, 237),
+            (67, 238),
+            (68, 239),
+            (69, 240),
+            (70, 241),
+            (71, 242),
+            (72, 243),
+            (73, 211),
+            (74, 212),
+            (75, 213),
+            (76, 233),
+            (77, 192),
+            (78, 57),
+            (79, 127),
+            (80, 156),
+            (81, 247),
+            (82, 248),
+            (83, 249),
+            (84, 250),
+            (85, 251),
+            (86, 252),
+            (87, 254),
+            (88, 255),
+            (89, 256),
+            (90, 262),
+        ]
+        .iter()
+        .copied()
+        .collect();
         let mut edges: Vec<(String, u32, u32)> = vec![
             ("dagre_elk".into(), 8, 5),
             ("elk_tala".into(), 8, 14),

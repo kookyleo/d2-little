@@ -1170,7 +1170,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 rest.push(entry);
             }
         }
-        for (edge, _, _) in cn_first.into_iter().chain(rest.into_iter()) {
+        for (edge, _, _) in cn_first.into_iter().chain(rest) {
             g.edges.push(edge);
         }
 
@@ -1398,12 +1398,8 @@ fn route_direct_edges_for_excluded_descendants(
                 points[0] = p;
             }
             if !g.objects[edge.src].is_rectangular_shape() {
-                let traced = trace_to_shape_border_for(
-                    &g.objects[edge.src],
-                    src_box,
-                    points[0],
-                    points[1],
-                );
+                let traced =
+                    trace_to_shape_border_for(&g.objects[edge.src], src_box, points[0], points[1]);
                 points[0] = traced;
             }
 
@@ -1620,9 +1616,10 @@ pub fn set_dimensions_with_font(
         // so leaf shapes with `style.bold: false` are still measured as
         // bold. Mirroring this quirk keeps label widths matching Go.
         if let Some(v) = g.objects[i].style.bold.as_ref()
-            && v.value == "true" {
-                is_bold = true;
-            }
+            && v.value == "true"
+        {
+            is_bold = true;
+        }
         if in_seq {
             is_bold = false;
         }
@@ -2103,9 +2100,10 @@ pub fn set_dimensions_with_font(
         if shape == "cloud"
             && let Some(inner) =
                 d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h)
-                && inner.height > 0.0 {
-                    g.objects[i].content_aspect_ratio = Some(inner.width / inner.height);
-                }
+            && inner.height > 0.0
+        {
+            g.objects[i].content_aspect_ratio = Some(inner.width / inner.height);
+        }
 
         g.objects[i].update_box();
     }

@@ -1550,11 +1550,9 @@ fn measure_node(
                     block.height += 2.0 * PADDING_PRE;
                     block.margin_bottom = block.margin_bottom.max(MARGIN_BOTTOM_PRE);
                 }
-                "code" => {
-                    if parent_element_type != Some("pre") {
-                        block.width += 2.0 * PADDING_LEFT_RIGHT_CODE_EM * f64::from(font_size);
-                        block.height += 2.0 * PADDING_TOP_BOTTOM_CODE_EM * f64::from(font_size);
-                    }
+                "code" if parent_element_type != Some("pre") => {
+                    block.width += 2.0 * PADDING_LEFT_RIGHT_CODE_EM * f64::from(font_size);
+                    block.height += 2.0 * PADDING_TOP_BOTTOM_CODE_EM * f64::from(font_size);
                 }
                 "hr" => {
                     block.height += HEIGHT_HR_EM * f64::from(font_size);
@@ -1595,8 +1593,10 @@ fn measure_node(
                             );
                             table_height += row_attrs.height;
                             if let ExtraData::Row(ref widths) = row_attrs.extra_data {
-                                column_widths =
-                                    merge_column_widths(column_widths, std::slice::from_ref(widths));
+                                column_widths = merge_column_widths(
+                                    column_widths,
+                                    std::slice::from_ref(widths),
+                                );
                             }
                         }
                     }

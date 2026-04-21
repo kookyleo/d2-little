@@ -162,11 +162,10 @@ impl HuffmanEncoder {
             if l.needed == 0 {
                 // Done with this level. Bubble up the synthetic pair to the
                 // parent and continue.
+                levels[lv] = l;
                 if l.level == max_bits {
-                    levels[lv] = l;
                     break;
                 }
-                levels[lv] = l;
                 levels[(l.level + 1) as usize].next_pair_freq = prev_freq + l.last_freq;
                 level += 1;
             } else {
@@ -183,12 +182,10 @@ impl HuffmanEncoder {
         }
 
         let bit_count = &mut self.bit_count[..(max_bits as usize + 1)];
-        let mut bits = 1usize;
         let counts = &leaf_counts[max_bits as usize];
-        for level in (1..=max_bits).rev() {
+        for (bits, level) in (1usize..).zip((1..=max_bits).rev()) {
             let lv = level as usize;
             bit_count[bits] = counts[lv] - counts[lv - 1];
-            bits += 1;
         }
         bit_count
     }
@@ -208,7 +205,7 @@ impl HuffmanEncoder {
             // literal order (not frequency order), hence the sort.
             let split = list.len() - bits as usize;
             let chunk = &mut list[split..];
-            chunk.sort_by(|a, b| a.literal.cmp(&b.literal));
+            chunk.sort_by_key(|node| node.literal);
             for node in chunk.iter() {
                 self.codes[node.literal as usize] = HCode {
                     code: reverse_bits(code, n as u8),

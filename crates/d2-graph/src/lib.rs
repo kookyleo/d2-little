@@ -114,9 +114,9 @@ pub fn unformat_key_segment(formatted: &str) -> &str {
     if formatted.len() >= 2
         && ((formatted.starts_with('"') && formatted.ends_with('"'))
             || (formatted.starts_with('\'') && formatted.ends_with('\'')))
-        {
-            return &formatted[1..formatted.len() - 1];
-        }
+    {
+        return &formatted[1..formatted.len() - 1];
+    }
     formatted
 }
 
@@ -198,105 +198,65 @@ impl Style {
     /// Initialize a style field to `Some(ScalarValue::default())` so `apply` can set it.
     pub fn init_field(&mut self, key: &str) {
         match key {
-            "opacity" => {
-                if self.opacity.is_none() {
-                    self.opacity = Some(ScalarValue::default());
-                }
+            "opacity" if self.opacity.is_none() => {
+                self.opacity = Some(ScalarValue::default());
             }
-            "stroke" => {
-                if self.stroke.is_none() {
-                    self.stroke = Some(ScalarValue::default());
-                }
+            "stroke" if self.stroke.is_none() => {
+                self.stroke = Some(ScalarValue::default());
             }
-            "fill" => {
-                if self.fill.is_none() {
-                    self.fill = Some(ScalarValue::default());
-                }
+            "fill" if self.fill.is_none() => {
+                self.fill = Some(ScalarValue::default());
             }
-            "fill-pattern" => {
-                if self.fill_pattern.is_none() {
-                    self.fill_pattern = Some(ScalarValue::default());
-                }
+            "fill-pattern" if self.fill_pattern.is_none() => {
+                self.fill_pattern = Some(ScalarValue::default());
             }
-            "stroke-width" => {
-                if self.stroke_width.is_none() {
-                    self.stroke_width = Some(ScalarValue::default());
-                }
+            "stroke-width" if self.stroke_width.is_none() => {
+                self.stroke_width = Some(ScalarValue::default());
             }
-            "stroke-dash" => {
-                if self.stroke_dash.is_none() {
-                    self.stroke_dash = Some(ScalarValue::default());
-                }
+            "stroke-dash" if self.stroke_dash.is_none() => {
+                self.stroke_dash = Some(ScalarValue::default());
             }
-            "border-radius" => {
-                if self.border_radius.is_none() {
-                    self.border_radius = Some(ScalarValue::default());
-                }
+            "border-radius" if self.border_radius.is_none() => {
+                self.border_radius = Some(ScalarValue::default());
             }
-            "shadow" => {
-                if self.shadow.is_none() {
-                    self.shadow = Some(ScalarValue::default());
-                }
+            "shadow" if self.shadow.is_none() => {
+                self.shadow = Some(ScalarValue::default());
             }
-            "3d" => {
-                if self.three_dee.is_none() {
-                    self.three_dee = Some(ScalarValue::default());
-                }
+            "3d" if self.three_dee.is_none() => {
+                self.three_dee = Some(ScalarValue::default());
             }
-            "multiple" => {
-                if self.multiple.is_none() {
-                    self.multiple = Some(ScalarValue::default());
-                }
+            "multiple" if self.multiple.is_none() => {
+                self.multiple = Some(ScalarValue::default());
             }
-            "font" => {
-                if self.font.is_none() {
-                    self.font = Some(ScalarValue::default());
-                }
+            "font" if self.font.is_none() => {
+                self.font = Some(ScalarValue::default());
             }
-            "font-size" => {
-                if self.font_size.is_none() {
-                    self.font_size = Some(ScalarValue::default());
-                }
+            "font-size" if self.font_size.is_none() => {
+                self.font_size = Some(ScalarValue::default());
             }
-            "font-color" => {
-                if self.font_color.is_none() {
-                    self.font_color = Some(ScalarValue::default());
-                }
+            "font-color" if self.font_color.is_none() => {
+                self.font_color = Some(ScalarValue::default());
             }
-            "animated" => {
-                if self.animated.is_none() {
-                    self.animated = Some(ScalarValue::default());
-                }
+            "animated" if self.animated.is_none() => {
+                self.animated = Some(ScalarValue::default());
             }
-            "bold" => {
-                if self.bold.is_none() {
-                    self.bold = Some(ScalarValue::default());
-                }
+            "bold" if self.bold.is_none() => {
+                self.bold = Some(ScalarValue::default());
             }
-            "italic" => {
-                if self.italic.is_none() {
-                    self.italic = Some(ScalarValue::default());
-                }
+            "italic" if self.italic.is_none() => {
+                self.italic = Some(ScalarValue::default());
             }
-            "underline" => {
-                if self.underline.is_none() {
-                    self.underline = Some(ScalarValue::default());
-                }
+            "underline" if self.underline.is_none() => {
+                self.underline = Some(ScalarValue::default());
             }
-            "filled" => {
-                if self.filled.is_none() {
-                    self.filled = Some(ScalarValue::default());
-                }
+            "filled" if self.filled.is_none() => {
+                self.filled = Some(ScalarValue::default());
             }
-            "double-border" => {
-                if self.double_border.is_none() {
-                    self.double_border = Some(ScalarValue::default());
-                }
+            "double-border" if self.double_border.is_none() => {
+                self.double_border = Some(ScalarValue::default());
             }
-            "text-transform" => {
-                if self.text_transform.is_none() {
-                    self.text_transform = Some(ScalarValue::default());
-                }
+            "text-transform" if self.text_transform.is_none() => {
+                self.text_transform = Some(ScalarValue::default());
             }
             _ => {}
         }
@@ -756,9 +716,10 @@ impl Object {
         // turn it off. So a leaf shape with `style.bold: false` is still
         // measured as bold. Mirroring this quirk keeps label widths matching.
         if let Some(v) = self.style.bold.as_ref()
-            && v.value == "true" {
-                is_bold = true;
-            }
+            && v.value == "true"
+        {
+            is_bold = true;
+        }
         // class shapes are never bold regardless of the default.
         if self.shape.value == d2_target::SHAPE_CLASS {
             is_bold = false;
@@ -783,15 +744,17 @@ impl Object {
         // Inside sequence diagrams, objects get isBold=false (Go:
         // `if obj.OuterSequenceDiagram() != nil { isBold = false }`).
         if !in_seq {
-            if (is_container || self.is_grid_diagram()) && self.shape.value != "text"
-                && self.style.font_size.is_none() {
-                    font_size = match self.level(graph) {
-                        1 => 28, // FONT_SIZE_XXL
-                        2 => 24, // FONT_SIZE_XL
-                        3 => 20, // FONT_SIZE_L
-                        _ => 16, // FONT_SIZE_M
-                    };
-                }
+            if (is_container || self.is_grid_diagram())
+                && self.shape.value != "text"
+                && self.style.font_size.is_none()
+            {
+                font_size = match self.level(graph) {
+                    1 => 28, // FONT_SIZE_XXL
+                    2 => 24, // FONT_SIZE_XL
+                    3 => 20, // FONT_SIZE_L
+                    _ => 16, // FONT_SIZE_M
+                };
+            }
         } else {
             is_bold = false;
         }
@@ -927,9 +890,10 @@ impl Object {
         }
         // Direct children of a sequence_diagram root always get B5.
         if let Some(pid) = self.parent
-            && graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM {
-                return d2_color::B5;
-            }
+            && graph.objects[pid].shape.value == d2_target::SHAPE_SEQUENCE_DIAGRAM
+        {
+            return d2_color::B5;
+        }
         // Spans inside sequence diagrams: fill by depth relative to the
         // sequence diagram root. Go Level() returns 0 for root, our level()
         // returns 1 for root. For non-root objects they match. Adjust for
@@ -1286,76 +1250,78 @@ impl Object {
         let mut margin = Spacing::default();
 
         if self.has_label()
-            && let Some(ref pos_str) = self.label_position {
-                let position = d2_label::Position::from_string(pos_str);
-                let label_width = self.label_dimensions.width as f64 + d2_label::PADDING;
-                let label_height = self.label_dimensions.height as f64 + d2_label::PADDING;
+            && let Some(ref pos_str) = self.label_position
+        {
+            let position = d2_label::Position::from_string(pos_str);
+            let label_width = self.label_dimensions.width as f64 + d2_label::PADDING;
+            let label_height = self.label_dimensions.height as f64 + d2_label::PADDING;
 
-                use d2_label::Position::*;
+            use d2_label::Position::*;
+            match position {
+                OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
+                    margin.top = label_height;
+                }
+                OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
+                    margin.bottom = label_height;
+                }
+                OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
+                    margin.left = label_width;
+                }
+                OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+                    margin.right = label_width;
+                }
+                _ => {}
+            }
+
+            // if an outside label is larger than the object add margin accordingly
+            if label_width > self.width {
+                let dx = label_width - self.width;
                 match position {
-                    OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
-                        margin.top = label_height;
+                    OutsideTopLeft | OutsideBottomLeft => margin.right = dx,
+                    OutsideTopCenter | OutsideBottomCenter => {
+                        margin.left = (dx / 2.0).ceil();
+                        margin.right = (dx / 2.0).ceil();
                     }
-                    OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
-                        margin.bottom = label_height;
-                    }
-                    OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
-                        margin.left = label_width;
-                    }
-                    OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
-                        margin.right = label_width;
-                    }
+                    OutsideTopRight | OutsideBottomRight => margin.left = dx,
                     _ => {}
                 }
-
-                // if an outside label is larger than the object add margin accordingly
-                if label_width > self.width {
-                    let dx = label_width - self.width;
-                    match position {
-                        OutsideTopLeft | OutsideBottomLeft => margin.right = dx,
-                        OutsideTopCenter | OutsideBottomCenter => {
-                            margin.left = (dx / 2.0).ceil();
-                            margin.right = (dx / 2.0).ceil();
-                        }
-                        OutsideTopRight | OutsideBottomRight => margin.left = dx,
-                        _ => {}
+            }
+            if label_height > self.height {
+                let dy = label_height - self.height;
+                match position {
+                    OutsideLeftTop | OutsideRightTop => margin.bottom = dy,
+                    OutsideLeftMiddle | OutsideRightMiddle => {
+                        margin.top = (dy / 2.0).ceil();
+                        margin.bottom = (dy / 2.0).ceil();
                     }
-                }
-                if label_height > self.height {
-                    let dy = label_height - self.height;
-                    match position {
-                        OutsideLeftTop | OutsideRightTop => margin.bottom = dy,
-                        OutsideLeftMiddle | OutsideRightMiddle => {
-                            margin.top = (dy / 2.0).ceil();
-                            margin.bottom = (dy / 2.0).ceil();
-                        }
-                        OutsideLeftBottom | OutsideRightBottom => margin.top = dy,
-                        _ => {}
-                    }
+                    OutsideLeftBottom | OutsideRightBottom => margin.top = dy,
+                    _ => {}
                 }
             }
+        }
 
         if self.has_icon()
-            && let Some(ref pos_str) = self.icon_position {
-                let position = d2_label::Position::from_string(pos_str);
-                let icon_size = d2_target::MAX_ICON_SIZE as f64 + d2_label::PADDING;
-                use d2_label::Position::*;
-                match position {
-                    OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
-                        margin.top = margin.top.max(icon_size);
-                    }
-                    OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
-                        margin.bottom = margin.bottom.max(icon_size);
-                    }
-                    OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
-                        margin.left = margin.left.max(icon_size);
-                    }
-                    OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
-                        margin.right = margin.right.max(icon_size);
-                    }
-                    _ => {}
+            && let Some(ref pos_str) = self.icon_position
+        {
+            let position = d2_label::Position::from_string(pos_str);
+            let icon_size = d2_target::MAX_ICON_SIZE as f64 + d2_label::PADDING;
+            use d2_label::Position::*;
+            match position {
+                OutsideTopLeft | OutsideTopCenter | OutsideTopRight => {
+                    margin.top = margin.top.max(icon_size);
                 }
+                OutsideBottomLeft | OutsideBottomCenter | OutsideBottomRight => {
+                    margin.bottom = margin.bottom.max(icon_size);
+                }
+                OutsideLeftTop | OutsideLeftMiddle | OutsideLeftBottom => {
+                    margin.left = margin.left.max(icon_size);
+                }
+                OutsideRightTop | OutsideRightMiddle | OutsideRightBottom => {
+                    margin.right = margin.right.max(icon_size);
+                }
+                _ => {}
             }
+        }
 
         let (dx, dy) = self.get_modifier_element_adjustments();
         margin.right += dx;
@@ -1412,9 +1378,10 @@ impl Object {
         if shape_type == d2_shape::CLOUD_TYPE {
             let inner = d2_shape::ShapeOps::get_inner_box_for_content(&s, content_w, content_h);
             if let Some(inner) = inner
-                && inner.height > 0.0 {
-                    self.content_aspect_ratio = Some(inner.width / inner.height);
-                }
+                && inner.height > 0.0
+            {
+                self.content_aspect_ratio = Some(inner.width / inner.height);
+            }
         }
     }
 }
@@ -1567,11 +1534,7 @@ impl Edge {
             // Match Go d2graph.Edge.Text(): edge labels default to italic.
             // An explicit `style.italic: false` opts out, but absent any
             // style the value should still be true.
-            is_italic: self
-                .style
-                .italic
-                .as_ref()
-                .is_none_or(|v| v.value == "true"),
+            is_italic: self.style.italic.as_ref().is_none_or(|v| v.value == "true"),
             dimensions: self.label_dimensions,
         }
     }
@@ -1728,18 +1691,30 @@ impl Graph {
             .map(|i| {
                 let obj = &self.objects[i];
                 if obj.references.is_empty() {
-                    return SortKey { has_ref: false, is_var: false, range: None };
+                    return SortKey {
+                        has_ref: false,
+                        is_var: false,
+                        range: None,
+                    };
                 }
                 let r0 = &obj.references[0];
                 if r0.is_var {
-                    return SortKey { has_ref: true, is_var: true, range: None };
+                    return SortKey {
+                        has_ref: true,
+                        is_var: true,
+                        range: None,
+                    };
                 }
                 let range = r0
                     .key
                     .path
                     .get(r0.key_path_index)
                     .map(|sb| sb.get_range().clone());
-                SortKey { has_ref: true, is_var: false, range }
+                SortKey {
+                    has_ref: true,
+                    is_var: false,
+                    range,
+                }
             })
             .collect();
 
@@ -1858,17 +1833,19 @@ impl Graph {
         let mut order: Vec<usize> = (0..n).collect();
         // Snapshot the sort key per original edge index so the comparator
         // stays correct as positions shuffle.
-        let ranges: Vec<Option<ast::Range>> =
-            self.edges.iter().map(|e| e.first_ast_range.clone()).collect();
+        let ranges: Vec<Option<ast::Range>> = self
+            .edges
+            .iter()
+            .map(|e| e.first_ast_range.clone())
+            .collect();
         use std::cell::RefCell;
         let order_cell = RefCell::new(order);
         // Go's `Range.Before` delegates to `Position.Before`, which
         // compares byte offsets only. Equal-byte ranges report
         // "neither is before" — required so the unstable pdqsort can
         // freely permute equal-key runs the same way Go does.
-        let range_before = |ra: &ast::Range, rb: &ast::Range| -> bool {
-            ra.start.byte < rb.start.byte
-        };
+        let range_before =
+            |ra: &ast::Range, rb: &ast::Range| -> bool { ra.start.byte < rb.start.byte };
         go_sort::go_sort_slice(
             n,
             |i, j| {
@@ -1953,20 +1930,21 @@ impl Graph {
         // redirect to the diagram root so the walk creates/finds the child
         // there instead of under the current (group) scope.
         if let Some(first_name) = ida.first()
-            && let Some(seq_id) = self.objects[cur].outer_sequence_diagram(self) {
-                let seq_has_child = self.objects[seq_id]
-                    .children_array
-                    .iter()
-                    .any(|&cid| self.objects[cid].id_val() == first_name);
-                if seq_has_child {
-                    // Edge case from Go: if cur.id == first_name (a.a pattern),
-                    // the second a should be created as a child of a, not
-                    // redirected. Skip the redirect in that case.
-                    if self.objects[cur].id_val() != first_name {
-                        cur = seq_id;
-                    }
+            && let Some(seq_id) = self.objects[cur].outer_sequence_diagram(self)
+        {
+            let seq_has_child = self.objects[seq_id]
+                .children_array
+                .iter()
+                .any(|&cid| self.objects[cid].id_val() == first_name);
+            if seq_has_child {
+                // Edge case from Go: if cur.id == first_name (a.a pattern),
+                // the second a should be created as a child of a, not
+                // redirected. Skip the redirect in that case.
+                if self.objects[cur].id_val() != first_name {
+                    cur = seq_id;
                 }
             }
+        }
 
         for name in ida {
             // Look for existing child — match on the unquoted value
@@ -2157,27 +2135,29 @@ impl Graph {
             let src_abs_len = self.objects[src].abs_id.split('.').count();
             if parent_abs_len + src_path.len() > src_abs_len
                 && let Some(last) = src_path.last()
-                    && let Some(table) = self.objects[src].sql_table.as_ref() {
-                        for (i, col) in table.columns.iter().enumerate() {
-                            if col.name.label == *last {
-                                src_column_idx = Some(i);
-                                break;
-                            }
-                        }
+                && let Some(table) = self.objects[src].sql_table.as_ref()
+            {
+                for (i, col) in table.columns.iter().enumerate() {
+                    if col.name.label == *last {
+                        src_column_idx = Some(i);
+                        break;
                     }
+                }
+            }
         }
         if self.objects[dst].shape.value == "sql_table" {
             let dst_abs_len = self.objects[dst].abs_id.split('.').count();
             if parent_abs_len + dst_path.len() > dst_abs_len
                 && let Some(last) = dst_path.last()
-                    && let Some(table) = self.objects[dst].sql_table.as_ref() {
-                        for (i, col) in table.columns.iter().enumerate() {
-                            if col.name.label == *last {
-                                dst_column_idx = Some(i);
-                                break;
-                            }
-                        }
+                && let Some(table) = self.objects[dst].sql_table.as_ref()
+            {
+                for (i, col) in table.columns.iter().enumerate() {
+                    if col.name.label == *last {
+                        dst_column_idx = Some(i);
+                        break;
                     }
+                }
+            }
         }
 
         let edge = Edge {

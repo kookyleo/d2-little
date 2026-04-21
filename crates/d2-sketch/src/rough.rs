@@ -34,7 +34,9 @@ pub(crate) struct Rng {
 
 impl Rng {
     pub(crate) fn new(seed: i32) -> Self {
-        Self { seed: Cell::new(seed) }
+        Self {
+            seed: Cell::new(seed),
+        }
     }
     pub(crate) fn next(&self) -> f64 {
         // In rough.js a zero seed falls back to Math.random(); none of our
@@ -291,7 +293,12 @@ fn linear_path_ops(pts: &[(f64, f64)], closed: bool, rng: &Rng, o: &Opts) -> Vec
     if n > 2 {
         for i in 0..n - 1 {
             ops.extend(double_line_ops(
-                pts[i].0, pts[i].1, pts[i + 1].0, pts[i + 1].1, rng, o,
+                pts[i].0,
+                pts[i].1,
+                pts[i + 1].0,
+                pts[i + 1].1,
+                rng,
+                o,
             ));
         }
         if closed {
@@ -338,7 +345,11 @@ fn ellipse_params(width: f64, height: f64, rng: &Rng, o: &Opts) -> EllipseParams
     let r = 1.0 - o.curve_fitting;
     rx += rand_offset(rx * r, rng, o);
     ry += rand_offset(ry * r, rng, o);
-    EllipseParams { increment: a, rx, ry }
+    EllipseParams {
+        increment: a,
+        rx,
+        ry,
+    }
 }
 
 /// `(curve_points, estimated_points)` returned by `compute_ellipse_points`.
@@ -443,8 +454,8 @@ fn ellipse_path(
     o: &Opts,
     params: EllipseParams,
 ) -> (Vec<Op>, Vec<(f64, f64)>) {
-    let overlap =
-        params.increment * rand_offset_with_range(0.1, rand_offset_with_range(0.4, 1.0, rng, o), rng, o);
+    let overlap = params.increment
+        * rand_offset_with_range(0.1, rand_offset_with_range(0.4, 1.0, rng, o), rng, o);
     let (i, a) = compute_ellipse_points(
         params.increment,
         cx,
@@ -529,9 +540,7 @@ fn tokenize_path(input: &str) -> Vec<Token> {
     while i < bytes.len() {
         let b = bytes[i];
         if matches!(b, b' ' | b'\t' | b'\r' | b'\n' | b',') {
-            while i < bytes.len()
-                && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b',')
-            {
+            while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n' | b',') {
                 i += 1;
             }
             continue;
@@ -558,7 +567,10 @@ fn tokenize_path(input: &str) -> Vec<Token> {
                 | b'z'
                 | b'Z'
         ) {
-            out.push(Token { ty: TokType::Command, text: (b as char).to_string() });
+            out.push(Token {
+                ty: TokType::Command,
+                text: (b as char).to_string(),
+            });
             i += 1;
             continue;
         }
@@ -604,9 +616,15 @@ fn tokenize_path(input: &str) -> Vec<Token> {
         }
         // Store the canonical JS toString form (rough.js does
         // `${parseFloat(text)}`).
-        out.push(Token { ty: TokType::Number, text: js_num(parsed) });
+        out.push(Token {
+            ty: TokType::Number,
+            text: js_num(parsed),
+        });
     }
-    out.push(Token { ty: TokType::Eod, text: String::new() });
+    out.push(Token {
+        ty: TokType::Eod,
+        text: String::new(),
+    });
     out
 }
 
@@ -682,7 +700,11 @@ fn parse_path(d_in: &str) -> Vec<Segment> {
         if !ok {
             break;
         }
-        segments.push(Segment { key: mode, data, point: None });
+        segments.push(Segment {
+            key: mode,
+            data,
+            point: None,
+        });
         idx += h;
         // Implicit lineto after moveto.
         if mode == 'M' {
@@ -795,7 +817,10 @@ fn random_bezier(
                 state.y() + rand_offset(c[0], rng, opts),
             ));
         }
-        l = (i + rand_offset(c[u], rng, opts), a + rand_offset(c[u], rng, opts));
+        l = (
+            i + rand_offset(c[u], rng, opts),
+            a + rand_offset(c[u], rng, opts),
+        );
         r.push(Op::BCurveTo(
             t + rand_offset(c[u], rng, opts),
             e + rand_offset(c[u], rng, opts),
@@ -862,13 +887,10 @@ impl ArcConverter {
         out.ry = rr.1.abs();
         out.sin_phi = (angle_deg * o).sin();
         out.cos_phi = (angle_deg * o).cos();
-        let h = (out.cos_phi * (from.0 - to.0)) / 2.0
-            + (out.sin_phi * (from.1 - to.1)) / 2.0;
-        let r = (-out.sin_phi * (from.0 - to.0)) / 2.0
-            + (out.cos_phi * (from.1 - to.1)) / 2.0;
-        let l = out.rx * out.rx * out.ry * out.ry
-            - out.rx * out.rx * r * r
-            - out.ry * out.ry * h * h;
+        let h = (out.cos_phi * (from.0 - to.0)) / 2.0 + (out.sin_phi * (from.1 - to.1)) / 2.0;
+        let r = (-out.sin_phi * (from.0 - to.0)) / 2.0 + (out.cos_phi * (from.1 - to.1)) / 2.0;
+        let l =
+            out.rx * out.rx * out.ry * out.ry - out.rx * out.rx * r * r - out.ry * out.ry * h * h;
         let c = if l < 0.0 {
             let t = (1.0 - l / (out.rx * out.rx * out.ry * out.ry)).sqrt();
             out.rx *= t;
@@ -917,12 +939,8 @@ impl ArcConverter {
             self.sin_phi * self.rx * n + self.cos_phi * self.ry * i + self.c.1,
         );
         let o = (
-            self.from.0
-                + self.t
-                    * (-self.cos_phi * self.rx * e - self.sin_phi * self.ry * t),
-            self.from.1
-                + self.t
-                    * (-self.sin_phi * self.rx * e + self.cos_phi * self.ry * t),
+            self.from.0 + self.t * (-self.cos_phi * self.rx * e - self.sin_phi * self.ry * t),
+            self.from.1 + self.t * (-self.sin_phi * self.rx * e + self.cos_phi * self.ry * t),
         );
         let h = (
             a.0 + self.t * (self.cos_phi * self.rx * i + self.sin_phi * self.ry * n),
@@ -997,7 +1015,14 @@ fn process_segment(
             if seg.key == 'h' {
                 a += state.x();
             }
-            i.extend(double_line_ops(state.x(), state.y(), a, state.y(), rng, n_opts));
+            i.extend(double_line_ops(
+                state.x(),
+                state.y(),
+                a,
+                state.y(),
+                rng,
+                n_opts,
+            ));
             state.set_position(a, state.y());
         }
         'V' | 'v' => {
@@ -1008,7 +1033,14 @@ fn process_segment(
             if seg.key == 'v' {
                 a += state.y();
             }
-            i.extend(double_line_ops(state.x(), state.y(), state.x(), a, rng, n_opts));
+            i.extend(double_line_ops(
+                state.x(),
+                state.y(),
+                state.x(),
+                a,
+                rng,
+                n_opts,
+            ));
             state.set_position(state.x(), a);
         }
         'Z' | 'z' => {
@@ -1089,7 +1121,10 @@ fn process_segment(
                 state.x() + rand_offset(c, rng, n_opts),
                 state.y() + rand_offset(c, rng, n_opts),
             ));
-            let mut u = (h + rand_offset(c, rng, n_opts), r + rand_offset(c, rng, n_opts));
+            let mut u = (
+                h + rand_offset(c, rng, n_opts),
+                r + rand_offset(c, rng, n_opts),
+            );
             i.push(Op::QCurveTo(
                 a + rand_offset(c, rng, n_opts),
                 o + rand_offset(c, rng, n_opts),
@@ -1100,7 +1135,10 @@ fn process_segment(
                 state.x() + rand_offset(l, rng, n_opts),
                 state.y() + rand_offset(l, rng, n_opts),
             ));
-            u = (h + rand_offset(l, rng, n_opts), r + rand_offset(l, rng, n_opts));
+            u = (
+                h + rand_offset(l, rng, n_opts),
+                r + rand_offset(l, rng, n_opts),
+            );
             i.push(Op::QCurveTo(
                 a + rand_offset(l, rng, n_opts),
                 o + rand_offset(l, rng, n_opts),
@@ -1135,7 +1173,10 @@ fn process_segment(
                 state.x() + rand_offset(pp, rng, n_opts),
                 state.y() + rand_offset(pp, rng, n_opts),
             ));
-            let mut f = (o + rand_offset(pp, rng, n_opts), h + rand_offset(pp, rng, n_opts));
+            let mut f = (
+                o + rand_offset(pp, rng, n_opts),
+                h + rand_offset(pp, rng, n_opts),
+            );
             i.push(Op::QCurveTo(
                 r + rand_offset(pp, rng, n_opts),
                 c + rand_offset(pp, rng, n_opts),
@@ -1146,7 +1187,10 @@ fn process_segment(
                 state.x() + rand_offset(dd, rng, n_opts),
                 state.y() + rand_offset(dd, rng, n_opts),
             ));
-            f = (o + rand_offset(dd, rng, n_opts), h + rand_offset(dd, rng, n_opts));
+            f = (
+                o + rand_offset(dd, rng, n_opts),
+                h + rand_offset(dd, rng, n_opts),
+            );
             i.push(Op::QCurveTo(
                 r + rand_offset(dd, rng, n_opts),
                 c + rand_offset(dd, rng, n_opts),
@@ -1188,7 +1232,8 @@ fn process_segment(
                     sweep != 0.0,
                 );
                 while let Some((cp1, cp2, to)) = conv.next_segment() {
-                    let a = random_bezier(cp1.0, cp1.1, cp2.0, cp2.1, to.0, to.1, state, rng, n_opts);
+                    let a =
+                        random_bezier(cp1.0, cp1.1, cp2.0, cp2.1, to.0, to.1, state, rng, n_opts);
                     i.extend(a);
                 }
             }
@@ -1336,7 +1381,12 @@ fn hachure_lines(points_in: &[(f64, f64)], o: &Opts) -> Vec<[(f64, f64); 2]> {
             idx += drained;
         }
         active.retain(|a| a.edge.ymax > y);
-        active.sort_by(|a, b| a.edge.x.partial_cmp(&b.edge.x).unwrap_or(std::cmp::Ordering::Equal));
+        active.sort_by(|a, b| {
+            a.edge
+                .x
+                .partial_cmp(&b.edge.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         if active.len() > 1 {
             let mut i = 0;
             while i + 1 < active.len() {
@@ -1505,7 +1555,10 @@ pub fn draw_rectangle(x: f64, y: f64, w: f64, h: f64, o: &Opts) -> Vec<RoughPath
         }
     }
     if o.stroke != "none" {
-        sets.push(OpSet { kind: OpSetType::Path, ops: stroke_ops });
+        sets.push(OpSet {
+            kind: OpSetType::Path,
+            ops: stroke_ops,
+        });
     }
     sets_to_paths(&sets, o)
 }
@@ -1520,7 +1573,10 @@ pub fn draw_ellipse(cx: f64, cy: f64, w: f64, h: f64, o: &Opts) -> Vec<RoughPath
             // rough.js calls w() again for a solid fill, consuming another
             // full round of PRNG values.
             let (fill_ops, _) = ellipse_path(cx, cy, &rng, o, params);
-            sets.push(OpSet { kind: OpSetType::FillPath, ops: fill_ops });
+            sets.push(OpSet {
+                kind: OpSetType::FillPath,
+                ops: fill_ops,
+            });
         } else if o.fill_style == "zigzag" {
             sets.push(OpSet {
                 kind: OpSetType::FillSketch,
@@ -1529,7 +1585,10 @@ pub fn draw_ellipse(cx: f64, cy: f64, w: f64, h: f64, o: &Opts) -> Vec<RoughPath
         }
     }
     if o.stroke != "none" {
-        sets.push(OpSet { kind: OpSetType::Path, ops: stroke_ops });
+        sets.push(OpSet {
+            kind: OpSetType::Path,
+            ops: stroke_ops,
+        });
     }
     sets_to_paths(&sets, o)
 }
@@ -1541,7 +1600,13 @@ pub fn draw_circle(cx: f64, cy: f64, diameter: f64, o: &Opts) -> Vec<RoughPath> 
 pub fn draw_line(x1: f64, y1: f64, x2: f64, y2: f64, o: &Opts) -> Vec<RoughPath> {
     let rng = Rng::new(o.seed);
     let ops = double_line_ops(x1, y1, x2, y2, &rng, o);
-    sets_to_paths(&[OpSet { kind: OpSetType::Path, ops }], o)
+    sets_to_paths(
+        &[OpSet {
+            kind: OpSetType::Path,
+            ops,
+        }],
+        o,
+    )
 }
 
 pub fn draw_polygon(pts: &[(f64, f64)], o: &Opts) -> Vec<RoughPath> {
@@ -1562,7 +1627,10 @@ pub fn draw_polygon(pts: &[(f64, f64)], o: &Opts) -> Vec<RoughPath> {
         }
     }
     if o.stroke != "none" {
-        sets.push(OpSet { kind: OpSetType::Path, ops: stroke_ops });
+        sets.push(OpSet {
+            kind: OpSetType::Path,
+            ops: stroke_ops,
+        });
     }
     sets_to_paths(&sets, o)
 }
@@ -1570,7 +1638,13 @@ pub fn draw_polygon(pts: &[(f64, f64)], o: &Opts) -> Vec<RoughPath> {
 pub fn draw_linear_path(pts: &[(f64, f64)], o: &Opts) -> Vec<RoughPath> {
     let rng = Rng::new(o.seed);
     let ops = linear_path_ops(pts, false, &rng, o);
-    sets_to_paths(&[OpSet { kind: OpSetType::Path, ops }], o)
+    sets_to_paths(
+        &[OpSet {
+            kind: OpSetType::Path,
+            ops,
+        }],
+        o,
+    )
 }
 
 pub fn draw_path(d: &str, o: &Opts) -> Vec<RoughPath> {
@@ -1579,7 +1653,11 @@ pub fn draw_path(d: &str, o: &Opts) -> Vec<RoughPath> {
     let mut state = PathState::new();
     let mut ops: Vec<Op> = Vec::new();
     for (idx, seg) in segments.iter().enumerate() {
-        let prev = if idx > 0 { Some(&segments[idx - 1]) } else { None };
+        let prev = if idx > 0 {
+            Some(&segments[idx - 1])
+        } else {
+            None
+        };
         ops.extend(process_segment(&mut state, seg, prev, &rng, o));
     }
 
@@ -1595,7 +1673,10 @@ pub fn draw_path(d: &str, o: &Opts) -> Vec<RoughPath> {
         });
     }
     if o.stroke != "none" {
-        let set = OpSet { kind: OpSetType::Path, ops };
+        let set = OpSet {
+            kind: OpSetType::Path,
+            ops,
+        };
         out.push(opset_to_rough_path(&set, o));
     }
     out
