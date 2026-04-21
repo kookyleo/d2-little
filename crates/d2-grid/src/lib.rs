@@ -1112,7 +1112,9 @@ mod tests {
     fn test_new_grid_diagram_rows_only() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "3".to_owned(),
+        });
 
         // Add 5 children
         for i in 0..5 {
@@ -1136,7 +1138,9 @@ mod tests {
     fn test_new_grid_diagram_cols_only() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+        });
 
         for i in 0..4 {
             let id = g.objects.len();
@@ -1159,8 +1163,12 @@ mod tests {
     fn test_layout_evenly_2x2() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "2".to_owned() });
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+        });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+        });
 
         // Add 4 children with different sizes
         let sizes = [(50.0, 30.0), (80.0, 40.0), (60.0, 50.0), (70.0, 35.0)];
@@ -1205,9 +1213,15 @@ mod integration_tests {
         // Mirrors grid_rows_gap_bug: 3 rows, 3 items, h-gap=100, v-gap=0
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
-        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue { value: "100".to_owned() });
-        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "3".to_owned(),
+        });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
+            value: "100".to_owned(),
+        });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+        });
 
         let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)]; // typical measured sizes
         for (i, &(w, h)) in sizes.iter().enumerate() {
@@ -1237,9 +1251,15 @@ mod integration_tests {
     fn test_3_rows_layout_dimensions() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "3".to_owned() });
-        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue { value: "100".to_owned() });
-        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "3".to_owned(),
+        });
+        g.objects[root].horizontal_gap = Some(d2_graph::ScalarValue {
+            value: "100".to_owned(),
+        });
+        g.objects[root].vertical_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+        });
 
         let sizes = [(53.0, 66.0), (66.0, 66.0), (53.0, 66.0)];
         for (i, &(w, h)) in sizes.iter().enumerate() {
@@ -1288,9 +1308,15 @@ mod integration_tests {
     fn test_2x2_evenly_layout_full() {
         let mut g = Graph::new();
         let root = g.root;
-        g.objects[root].grid_rows = Some(d2_graph::ScalarValue { value: "2".to_owned() });
-        g.objects[root].grid_columns = Some(d2_graph::ScalarValue { value: "2".to_owned() });
-        g.objects[root].grid_gap = Some(d2_graph::ScalarValue { value: "0".to_owned() });
+        g.objects[root].grid_rows = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+        });
+        g.objects[root].grid_columns = Some(d2_graph::ScalarValue {
+            value: "2".to_owned(),
+        });
+        g.objects[root].grid_gap = Some(d2_graph::ScalarValue {
+            value: "0".to_owned(),
+        });
 
         let sizes = [(100.0, 100.0); 4];
         for (i, &(w, h)) in sizes.iter().enumerate() {

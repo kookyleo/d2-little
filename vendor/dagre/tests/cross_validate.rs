@@ -85,13 +85,11 @@ fn build_graph(tc: &TestCase) -> (Graph<NodeLabel, EdgeLabel>, LayoutOptions) {
         }
         if let Some(ref_node) = tc.nodes.get(v.as_str()) {
             let label = NodeLabel {
-
                 width: ref_node.width,
 
                 height: ref_node.height,
 
                 ..Default::default()
-
             };
             g.set_node(v.clone(), Some(label));
         }
@@ -155,7 +153,6 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
         }
         "edge_label" => {
             let el = EdgeLabel {
-
                 width: 80.0,
 
                 height: 20.0,
@@ -163,7 +160,6 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
                 labelpos: LabelPos::Center,
 
                 ..Default::default()
-
             };
             g.set_edge("a", "b", Some(el), None);
         }
@@ -186,13 +182,11 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
         "self_loop" => {
             g.set_edge("a", "b", Some(EdgeLabel::default()), None);
             let el = EdgeLabel {
-
                 width: 40.0,
 
                 height: 20.0,
 
                 ..Default::default()
-
             };
             g.set_edge("a", "a", Some(el), None);
         }
@@ -233,11 +227,9 @@ fn setup_edges(g: &mut Graph<NodeLabel, EdgeLabel>, tc: &TestCase) {
         }
         "minlen" => {
             let el = EdgeLabel {
-
                 minlen: 3,
 
                 ..Default::default()
-
             };
             g.set_edge("a", "b", Some(el), None);
         }
@@ -302,13 +294,14 @@ fn cross_validate_all_cases() {
 
             // Compare rank
             if let Some(ref_rank) = ref_node.rank
-                && node.rank != Some(ref_rank) {
-                    failures.push(format!(
-                        "[{}] node '{}' rank: dagre-rs={:?}, dagre.js={}",
-                        tc.name, v, node.rank, ref_rank
-                    ));
-                    case_ok = false;
-                }
+                && node.rank != Some(ref_rank)
+            {
+                failures.push(format!(
+                    "[{}] node '{}' rank: dagre-rs={:?}, dagre.js={}",
+                    tc.name, v, node.rank, ref_rank
+                ));
+                case_ok = false;
+            }
         }
 
         // Compare graph dimensions

@@ -615,7 +615,7 @@ impl Utf8FontFile {
             (adj[1] >> 8) as u8,
             (adj[1] & 0xFF) as u8,
         ];
-        
+
         Self::splice(&answer, begin + 8, &adj_bytes)
     }
 

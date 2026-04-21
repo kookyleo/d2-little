@@ -3114,9 +3114,10 @@ mod alg_internal {
 
         pub fn decrease(&mut self, key: &str, priority: f64) {
             if let Some(p) = self.entries.get_mut(key)
-                && priority < *p {
-                    *p = priority;
-                }
+                && priority < *p
+            {
+                *p = priority;
+            }
         }
 
         pub fn extract_min(&mut self) -> Option<(String, f64)> {

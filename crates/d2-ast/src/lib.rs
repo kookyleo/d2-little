@@ -187,9 +187,10 @@ pub struct UnquotedString {
 impl UnquotedString {
     pub fn scalar_string(&self) -> &str {
         if let Some(first) = self.value.first()
-            && let Some(ref s) = first.string {
-                return s.as_str();
-            }
+            && let Some(ref s) = first.string
+        {
+            return s.as_str();
+        }
         ""
     }
 
@@ -224,9 +225,10 @@ pub struct DoubleQuotedString {
 impl DoubleQuotedString {
     pub fn scalar_string(&self) -> &str {
         if let Some(first) = self.value.first()
-            && let Some(ref s) = first.string {
-                return s.as_str();
-            }
+            && let Some(ref s) = first.string
+        {
+            return s.as_str();
+        }
         ""
     }
 

@@ -329,37 +329,39 @@ impl Parser {
             '"' => {
                 // Check for block comment """
                 if let Some(s) = self.peek_n(2)
-                    && s == "\"\"" {
-                        // consume the two extra quotes
-                        self.read();
-                        self.read();
-                        return Some(MapNode::BlockComment(self.parse_block_comment()));
-                    }
+                    && s == "\"\""
+                {
+                    // consume the two extra quotes
+                    self.read();
+                    self.read();
+                    return Some(MapNode::BlockComment(self.parse_block_comment()));
+                }
             }
             '.' => {
                 // Check for spread: ...$ or ...@
                 if let Some(s) = self.peek_n(2)
-                    && s == ".." {
-                        let save = self.save();
-                        self.read(); // second .
-                        self.read(); // third .
-                        if let Some(next) = self.peek() {
-                            if next == '$' {
-                                self.read(); // $
-                                let subst = self.parse_substitution(true);
-                                if let Some(subst) = subst {
-                                    return Some(MapNode::Substitution(subst));
-                                }
-                                return None;
+                    && s == ".."
+                {
+                    let save = self.save();
+                    self.read(); // second .
+                    self.read(); // third .
+                    if let Some(next) = self.peek() {
+                        if next == '$' {
+                            self.read(); // $
+                            let subst = self.parse_substitution(true);
+                            if let Some(subst) = subst {
+                                return Some(MapNode::Substitution(subst));
                             }
-                            if next == '@' {
-                                self.read(); // @
-                                let imp = self.parse_import(true);
-                                return Some(MapNode::Import(imp));
-                            }
+                            return None;
                         }
-                        self.restore(save);
+                        if next == '@' {
+                            self.read(); // @
+                            let imp = self.parse_import(true);
+                            return Some(MapNode::Import(imp));
+                        }
                     }
+                    self.restore(save);
+                }
             }
             _ => {}
         }
@@ -524,16 +526,17 @@ impl Parser {
 
         // Check for edge group (
         if let Some(ch) = self.peek()
-            && ch == '(' {
-                self.read();
-                self.parse_edge_group(&mut mk);
-                mk.range.end = self.pos;
-                return if mk.key.is_none() && mk.edges.is_empty() {
-                    None
-                } else {
-                    Some(mk)
-                };
-            }
+            && ch == '('
+        {
+            self.read();
+            self.parse_edge_group(&mut mk);
+            mk.range.end = self.pos;
+            return if mk.key.is_none() && mk.edges.is_empty() {
+                None
+            } else {
+                Some(mk)
+            };
+        }
 
         let k = self.parse_key_path();
         if let Some(k) = k {
@@ -641,10 +644,7 @@ impl Parser {
         }
 
         // If the value is a scalar, check if there's also a map following (primary + value).
-        let is_scalar = mk
-            .value
-            .as_ref()
-            .is_some_and(|v| v.scalar_box().is_some());
+        let is_scalar = mk.value.as_ref().is_some_and(|v| v.scalar_box().is_some());
         if is_scalar {
             let save2 = self.save();
             let newlines2 = self.skip_whitespace();
@@ -1190,9 +1190,10 @@ impl Parser {
 
         // Finalize pattern
         if let Some(ref mut pat) = pattern
-            && last_pattern_index < sv.len() {
-                pat.push(sv[last_pattern_index..].to_string());
-            }
+            && last_pattern_index < sv.len()
+        {
+            pat.push(sv[last_pattern_index..].to_string());
+        }
 
         if !sv.is_empty() {
             value_parts.push(InterpolationBox {
@@ -1530,21 +1531,22 @@ impl Parser {
                     // Check if rest of end marker follows
                     let rest: String = end_chars[1..].iter().collect();
                     if let Some(peeked) = self.peek_n(rest.len())
-                        && peeked == rest {
-                            // Consume rest
-                            for _ in 0..rest.len() {
-                                self.read();
-                            }
-                            self.depth -= 1;
-                            let value = trim_space_after_last_newline(&sb);
-                            let value = trim_common_indent(&value);
-                            return BlockString {
-                                range: Range::new(self.path.clone(), start, self.pos),
-                                quote,
-                                tag,
-                                value,
-                            };
+                        && peeked == rest
+                    {
+                        // Consume rest
+                        for _ in 0..rest.len() {
+                            self.read();
                         }
+                        self.depth -= 1;
+                        let value = trim_space_after_last_newline(&sb);
+                        let value = trim_common_indent(&value);
+                        return BlockString {
+                            range: Range::new(self.path.clone(), start, self.pos),
+                            quote,
+                            tag,
+                            value,
+                        };
+                    }
                     sb.push(ch);
                     continue;
                 }
@@ -1618,33 +1620,35 @@ impl Parser {
             }
             '"' => {
                 if let Some(s) = self.peek_n(2)
-                    && s == "\"\"" {
-                        self.read();
-                        self.read();
-                        return Some(ArrayNode::BlockComment(self.parse_block_comment()));
-                    }
+                    && s == "\"\""
+                {
+                    self.read();
+                    self.read();
+                    return Some(ArrayNode::BlockComment(self.parse_block_comment()));
+                }
             }
             '.' => {
                 if let Some(s) = self.peek_n(2)
-                    && s == ".." {
-                        let save = self.save();
-                        self.read();
-                        self.read();
-                        if let Some(next) = self.peek() {
-                            if next == '$' {
-                                self.read();
-                                if let Some(subst) = self.parse_substitution(true) {
-                                    return Some(ArrayNode::Substitution(subst));
-                                }
-                                return None;
+                    && s == ".."
+                {
+                    let save = self.save();
+                    self.read();
+                    self.read();
+                    if let Some(next) = self.peek() {
+                        if next == '$' {
+                            self.read();
+                            if let Some(subst) = self.parse_substitution(true) {
+                                return Some(ArrayNode::Substitution(subst));
                             }
-                            if next == '@' {
-                                self.read();
-                                return Some(ArrayNode::Import(self.parse_import(true)));
-                            }
+                            return None;
                         }
-                        self.restore(save);
+                        if next == '@' {
+                            self.read();
+                            return Some(ArrayNode::Import(self.parse_import(true)));
+                        }
                     }
+                    self.restore(save);
+                }
             }
             _ => {}
         }

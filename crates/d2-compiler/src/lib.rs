@@ -589,9 +589,11 @@ impl Compiler {
         // Mark as folder-only when the graph has boards but no objects of its
         // own (i.e. only the implicit root exists).
         if (!g.layers.is_empty() || !g.scenarios.is_empty() || !g.steps.is_empty())
-            && g.objects.len() <= 1 && g.edges.is_empty() {
-                g.is_folder_only = true;
-            }
+            && g.objects.len() <= 1
+            && g.edges.is_empty()
+        {
+            g.is_folder_only = true;
+        }
     }
 
     /// Port of Go `compiler.compileLegend` (d2compiler/compile.go).
@@ -637,9 +639,10 @@ impl Compiler {
             // Skip fully-transparent objects (opacity==0), matching Go.
             if let Some(ref op) = obj.style.opacity
                 && let Ok(v) = op.value.parse::<f64>()
-                    && v == 0.0 {
-                        continue;
-                    }
+                && v == 0.0
+            {
+                continue;
+            }
             let mut cloned = obj.clone();
             cloned.top_left.x = 10.0;
             cloned.top_left.y = 10.0;
@@ -1343,10 +1346,7 @@ impl Compiler {
                         .filter_map(|r| r.key_path.as_ref().map(|kp| kp.range.clone()))
                         .min_by(d2_graph::range_cmp)
                         .unwrap_or_else(ast::Range::default);
-                    let filters = f
-                        .map()
-                        .map(|sub| sub.filters.clone())
-                        .unwrap_or_default();
+                    let filters = f.map().map(|sub| sub.filters.clone()).unwrap_or_default();
                     out.push(Decl::Field {
                         range,
                         value: v,
@@ -1818,32 +1818,34 @@ impl Compiler {
         // override any class defaults. Mirrors Go d2compiler.compileMap's
         // top-of-function class-expansion step.
         if !self.class_defs.is_empty()
-            && let Some(class_field) = m.get_field("class") {
-                let mut class_names: Vec<String> = Vec::new();
-                if let Some(ref primary) = class_field.primary {
-                    class_names.push(primary.scalar_string());
-                } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
-                    for v in &arr.values {
-                        if let ir::Value::Scalar(s) = v {
-                            class_names.push(s.scalar_string());
-                        }
-                    }
-                }
-                for name in class_names {
-                    // Clone the class map so we release the borrow on
-                    // `self.class_defs` before the recursive compile_map
-                    // call, which takes `&mut self`.
-                    if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
-                        self.compile_map(g, obj, &class_map);
+            && let Some(class_field) = m.get_field("class")
+        {
+            let mut class_names: Vec<String> = Vec::new();
+            if let Some(ref primary) = class_field.primary {
+                class_names.push(primary.scalar_string());
+            } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
+                for v in &arr.values {
+                    if let ir::Value::Scalar(s) = v {
+                        class_names.push(s.scalar_string());
                     }
                 }
             }
+            for name in class_names {
+                // Clone the class map so we release the borrow on
+                // `self.class_defs` before the recursive compile_map
+                // call, which takes `&mut self`.
+                if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
+                    self.compile_map(g, obj, &class_map);
+                }
+            }
+        }
 
         // Process shape first (affects how children are handled)
         if let Some(shape_field) = m.get_field("shape")
-            && shape_field.primary.is_some() {
-                self.compile_field_scoped(g, obj, scope, shape_field);
-            }
+            && shape_field.primary.is_some()
+        {
+            self.compile_field_scoped(g, obj, scope, shape_field);
+        }
 
         // Process all other fields
         for f in &m.fields {
@@ -2152,10 +2154,12 @@ impl Compiler {
                 self.compile_position(g, obj, "icon", f);
                 if let Some(fmap) = f.map() {
                     for sub in &fmap.fields {
-                        if sub.name == "style" && sub.name_is_unquoted
-                            && let Some(style_map) = sub.map() {
-                                self.compile_icon_style(g, obj, style_map);
-                            }
+                        if sub.name == "style"
+                            && sub.name_is_unquoted
+                            && let Some(style_map) = sub.map()
+                        {
+                            self.compile_icon_style(g, obj, style_map);
+                        }
                     }
                 }
             }
@@ -2229,13 +2233,14 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.objects[obj].constraint.push(val);
                 } else if let Some(ref comp) = f.composite
-                    && let ir::Composite::Array(arr) = comp {
-                        for v in &arr.values {
-                            if let ir::Value::Scalar(s) = v {
-                                g.objects[obj].constraint.push(s.scalar_string());
-                            }
+                    && let ir::Composite::Array(arr) = comp
+                {
+                    for v in &arr.values {
+                        if let ir::Value::Scalar(s) = v {
+                            g.objects[obj].constraint.push(s.scalar_string());
                         }
                     }
+                }
             }
             "class" => {
                 // The object's own `class:` declaration. Mirrors Go d2ir's
@@ -2251,58 +2256,66 @@ impl Compiler {
                 if let Some(val) = primary_str {
                     g.objects[obj].classes.push(val);
                 } else if let Some(ref comp) = f.composite
-                    && let ir::Composite::Array(arr) = comp {
-                        for v in &arr.values {
-                            if let ir::Value::Scalar(s) = v {
-                                g.objects[obj].classes.push(s.scalar_string());
-                            }
+                    && let ir::Composite::Array(arr) = comp
+                {
+                    for v in &arr.values {
+                        if let ir::Value::Scalar(s) = v {
+                            g.objects[obj].classes.push(s.scalar_string());
                         }
                     }
+                }
             }
             "grid-rows" => {
                 if let Some(val) = primary_str
                     && let Ok(v) = val.parse::<i32>()
-                        && v > 0 {
-                            g.objects[obj].grid_rows = Some(ScalarValue { value: val });
-                            // Track source range so grid layout can
-                            // determine row- vs column-directed order.
-                            if let Some(fr) = f.references.first()
-                                && let Some(ref kp) = fr.key_path {
-                                    g.objects[obj].grid_rows_range = Some(kp.range.clone());
-                                }
-                        }
+                    && v > 0
+                {
+                    g.objects[obj].grid_rows = Some(ScalarValue { value: val });
+                    // Track source range so grid layout can
+                    // determine row- vs column-directed order.
+                    if let Some(fr) = f.references.first()
+                        && let Some(ref kp) = fr.key_path
+                    {
+                        g.objects[obj].grid_rows_range = Some(kp.range.clone());
+                    }
+                }
             }
             "grid-columns" => {
                 if let Some(val) = primary_str
                     && let Ok(v) = val.parse::<i32>()
-                        && v > 0 {
-                            g.objects[obj].grid_columns = Some(ScalarValue { value: val });
-                            if let Some(fr) = f.references.first()
-                                && let Some(ref kp) = fr.key_path {
-                                    g.objects[obj].grid_columns_range = Some(kp.range.clone());
-                                }
-                        }
+                    && v > 0
+                {
+                    g.objects[obj].grid_columns = Some(ScalarValue { value: val });
+                    if let Some(fr) = f.references.first()
+                        && let Some(ref kp) = fr.key_path
+                    {
+                        g.objects[obj].grid_columns_range = Some(kp.range.clone());
+                    }
+                }
             }
             "grid-gap" => {
                 if let Some(val) = primary_str
                     && let Ok(v) = val.parse::<i32>()
-                        && v >= 0 {
-                            g.objects[obj].grid_gap = Some(ScalarValue { value: val });
-                        }
+                    && v >= 0
+                {
+                    g.objects[obj].grid_gap = Some(ScalarValue { value: val });
+                }
             }
             "vertical-gap" => {
                 if let Some(val) = primary_str
                     && let Ok(v) = val.parse::<i32>()
-                        && v >= 0 {
-                            g.objects[obj].vertical_gap = Some(ScalarValue { value: val });
-                        }
+                    && v >= 0
+                {
+                    g.objects[obj].vertical_gap = Some(ScalarValue { value: val });
+                }
             }
             "horizontal-gap" => {
                 if let Some(val) = primary_str
                     && let Ok(v) = val.parse::<i32>()
-                        && v >= 0 {
-                            g.objects[obj].horizontal_gap = Some(ScalarValue { value: val });
-                        }
+                    && v >= 0
+                {
+                    g.objects[obj].horizontal_gap = Some(ScalarValue { value: val });
+                }
             }
             "vars" => {} // handled separately
             _ => {}
@@ -2454,23 +2467,24 @@ impl Compiler {
         // Apply any referenced classes first — mirrors the class
         // expansion at the top of `compile_map`.
         if !self.class_defs.is_empty()
-            && let Some(class_field) = m.get_field("class") {
-                let mut names: Vec<String> = Vec::new();
-                if let Some(ref primary) = class_field.primary {
-                    names.push(primary.scalar_string());
-                } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
-                    for v in &arr.values {
-                        if let ir::Value::Scalar(s) = v {
-                            names.push(s.scalar_string());
-                        }
-                    }
-                }
-                for name in names {
-                    if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
-                        self.compile_edge_map(g, edge_idx, &class_map);
+            && let Some(class_field) = m.get_field("class")
+        {
+            let mut names: Vec<String> = Vec::new();
+            if let Some(ref primary) = class_field.primary {
+                names.push(primary.scalar_string());
+            } else if let Some(ir::Composite::Array(ref arr)) = class_field.composite {
+                for v in &arr.values {
+                    if let ir::Value::Scalar(s) = v {
+                        names.push(s.scalar_string());
                     }
                 }
             }
+            for name in names {
+                if let Some(class_map) = self.class_defs.get(&name.to_lowercase()).cloned() {
+                    self.compile_edge_map(g, edge_idx, &class_map);
+                }
+            }
+        }
 
         for f in &m.fields {
             let keyword = f.name.to_lowercase();
@@ -2524,10 +2538,12 @@ impl Compiler {
                 }
                 if let Some(fmap) = f.map() {
                     for sub in &fmap.fields {
-                        if sub.name == "style" && sub.name_is_unquoted
-                            && let Some(style_map) = sub.map() {
-                                self.compile_edge_icon_style(g, edge_idx, style_map);
-                            }
+                        if sub.name == "style"
+                            && sub.name_is_unquoted
+                            && let Some(style_map) = sub.map()
+                        {
+                            self.compile_edge_icon_style(g, edge_idx, style_map);
+                        }
                     }
                 }
             }
@@ -2620,31 +2636,33 @@ impl Compiler {
                     // can distinguish outlined vs filled variants.
                     if let Some(smap) = f2.map() {
                         for sf in &smap.fields {
-                            if sf.name == "filled" && sf.name_is_unquoted
-                                && let Some(val) = sf.primary_string() {
-                                    let b = val == "true";
-                                    if is_src {
-                                        if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
-                                            ah.filled = Some(b);
-                                        }
-                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead
-                                    {
+                            if sf.name == "filled"
+                                && sf.name_is_unquoted
+                                && let Some(val) = sf.primary_string()
+                            {
+                                let b = val == "true";
+                                if is_src {
+                                    if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                                         ah.filled = Some(b);
                                     }
+                                } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                                    ah.filled = Some(b);
                                 }
+                            }
                             // Parse style.font-color for arrowhead labels
-                            if sf.name == "font-color" && sf.name_is_unquoted
-                                && let Some(val) = sf.primary_string() {
-                                    let sv = graph::ScalarValue { value: val };
-                                    if is_src {
-                                        if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
-                                            ah.style.font_color = Some(sv);
-                                        }
-                                    } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead
-                                    {
+                            if sf.name == "font-color"
+                                && sf.name_is_unquoted
+                                && let Some(val) = sf.primary_string()
+                            {
+                                let sv = graph::ScalarValue { value: val };
+                                if is_src {
+                                    if let Some(ref mut ah) = g.edges[edge_idx].src_arrowhead {
                                         ah.style.font_color = Some(sv);
                                     }
+                                } else if let Some(ref mut ah) = g.edges[edge_idx].dst_arrowhead {
+                                    ah.style.font_color = Some(sv);
                                 }
+                            }
                         }
                     }
                 }
@@ -2708,7 +2726,6 @@ mod tests {
     fn compile_ok(input: &str) -> Graph {
         compile("test.d2", input).expect("should compile without errors")
     }
-
 
     #[test]
     fn test_compile_with_config_extracts_theme_overrides() {

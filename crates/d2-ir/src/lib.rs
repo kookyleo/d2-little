@@ -283,10 +283,9 @@ impl EdgeID {
     /// `d2ir` where `(* -> *)[*]` and `(** -> **)[*]` style declarations
     /// apply to every matching edge.
     pub fn matches(&self, other: &EdgeID) -> bool {
-        if self.index.is_some() && other.index.is_some()
-            && self.index != other.index {
-                return false;
-            }
+        if self.index.is_some() && other.index.is_some() && self.index != other.index {
+            return false;
+        }
         if self.src_arrow != other.src_arrow {
             return false;
         }
@@ -732,27 +731,28 @@ impl Compiler {
         // matches (or doesn't match, for `!&`) receive the template values.
         if key.ampersand || key.not_ampersand {
             if let Some(ref kp) = key.key
-                && !kp.path.is_empty() {
-                    let attr: Vec<String> = kp
-                        .path
-                        .iter()
+                && !kp.path.is_empty()
+            {
+                let attr: Vec<String> = kp
+                    .path
+                    .iter()
+                    .map(|sb| sb.scalar_string().to_string())
+                    .collect();
+                let value = if let Some(ref p) = key.primary {
+                    p.scalar_string().to_string()
+                } else if let Some(ref v) = key.value {
+                    v.scalar_box()
                         .map(|sb| sb.scalar_string().to_string())
-                        .collect();
-                    let value = if let Some(ref p) = key.primary {
-                        p.scalar_string().to_string()
-                    } else if let Some(ref v) = key.value {
-                        v.scalar_box()
-                            .map(|sb| sb.scalar_string().to_string())
-                            .unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    dst.filters.push(Filter {
-                        attr,
-                        value,
-                        negate: key.not_ampersand,
-                    });
-                }
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                dst.filters.push(Filter {
+                    attr,
+                    value,
+                    negate: key.not_ampersand,
+                });
+            }
             return;
         }
 
@@ -789,15 +789,17 @@ impl Compiler {
             let lower = name.to_lowercase();
 
             // Validate reserved keywords
-            if ast::RESERVED_KEYWORDS.contains(lower.as_str()) && is_unquoted
-                && !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str()) && i < path.len() - 1
-                {
-                    self.errorf(
-                        sb.get_range(),
-                        format!("\"{}\" must be the last part of the key", lower),
-                    );
-                    return;
-                }
+            if ast::RESERVED_KEYWORDS.contains(lower.as_str())
+                && is_unquoted
+                && !ast::COMPOSITE_RESERVED_KEYWORDS.contains(lower.as_str())
+                && i < path.len() - 1
+            {
+                self.errorf(
+                    sb.get_range(),
+                    format!("\"{}\" must be the last part of the key", lower),
+                );
+                return;
+            }
 
             // Safety: we only have one mutable reference at a time
             let m = unsafe { &mut *cur_map };
@@ -909,13 +911,15 @@ impl Compiler {
     fn apply_field_value(&mut self, f: &mut Field, key: &ast::Key, parent_map_ptr: *mut Map) {
         // Check for null -> delete (simplified: just skip)
         if let Some(ref v) = key.value
-            && matches!(v, ast::ValueBox::Null(_)) {
-                return;
-            }
+            && matches!(v, ast::ValueBox::Null(_))
+        {
+            return;
+        }
         if let Some(ref p) = key.primary
-            && matches!(p, ast::ScalarBox::Null(_)) {
-                return;
-            }
+            && matches!(p, ast::ScalarBox::Null(_))
+        {
+            return;
+        }
 
         // Primary value
         if let Some(ref primary) = key.primary {
@@ -1017,20 +1021,21 @@ impl Compiler {
             let m = unsafe { &mut *cur };
             let f = self.ensure_field(m, name, true);
             if i >= skip
-                && let (Some(kp), Some(key)) = (kp, key) {
-                    f.references.push(FieldReference {
-                        string: name.clone(),
-                        key_path: Some(kp.clone()),
-                        key_path_index: kp_offset + (i - skip),
-                        primary: false,
-                        is_var: false,
-                        context: RefContext {
-                            key: key.clone(),
-                            edge_ast: None,
-                            scope_map_idx: None,
-                        },
-                    });
-                }
+                && let (Some(kp), Some(key)) = (kp, key)
+            {
+                f.references.push(FieldReference {
+                    string: name.clone(),
+                    key_path: Some(kp.clone()),
+                    key_path_index: kp_offset + (i - skip),
+                    primary: false,
+                    is_var: false,
+                    context: RefContext {
+                        key: key.clone(),
+                        edge_ast: None,
+                        scope_map_idx: None,
+                    },
+                });
+            }
             if f.composite.is_none() {
                 f.composite = Some(Composite::Map(Map::new()));
             }
@@ -1116,12 +1121,12 @@ impl Compiler {
                 if let Some(first_kp) = ast_edge.src.as_ref().or(ast_edge.dst.as_ref())
                     && let Some(first_underscore) =
                         first_kp.path.iter().find(|sb| sb.scalar_string() == "_")
-                    {
-                        self.errorf(
-                            first_underscore.get_range(),
-                            "invalid underscore: no parent".to_owned(),
-                        );
-                    }
+                {
+                    self.errorf(
+                        first_underscore.get_range(),
+                        "invalid underscore: no parent".to_owned(),
+                    );
+                }
                 continue;
             }
             // Build src/dst relative paths for the edge, rooted at edge_scope.
@@ -2137,7 +2142,6 @@ fn extract_single_substitution(value: &ast::ScalarBox) -> Option<&ast::Substitut
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn compile_str(input: &str) -> Result<Map, CompileError> {
         let (ast, err) = d2_parser::parse("test.d2", input);

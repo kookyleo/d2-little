@@ -172,9 +172,10 @@ fn sort_objects(objects: &mut [DiagramObject<'_>]) {
         }
         // Both shapes: parent before child
         if let (Some(la), Some(lb)) = (a.level(), b.level())
-            && la != lb {
-                return la.cmp(&lb);
-            }
+            && la != lb
+        {
+            return la.cmp(&lb);
+        }
         // Shapes before connections
         match (a.is_shape(), b.is_shape()) {
             (true, false) => std::cmp::Ordering::Less,
@@ -1092,37 +1093,47 @@ fn draw_connection(
         let arrow_out = d2_sketch::arrowheads(sr, connection, &src_adj, &dst_adj)?;
         buf.push_str(&arrow_out);
     } else {
-    // If connection is animated and bidirectional (both arrows or no arrows),
-    // split the path at 50% and render two separate paths animating in
-    // opposite directions.  Mirrors Go d2svg.go.
-    let is_bidirectional_animated = connection.animated
-        && ((connection.dst_arrow == d2_target::Arrowhead::None
-            && connection.src_arrow == d2_target::Arrowhead::None)
-            || (connection.dst_arrow != d2_target::Arrowhead::None
-                && connection.src_arrow != d2_target::Arrowhead::None));
+        // If connection is animated and bidirectional (both arrows or no arrows),
+        // split the path at 50% and render two separate paths animating in
+        // opposite directions.  Mirrors Go d2svg.go.
+        let is_bidirectional_animated = connection.animated
+            && ((connection.dst_arrow == d2_target::Arrowhead::None
+                && connection.src_arrow == d2_target::Arrowhead::None)
+                || (connection.dst_arrow != d2_target::Arrowhead::None
+                    && connection.src_arrow != d2_target::Arrowhead::None));
 
-    if is_bidirectional_animated {
-        if let Ok((path1, path2)) = d2_svg_path::split_path(&path, 0.5) {
-            let mut el1 = d2_themes::ThemableElement::new("path", inline_theme);
-            el1.d = path1;
-            el1.fill = "none".to_owned();
-            el1.stroke = connection.stroke.clone();
-            el1.class_name = format!("connection{}", animated_class);
-            el1.style = connection_css_style(connection);
-            el1.style.push_str("animation-direction: reverse;");
-            el1.attributes = format!("{}{}", marker_start, mask);
-            buf.push_str(&el1.render());
+        if is_bidirectional_animated {
+            if let Ok((path1, path2)) = d2_svg_path::split_path(&path, 0.5) {
+                let mut el1 = d2_themes::ThemableElement::new("path", inline_theme);
+                el1.d = path1;
+                el1.fill = "none".to_owned();
+                el1.stroke = connection.stroke.clone();
+                el1.class_name = format!("connection{}", animated_class);
+                el1.style = connection_css_style(connection);
+                el1.style.push_str("animation-direction: reverse;");
+                el1.attributes = format!("{}{}", marker_start, mask);
+                buf.push_str(&el1.render());
 
-            let mut el2 = d2_themes::ThemableElement::new("path", inline_theme);
-            el2.d = path2;
-            el2.fill = "none".to_owned();
-            el2.stroke = connection.stroke.clone();
-            el2.class_name = format!("connection{}", animated_class);
-            el2.style = connection_css_style(connection);
-            el2.attributes = format!("{}{}", marker_end, mask);
-            buf.push_str(&el2.render());
+                let mut el2 = d2_themes::ThemableElement::new("path", inline_theme);
+                el2.d = path2;
+                el2.fill = "none".to_owned();
+                el2.stroke = connection.stroke.clone();
+                el2.class_name = format!("connection{}", animated_class);
+                el2.style = connection_css_style(connection);
+                el2.attributes = format!("{}{}", marker_end, mask);
+                buf.push_str(&el2.render());
+            } else {
+                // Fallback to single path if split fails
+                let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
+                path_el.d = path;
+                path_el.fill = "none".to_owned();
+                path_el.stroke = connection.stroke.clone();
+                path_el.class_name = format!("connection{}", animated_class);
+                path_el.style = connection_css_style(connection);
+                path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
+                buf.push_str(&path_el.render());
+            }
         } else {
-            // Fallback to single path if split fails
             let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
             path_el.d = path;
             path_el.fill = "none".to_owned();
@@ -1132,16 +1143,6 @@ fn draw_connection(
             path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
             buf.push_str(&path_el.render());
         }
-    } else {
-        let mut path_el = d2_themes::ThemableElement::new("path", inline_theme);
-        path_el.d = path;
-        path_el.fill = "none".to_owned();
-        path_el.stroke = connection.stroke.clone();
-        path_el.class_name = format!("connection{}", animated_class);
-        path_el.style = connection_css_style(connection);
-        path_el.attributes = format!("{}{}{}", marker_start, marker_end, mask);
-        buf.push_str(&path_el.render());
-    }
     }
 
     // Connection label
@@ -1277,12 +1278,11 @@ fn draw_connection(
                         let theme = d2_chroma::get_theme(theme_name).unwrap();
                         let class = if is_light { "light-code" } else { "dark-code" };
 
-                        let font_size_attr =
-                            if connection.text.font_size != d2_fonts::FONT_SIZE_M {
-                                format!(" style=\"font-size:{}\"", connection.text.font_size,)
-                            } else {
-                                String::new()
-                            };
+                        let font_size_attr = if connection.text.font_size != d2_fonts::FONT_SIZE_M {
+                            format!(" style=\"font-size:{}\"", connection.text.font_size,)
+                        } else {
+                            String::new()
+                        };
 
                         write!(
                             buf,
@@ -1414,13 +1414,15 @@ fn draw_connection(
 
     // Source / destination arrowhead labels (e.g. `source-arrowhead: 1`).
     if let Some(ref l) = connection.src_label
-        && !l.label.is_empty() {
-            buf.push_str(&render_arrowhead_label(connection, l, false, inline_theme));
-        }
+        && !l.label.is_empty()
+    {
+        buf.push_str(&render_arrowhead_label(connection, l, false, inline_theme));
+    }
     if let Some(ref l) = connection.dst_label
-        && !l.label.is_empty() {
-            buf.push_str(&render_arrowhead_label(connection, l, true, inline_theme));
-        }
+        && !l.label.is_empty()
+    {
+        buf.push_str(&render_arrowhead_label(connection, l, true, inline_theme));
+    }
 
     buf.push_str("</g>");
     Ok(label_mask)
@@ -1939,25 +1941,25 @@ fn draw_shape(
                 if let Some(sr) = sketch_runner {
                     buf.push_str(&d2_sketch::rect(sr, target_shape, diagram_hash)?);
                 } else {
-                let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
-                el.x = Some(tl.x);
-                el.y = Some(tl.y);
-                el.width = Some(width);
-                el.height = Some(height);
-                el.fill = fill.clone();
-                el.fill_pattern = target_shape.fill_pattern.clone();
-                el.stroke = stroke.clone();
-                el.style = style.clone();
-                el.rx = Some(border_radius);
+                    let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
+                    el.x = Some(tl.x);
+                    el.y = Some(tl.y);
+                    el.width = Some(width);
+                    el.height = Some(height);
+                    el.fill = fill.clone();
+                    el.fill_pattern = target_shape.fill_pattern.clone();
+                    el.stroke = stroke.clone();
+                    el.style = style.clone();
+                    el.rx = Some(border_radius);
 
-                if !target_shape.text.label.is_empty() {
-                    let lp = d2_label::Position::from_string(&target_shape.label_position);
-                    if lp.is_border() {
-                        el.mask = format!("url(#{})", diagram_hash);
+                    if !target_shape.text.label.is_empty() {
+                        let lp = d2_label::Position::from_string(&target_shape.label_position);
+                        if lp.is_border() {
+                            el.mask = format!("url(#{})", diagram_hash);
+                        }
                     }
-                }
 
-                buf.push_str(&el.render());
+                    buf.push_str(&el.render());
                 }
             } else {
                 // Double border
@@ -1988,28 +1990,28 @@ fn draw_shape(
                 if let Some(sr) = sketch_runner {
                     buf.push_str(&d2_sketch::double_rect(sr, target_shape, diagram_hash)?);
                 } else {
-                let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
-                el.x = Some(tl.x);
-                el.y = Some(tl.y);
-                el.width = Some(width);
-                el.height = Some(height);
-                el.fill = fill.clone();
-                el.fill_pattern = target_shape.fill_pattern.clone();
-                el.stroke = stroke.clone();
-                el.style = style.clone();
-                el.rx = Some(border_radius);
-                buf.push_str(&el.render());
+                    let mut el = d2_themes::ThemableElement::new("rect", inline_theme);
+                    el.x = Some(tl.x);
+                    el.y = Some(tl.y);
+                    el.width = Some(width);
+                    el.height = Some(height);
+                    el.fill = fill.clone();
+                    el.fill_pattern = target_shape.fill_pattern.clone();
+                    el.stroke = stroke.clone();
+                    el.style = style.clone();
+                    el.rx = Some(border_radius);
+                    buf.push_str(&el.render());
 
-                let mut el2 = d2_themes::ThemableElement::new("rect", inline_theme);
-                el2.x = Some(tl.x + d2_target::INNER_BORDER_OFFSET as f64);
-                el2.y = Some(tl.y + d2_target::INNER_BORDER_OFFSET as f64);
-                el2.width = Some(width - 2.0 * d2_target::INNER_BORDER_OFFSET as f64);
-                el2.height = Some(height - 2.0 * d2_target::INNER_BORDER_OFFSET as f64);
-                el2.fill = "transparent".to_owned();
-                el2.stroke = stroke.clone();
-                el2.style = style.clone();
-                el2.rx = Some(border_radius);
-                buf.push_str(&el2.render());
+                    let mut el2 = d2_themes::ThemableElement::new("rect", inline_theme);
+                    el2.x = Some(tl.x + d2_target::INNER_BORDER_OFFSET as f64);
+                    el2.y = Some(tl.y + d2_target::INNER_BORDER_OFFSET as f64);
+                    el2.width = Some(width - 2.0 * d2_target::INNER_BORDER_OFFSET as f64);
+                    el2.height = Some(height - 2.0 * d2_target::INNER_BORDER_OFFSET as f64);
+                    el2.fill = "transparent".to_owned();
+                    el2.stroke = stroke.clone();
+                    el2.style = style.clone();
+                    el2.rx = Some(border_radius);
+                    buf.push_str(&el2.render());
                 }
             }
         }
@@ -2077,17 +2079,19 @@ fn draw_shape(
             // Match Go d2svg.go: cloud picks one of three inner boxes based
             // on content aspect ratio, so propagate it before sizing.
             if shape_type == d2_shape::CLOUD_TYPE
-                && let Some(ar) = target_shape.content_aspect_ratio {
-                    s.set_inner_box_aspect_ratio(ar);
-                }
+                && let Some(ar) = target_shape.content_aspect_ratio
+            {
+                s.set_inner_box_aspect_ratio(ar);
+            }
 
             if let Some(ref mtl) = multiple_tl {
                 let m_bbox = d2_geo::Box2D::new(*mtl, width, height);
                 let mut ms = d2_shape::Shape::new(shape_type, m_bbox);
                 if shape_type == d2_shape::CLOUD_TYPE
-                    && let Some(ar) = target_shape.content_aspect_ratio {
-                        ms.set_inner_box_aspect_ratio(ar);
-                    }
+                    && let Some(ar) = target_shape.content_aspect_ratio
+                {
+                    ms.set_inner_box_aspect_ratio(ar);
+                }
                 let mut el = d2_themes::ThemableElement::new("path", inline_theme);
                 el.fill = fill.clone();
                 el.stroke = stroke.clone();
@@ -2135,9 +2139,10 @@ fn draw_shape(
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
         if shape_type == d2_shape::CLOUD_TYPE
-            && let Some(ar) = target_shape.content_aspect_ratio {
-                s.set_inner_box_aspect_ratio(ar);
-            }
+            && let Some(ar) = target_shape.content_aspect_ratio
+        {
+            s.set_inner_box_aspect_ratio(ar);
+        }
         let the_box = if icon_position.is_outside() {
             *s.get_box()
         } else {
@@ -2183,9 +2188,10 @@ fn draw_shape(
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
         if shape_type == d2_shape::CLOUD_TYPE
-            && let Some(ar) = target_shape.content_aspect_ratio {
-                s.set_inner_box_aspect_ratio(ar);
-            }
+            && let Some(ar) = target_shape.content_aspect_ratio
+        {
+            s.set_inner_box_aspect_ratio(ar);
+        }
 
         let the_box = if label_position.is_outside() || label_position.is_border() {
             let mut b = *s.get_box();
@@ -2482,9 +2488,10 @@ fn draw_shape(
         let bbox = d2_geo::Box2D::new(tl, width, height);
         let mut s = d2_shape::Shape::new(shape_type, bbox);
         if shape_type == d2_shape::CLOUD_TYPE
-            && let Some(ar) = target_shape.content_aspect_ratio {
-                s.set_inner_box_aspect_ratio(ar);
-            }
+            && let Some(ar) = target_shape.content_aspect_ratio
+        {
+            s.set_inner_box_aspect_ratio(ar);
+        }
         add_appendix_items(appendix_buf, diagram_hash, target_shape, &s)?;
     }
 
@@ -3014,27 +3021,24 @@ fn draw_class(
 
     // Shape icon (matches Go class.go drawClass icon rendering)
     if let Some(ref icon) = shape.icon
-        && shape.type_ != d2_target::SHAPE_IMAGE {
-            let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
-            let icon_pos = d2_label::Position::from_string(&shape.icon_position);
-            let icon_size = get_icon_size(&bbox, &shape.icon_position);
-            let tl = icon_pos.get_point_on_box(
-                &bbox,
-                d2_label::PADDING,
-                icon_size as f64,
-                icon_size as f64,
-            );
-            write!(
-                buf,
-                r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
-                d2_svg_path::escape_text(icon),
-                tl.x,
-                tl.y,
-                icon_size,
-                icon_size,
-            )
-            .unwrap();
-        }
+        && shape.type_ != d2_target::SHAPE_IMAGE
+    {
+        let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
+        let icon_pos = d2_label::Position::from_string(&shape.icon_position);
+        let icon_size = get_icon_size(&bbox, &shape.icon_position);
+        let tl =
+            icon_pos.get_point_on_box(&bbox, d2_label::PADDING, icon_size as f64, icon_size as f64);
+        write!(
+            buf,
+            r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
+            d2_svg_path::escape_text(icon),
+            tl.x,
+            tl.y,
+            icon_size,
+            icon_size,
+        )
+        .unwrap();
+    }
 }
 
 /// Render the dark header rect + title text for a class shape.
@@ -3412,27 +3416,24 @@ fn draw_table(
 
     // Shape icon (matches Go table.go/class.go icon rendering)
     if let Some(ref icon) = shape.icon
-        && shape.type_ != d2_target::SHAPE_IMAGE {
-            let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
-            let icon_pos = d2_label::Position::from_string(&shape.icon_position);
-            let icon_size = get_icon_size(&bbox, &shape.icon_position);
-            let tl = icon_pos.get_point_on_box(
-                &bbox,
-                d2_label::PADDING,
-                icon_size as f64,
-                icon_size as f64,
-            );
-            write!(
-                buf,
-                r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
-                d2_svg_path::escape_text(icon),
-                tl.x,
-                tl.y,
-                icon_size,
-                icon_size,
-            )
-            .unwrap();
-        }
+        && shape.type_ != d2_target::SHAPE_IMAGE
+    {
+        let bbox = d2_geo::Box2D::new(d2_geo::Point::new(box_x, box_y), box_w, box_h);
+        let icon_pos = d2_label::Position::from_string(&shape.icon_position);
+        let icon_size = get_icon_size(&bbox, &shape.icon_position);
+        let tl =
+            icon_pos.get_point_on_box(&bbox, d2_label::PADDING, icon_size as f64, icon_size as f64);
+        write!(
+            buf,
+            r#"<image href="{}" x="{:.6}" y="{:.6}" width="{}" height="{}" />"#,
+            d2_svg_path::escape_text(icon),
+            tl.x,
+            tl.y,
+            icon_size,
+            icon_size,
+        )
+        .unwrap();
+    }
 }
 
 /// Render the table header rect + title text (port of Go `tableHeader`).
@@ -3714,25 +3715,26 @@ fn dimensions(diagram: &d2_target::Diagram, pad: i32) -> (i32, i32, i32, i32) {
     // than the diagram's existing bbox).
     if let Some(ref legend) = diagram.legend
         && (!legend.shapes.is_empty() || !legend.connections.is_empty())
-            && let Some((legend_width, total_height)) = legend_dimensions(legend) {
-                let mut legend_y = br.y - total_height;
-                if legend_y < tl.y {
-                    legend_y = tl.y;
-                }
-                let legend_right = br.x + LEGEND_CORNER_PADDING + legend_width;
-                if left + width < legend_right {
-                    width = legend_right - left + pad / 2;
-                }
-                if legend_y < top {
-                    let diff_y = top - legend_y;
-                    top -= diff_y;
-                    height += diff_y;
-                }
-                let legend_bottom = legend_y + total_height;
-                if top + height < legend_bottom {
-                    height = legend_bottom - top + pad / 2;
-                }
-            }
+        && let Some((legend_width, total_height)) = legend_dimensions(legend)
+    {
+        let mut legend_y = br.y - total_height;
+        if legend_y < tl.y {
+            legend_y = tl.y;
+        }
+        let legend_right = br.x + LEGEND_CORNER_PADDING + legend_width;
+        if left + width < legend_right {
+            width = legend_right - left + pad / 2;
+        }
+        if legend_y < top {
+            let diff_y = top - legend_y;
+            top -= diff_y;
+            height += diff_y;
+        }
+        let legend_bottom = legend_y + total_height;
+        if top + height < legend_bottom {
+            height = legend_bottom - top + pad / 2;
+        }
+    }
     (left, top, width, height)
 }
 
@@ -3986,7 +3988,14 @@ fn render_legend_shape_icon(
 
     let mut inner = String::new();
     let mut appendix = String::new();
-    draw_shape(&mut inner, &mut appendix, diagram_hash, &icon_shape, theme, None)?;
+    draw_shape(
+        &mut inner,
+        &mut appendix,
+        diagram_hash,
+        &icon_shape,
+        theme,
+        None,
+    )?;
     final_buf.push_str(&inner);
     final_buf.push_str("</g>");
     Ok(final_buf)

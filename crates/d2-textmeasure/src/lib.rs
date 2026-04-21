@@ -1595,8 +1595,10 @@ fn measure_node(
                             );
                             table_height += row_attrs.height;
                             if let ExtraData::Row(ref widths) = row_attrs.extra_data {
-                                column_widths =
-                                    merge_column_widths(column_widths, std::slice::from_ref(widths));
+                                column_widths = merge_column_widths(
+                                    column_widths,
+                                    std::slice::from_ref(widths),
+                                );
                             }
                         }
                     }
