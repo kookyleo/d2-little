@@ -25,6 +25,7 @@ members = [
     "crates/d2-chroma",
     "crates/d2-latex",
     "crates/d2-lib",
+    "packages/web",
 ]
 resolver = "3"
 
