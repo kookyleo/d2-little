@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --lib -p d2-lib
+      - run: cargo test --lib -p d2-little
 
   test-integration:
     name: Integration Tests
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --test '*' -p d2-lib
+      - run: cargo test --test '*' -p d2-little
 
   build-release:
     name: Release Build
@@ -56,10 +56,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -r -p d2-lib
+      - run: cargo build -r -p d2-little
 
   build-wasm:
-    name: Build @kookyleo/d2-lib-web
+    name: Build @kookyleo/d2-little-web
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
       - name: Build wasm
         working-directory: packages/web
         run: |
-          wasm-pack build --target bundler --out-dir dist/wasm --out-name d2_lib_web
+          wasm-pack build --target bundler --out-dir dist/wasm --out-name d2_little_web
           rm -f dist/wasm/package.json dist/wasm/.gitignore dist/wasm/README.md
       - name: Build TypeScript wrapper
         working-directory: packages/web
@@ -85,4 +85,4 @@ jobs:
           npm install --no-audit --no-fund
           npm run build:ts
       - name: Wasm binary size
-        run: ls -lh packages/web/dist/wasm/d2_lib_web_bg.wasm
+        run: ls -lh packages/web/dist/wasm/d2_little_web_bg.wasm

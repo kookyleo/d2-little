@@ -1,41 +1,52 @@
 [workspace]
-members = [
-    "crates/d2-geo",
-    "crates/d2-svg-path",
-    "crates/d2-color",
-    "crates/d2-label",
-    "crates/d2-ast",
-    "crates/d2-parser",
-    "crates/d2-flate",
-    "crates/d2-font",
-    "crates/d2-fonts",
-    "crates/d2-textmeasure",
-    "crates/d2-themes",
-    "crates/d2-target",
-    "crates/d2-shape",
-    "crates/d2-ir",
-    "crates/d2-compiler",
-    "crates/d2-graph",
-    "crates/d2-dagre-layout",
-    "crates/d2-sequence",
-    "crates/d2-grid",
-    "crates/d2-exporter",
-    "crates/d2-svg-render",
-    "crates/d2-sketch",
-    "crates/d2-chroma",
-    "crates/d2-latex",
-    "crates/d2-lib",
-    "packages/web",
-]
+members = [".", "packages/web"]
 resolver = "3"
 
-[workspace.package]
-version = "0.7.1"
+[package]
+name = "d2-little"
+version = "0.7.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["kookyleo <kookyleo@gmail.com>"]
+description = "Lightweight D2 → SVG converter: a pure-Rust port of the d2lang pipeline (parser → IR → graph → dagre layout → SVG)."
+homepage = "https://github.com/kookyleo/d2-little"
 repository = "https://github.com/kookyleo/d2-little"
+readme = "README.md"
+keywords = ["d2", "diagram", "svg", "dagre", "layout"]
+categories = ["graphics", "visualization"]
+exclude = [
+    "target/",
+    "tests/e2e_testdata/",
+    "tests/unit_testdata/",
+    "tests/fixtures/",
+    "examples/",
+    "scripts/",
+    "run_e2e.sh",
+    "SVG_E2E_MIGRATION_CHECKLIST.md",
+    ".github/",
+]
 
-[workspace.dependencies]
+[dependencies]
+# d2-ir / d2-graph / d2-themes JSON round-trip and diagram_bytes use serde.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# d2-compiler / d2-textmeasure XML parsing (d2-latex MathJax output, etc).
+roxmltree = "0.20"
+# d2-chroma syntax highlighting.
+fancy-regex = "0.14"
+# d2-textmeasure.
+ttf-parser = "0.21"
+unicode-segmentation = "1"
+unicode-width = "0.1"
+markdown = "1"
+regex = "1"
+# d2-svg-path.
+base32 = "0.5"
+# d2-fonts embeds WOFF-as-base64 into SVG.
+base64 = "0.22"
+# d2-chroma / d2-sketch / d2-sequence / d2-grid / dagre tracing.
+log = "0.4"
+
+[dev-dependencies]
+# tests/flate_round_trip.rs validates our deflate against miniz_oxide.
+flate2 = "1"
