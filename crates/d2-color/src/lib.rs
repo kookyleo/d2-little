@@ -871,11 +871,7 @@ fn split_params(params: &str) -> Vec<String> {
                 continue;
             }
             '(' => nesting += 1,
-            ')' => {
-                if nesting > 0 {
-                    nesting -= 1;
-                }
-            }
+            ')' if nesting > 0 => nesting -= 1,
             _ => {}
         }
         buf.push(ch);

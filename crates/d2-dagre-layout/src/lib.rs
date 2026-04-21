@@ -1758,25 +1758,17 @@ fn fit_padding(g: &mut Graph, obj_id: ObjId, excluded_objects: &HashSet<ObjId>) 
             // Move box by the projected shrink delta.
             let mut moved = *b;
             match side {
-                0 => {
-                    if top_delta > 0.0 {
-                        moved.top_left.y += top_delta;
-                    }
+                0 if top_delta > 0.0 => {
+                    moved.top_left.y += top_delta;
                 }
-                1 => {
-                    if bottom_delta > 0.0 {
-                        moved.top_left.y -= bottom_delta;
-                    }
+                1 if bottom_delta > 0.0 => {
+                    moved.top_left.y -= bottom_delta;
                 }
-                2 => {
-                    if left_delta > 0.0 {
-                        moved.top_left.x += left_delta;
-                    }
+                2 if left_delta > 0.0 => {
+                    moved.top_left.x += left_delta;
                 }
-                3 => {
-                    if right_delta > 0.0 {
-                        moved.top_left.x -= right_delta;
-                    }
+                3 if right_delta > 0.0 => {
+                    moved.top_left.x -= right_delta;
                 }
                 _ => {}
             }

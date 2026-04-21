@@ -143,7 +143,7 @@ pub fn sfnt2woff(font_buf: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     // Sort entries by tag (alphabetical)
-    entries.sort_by(|a, b| a.tag.cmp(&b.tag));
+    entries.sort_by_key(|entry| entry.tag);
 
     // -- verify checksums & populate WOFF table info --
     let mut sfnt_size = (SIZE_OF_SFNT_HEADER + num_tables * SIZE_OF_SFNT_TABLE_ENTRY) as u32;

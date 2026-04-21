@@ -198,105 +198,65 @@ impl Style {
     /// Initialize a style field to `Some(ScalarValue::default())` so `apply` can set it.
     pub fn init_field(&mut self, key: &str) {
         match key {
-            "opacity" => {
-                if self.opacity.is_none() {
-                    self.opacity = Some(ScalarValue::default());
-                }
+            "opacity" if self.opacity.is_none() => {
+                self.opacity = Some(ScalarValue::default());
             }
-            "stroke" => {
-                if self.stroke.is_none() {
-                    self.stroke = Some(ScalarValue::default());
-                }
+            "stroke" if self.stroke.is_none() => {
+                self.stroke = Some(ScalarValue::default());
             }
-            "fill" => {
-                if self.fill.is_none() {
-                    self.fill = Some(ScalarValue::default());
-                }
+            "fill" if self.fill.is_none() => {
+                self.fill = Some(ScalarValue::default());
             }
-            "fill-pattern" => {
-                if self.fill_pattern.is_none() {
-                    self.fill_pattern = Some(ScalarValue::default());
-                }
+            "fill-pattern" if self.fill_pattern.is_none() => {
+                self.fill_pattern = Some(ScalarValue::default());
             }
-            "stroke-width" => {
-                if self.stroke_width.is_none() {
-                    self.stroke_width = Some(ScalarValue::default());
-                }
+            "stroke-width" if self.stroke_width.is_none() => {
+                self.stroke_width = Some(ScalarValue::default());
             }
-            "stroke-dash" => {
-                if self.stroke_dash.is_none() {
-                    self.stroke_dash = Some(ScalarValue::default());
-                }
+            "stroke-dash" if self.stroke_dash.is_none() => {
+                self.stroke_dash = Some(ScalarValue::default());
             }
-            "border-radius" => {
-                if self.border_radius.is_none() {
-                    self.border_radius = Some(ScalarValue::default());
-                }
+            "border-radius" if self.border_radius.is_none() => {
+                self.border_radius = Some(ScalarValue::default());
             }
-            "shadow" => {
-                if self.shadow.is_none() {
-                    self.shadow = Some(ScalarValue::default());
-                }
+            "shadow" if self.shadow.is_none() => {
+                self.shadow = Some(ScalarValue::default());
             }
-            "3d" => {
-                if self.three_dee.is_none() {
-                    self.three_dee = Some(ScalarValue::default());
-                }
+            "3d" if self.three_dee.is_none() => {
+                self.three_dee = Some(ScalarValue::default());
             }
-            "multiple" => {
-                if self.multiple.is_none() {
-                    self.multiple = Some(ScalarValue::default());
-                }
+            "multiple" if self.multiple.is_none() => {
+                self.multiple = Some(ScalarValue::default());
             }
-            "font" => {
-                if self.font.is_none() {
-                    self.font = Some(ScalarValue::default());
-                }
+            "font" if self.font.is_none() => {
+                self.font = Some(ScalarValue::default());
             }
-            "font-size" => {
-                if self.font_size.is_none() {
-                    self.font_size = Some(ScalarValue::default());
-                }
+            "font-size" if self.font_size.is_none() => {
+                self.font_size = Some(ScalarValue::default());
             }
-            "font-color" => {
-                if self.font_color.is_none() {
-                    self.font_color = Some(ScalarValue::default());
-                }
+            "font-color" if self.font_color.is_none() => {
+                self.font_color = Some(ScalarValue::default());
             }
-            "animated" => {
-                if self.animated.is_none() {
-                    self.animated = Some(ScalarValue::default());
-                }
+            "animated" if self.animated.is_none() => {
+                self.animated = Some(ScalarValue::default());
             }
-            "bold" => {
-                if self.bold.is_none() {
-                    self.bold = Some(ScalarValue::default());
-                }
+            "bold" if self.bold.is_none() => {
+                self.bold = Some(ScalarValue::default());
             }
-            "italic" => {
-                if self.italic.is_none() {
-                    self.italic = Some(ScalarValue::default());
-                }
+            "italic" if self.italic.is_none() => {
+                self.italic = Some(ScalarValue::default());
             }
-            "underline" => {
-                if self.underline.is_none() {
-                    self.underline = Some(ScalarValue::default());
-                }
+            "underline" if self.underline.is_none() => {
+                self.underline = Some(ScalarValue::default());
             }
-            "filled" => {
-                if self.filled.is_none() {
-                    self.filled = Some(ScalarValue::default());
-                }
+            "filled" if self.filled.is_none() => {
+                self.filled = Some(ScalarValue::default());
             }
-            "double-border" => {
-                if self.double_border.is_none() {
-                    self.double_border = Some(ScalarValue::default());
-                }
+            "double-border" if self.double_border.is_none() => {
+                self.double_border = Some(ScalarValue::default());
             }
-            "text-transform" => {
-                if self.text_transform.is_none() {
-                    self.text_transform = Some(ScalarValue::default());
-                }
+            "text-transform" if self.text_transform.is_none() => {
+                self.text_transform = Some(ScalarValue::default());
             }
             _ => {}
         }

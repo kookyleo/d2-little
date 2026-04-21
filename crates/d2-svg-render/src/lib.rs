@@ -1681,11 +1681,11 @@ fn add_appendix_items(
             | d2_shape::DIAMOND_TYPE
             | d2_shape::PERSON_TYPE
             | d2_shape::CLOUD_TYPE
-            | d2_shape::CYLINDER_TYPE => {
-                if both_icons {
-                    left_on_shape = true;
-                    corner = corner.add_vector(&offset);
-                }
+            | d2_shape::CYLINDER_TYPE
+                if both_icons =>
+            {
+                left_on_shape = true;
+                corner = corner.add_vector(&offset);
             }
             _ => {}
         }

@@ -1170,7 +1170,7 @@ fn layout_nested(g: &mut Graph) -> Result<(), String> {
                 rest.push(entry);
             }
         }
-        for (edge, _, _) in cn_first.into_iter().chain(rest.into_iter()) {
+        for (edge, _, _) in cn_first.into_iter().chain(rest) {
             g.edges.push(edge);
         }
 

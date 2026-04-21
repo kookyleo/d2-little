@@ -2460,7 +2460,7 @@ pub mod go_json {
         out.push(b'{');
         let mut first = true;
         let mut entries: Vec<_> = m.iter().collect();
-        entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        entries.sort_by_key(|(ka, _)| *ka);
         for (k, v) in entries {
             write_field_name(out, &mut first, k);
             write_string(out, v);

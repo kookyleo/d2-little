@@ -436,10 +436,7 @@ impl Parser {
         self.depth += 1;
 
         // Skip leading whitespace up to and including first newline.
-        loop {
-            let Some(ch) = self.peek() else {
-                break;
-            };
+        while let Some(ch) = self.peek() {
             if !ch.is_whitespace() {
                 break;
             }
@@ -1050,11 +1047,7 @@ impl Parser {
         let mut pattern: Option<Vec<String>> = None;
         let mut last_pattern_index: usize = 0;
 
-        loop {
-            let Some(ch) = self.peek() else {
-                break;
-            };
-
+        while let Some(ch) = self.peek() {
             // If in edge group, ')' handling
             if self.in_edge_group && ch == ')' {
                 break;
@@ -1427,10 +1420,7 @@ impl Parser {
         let mut tag = String::new();
 
         // Read additional quote chars (e.g. |||)
-        loop {
-            let Some(ch) = self.peek() else {
-                break;
-            };
+        while let Some(ch) = self.peek() {
             if ch.is_whitespace() || ch.is_alphanumeric() || ch == '_' {
                 break;
             }
@@ -1439,10 +1429,7 @@ impl Parser {
         }
 
         // Read tag
-        loop {
-            let Some(ch) = self.peek() else {
-                break;
-            };
+        while let Some(ch) = self.peek() {
             if ch.is_whitespace() {
                 break;
             }
@@ -1829,10 +1816,7 @@ impl Parser {
         };
 
         let mut pre = String::new();
-        loop {
-            let Some(ch) = self.peek() else {
-                break;
-            };
+        while let Some(ch) = self.peek() {
             if ch != '.' && ch != '/' {
                 break;
             }
