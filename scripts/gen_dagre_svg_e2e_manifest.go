@@ -76,8 +76,8 @@ type familySpec struct {
 func main() {
 	var (
 		goE2EDir  = flag.String("go-e2e-dir", "/ext/d2/e2etests", "Path to upstream Go e2etests dir")
-		fixtureDir = flag.String("fixture-dir", "crates/d2-lib/tests/e2e_testdata", "Path to local e2e fixture dir")
-		output    = flag.String("output", "crates/d2-lib/tests/e2e_dagre_svg_cases.json", "Output manifest path")
+		fixtureDir = flag.String("fixture-dir", "tests/e2e_testdata", "Path to local e2e fixture dir")
+		output    = flag.String("output", "tests/e2e_dagre_svg_cases.json", "Output manifest path")
 	)
 	flag.Parse()
 

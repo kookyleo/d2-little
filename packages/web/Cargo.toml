@@ -1,10 +1,10 @@
 [package]
-name = "d2-lib-web"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-description = "wasm-bindgen wrapper for d2-lib — run D2 diagrams → SVG in the browser"
+name = "d2-little-web"
+version = "0.7.2"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["kookyleo <kookyleo@gmail.com>"]
+description = "wasm-bindgen wrapper for d2-little — run D2 diagrams → SVG in the browser"
 homepage = "https://github.com/kookyleo/d2-little"
 repository = "https://github.com/kookyleo/d2-little"
 keywords = ["d2", "diagram", "svg", "wasm", "web"]
@@ -24,5 +24,5 @@ wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 wasm-opt = false
 
 [dependencies]
-d2-lib = { path = "../../crates/d2-lib" }
+d2-little = { path = "../.." }
 wasm-bindgen = "0.2"

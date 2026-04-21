@@ -66,276 +66,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2-ast"
-version = "0.7.1"
-
-[[package]]
-name = "d2-chroma"
-version = "0.1.0"
-dependencies = [
- "fancy-regex",
- "log",
-]
-
-[[package]]
-name = "d2-color"
-version = "0.7.1"
-
-[[package]]
-name = "d2-compiler"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
- "d2-color",
- "d2-geo",
- "d2-graph",
- "d2-ir",
- "d2-parser",
- "d2-target",
- "d2-textmeasure",
- "d2-themes",
- "roxmltree",
-]
-
-[[package]]
-name = "d2-dagre-layout"
-version = "0.7.1"
-dependencies = [
- "d2-geo",
- "d2-graph",
- "d2-label",
- "d2-shape",
- "d2-target",
- "dagre",
-]
-
-[[package]]
-name = "d2-exporter"
-version = "0.7.1"
-dependencies = [
- "d2-color",
- "d2-fonts",
- "d2-geo",
- "d2-graph",
- "d2-label",
- "d2-target",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-flate"
-version = "0.7.1"
-dependencies = [
- "flate2",
-]
-
-[[package]]
-name = "d2-font"
-version = "0.7.1"
-dependencies = [
- "d2-flate",
-]
-
-[[package]]
-name = "d2-fonts"
-version = "0.7.1"
-dependencies = [
- "base64",
- "d2-font",
-]
-
-[[package]]
-name = "d2-geo"
-version = "0.7.1"
-
-[[package]]
-name = "d2-graph"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
- "d2-color",
- "d2-fonts",
- "d2-geo",
- "d2-label",
- "d2-shape",
- "d2-target",
- "d2-textmeasure",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-grid"
-version = "0.7.1"
-dependencies = [
- "d2-geo",
- "d2-graph",
- "d2-label",
- "d2-shape",
- "d2-target",
- "log",
-]
-
-[[package]]
-name = "d2-ir"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
- "d2-parser",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-label"
-version = "0.7.1"
-dependencies = [
- "d2-geo",
-]
-
-[[package]]
-name = "d2-latex"
-version = "0.7.1"
-
-[[package]]
-name = "d2-lib"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
- "d2-compiler",
- "d2-dagre-layout",
- "d2-exporter",
- "d2-fonts",
- "d2-geo",
- "d2-graph",
- "d2-grid",
- "d2-ir",
- "d2-latex",
- "d2-parser",
- "d2-sequence",
- "d2-shape",
- "d2-svg-render",
- "d2-target",
- "d2-textmeasure",
- "d2-themes",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "d2-lib-web"
-version = "0.7.1"
-dependencies = [
- "d2-lib",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "d2-parser"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
-]
-
-[[package]]
-name = "d2-sequence"
-version = "0.7.1"
-dependencies = [
- "d2-compiler",
- "d2-geo",
- "d2-graph",
- "d2-label",
- "d2-target",
- "log",
-]
-
-[[package]]
-name = "d2-shape"
-version = "0.7.1"
-dependencies = [
- "d2-geo",
- "d2-label",
- "d2-svg-path",
- "d2-target",
-]
-
-[[package]]
-name = "d2-sketch"
-version = "0.7.1"
-dependencies = [
- "d2-color",
- "d2-geo",
- "d2-label",
- "d2-svg-path",
- "d2-target",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-svg-path"
-version = "0.7.1"
+name = "d2-little"
+version = "0.7.2"
 dependencies = [
  "base32",
- "d2-geo",
-]
-
-[[package]]
-name = "d2-svg-render"
-version = "0.7.1"
-dependencies = [
- "d2-ast",
- "d2-chroma",
- "d2-color",
- "d2-font",
- "d2-fonts",
- "d2-geo",
- "d2-label",
- "d2-latex",
- "d2-shape",
- "d2-sketch",
- "d2-svg-path",
- "d2-target",
- "d2-textmeasure",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-target"
-version = "0.7.1"
-dependencies = [
- "d2-color",
- "d2-fonts",
- "d2-geo",
- "d2-label",
- "d2-textmeasure",
- "d2-themes",
-]
-
-[[package]]
-name = "d2-textmeasure"
-version = "0.7.1"
-dependencies = [
- "d2-fonts",
+ "base64",
+ "fancy-regex",
+ "flate2",
+ "log",
  "markdown",
  "regex",
  "roxmltree",
+ "serde",
+ "serde_json",
  "ttf-parser",
  "unicode-segmentation",
  "unicode-width",
 ]
 
 [[package]]
-name = "d2-themes"
-version = "0.7.1"
+name = "d2-little-web"
+version = "0.7.2"
 dependencies = [
- "d2-color",
-]
-
-[[package]]
-name = "dagre"
-version = "0.1.0"
-dependencies = [
- "log",
- "serde",
- "serde_json",
+ "d2-little",
+ "wasm-bindgen",
 ]
 
 [[package]]
