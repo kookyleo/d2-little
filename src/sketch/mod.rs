@@ -8,9 +8,10 @@
 //! JS engines; keeping the same truncation guarantees byte-equivalent output
 //! on every case that already matched under the rquickjs pipeline.
 //!
-//! License: Apache-2.0. The rough.js port in `rough.rs` is MIT (Preet Shihn)
-//! upstream, re-licensed here under Apache-2.0 alongside the rest of the
-//! workspace.
+//! Licensing: this module (being a port of Go `d2renderers/d2sketch/sketch.go`)
+//! is MPL-2.0 per the root `LICENSE`. The rough.js port in `rough.rs` remains
+//! under the upstream MIT license (Copyright (c) 2019 Preet Shihn); see
+//! `src/sketch/LICENSE` for the full MIT text.
 
 use std::fmt::Write as _;
 

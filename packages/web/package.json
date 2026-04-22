@@ -3,7 +3,7 @@
   "version": "0.7.2",
   "description": "wasm-bindgen wrapper for d2-little — run D2 diagrams → SVG in the browser",
   "type": "module",
-  "license": "Apache-2.0",
+  "license": "MPL-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/kookyleo/d2-little.git",

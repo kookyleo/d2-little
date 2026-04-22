@@ -88,4 +88,6 @@ layout(&mut g, Some(opts));
 
 ## License
 
-Apache-2.0
+MIT. This module is a Rust port of [dagre.js](https://github.com/dagrejs/dagre)
+(Copyright (c) 2012-2014 Chris Pettitt, MIT License). See `LICENSE` for
+the full text.

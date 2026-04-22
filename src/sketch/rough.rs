@@ -15,7 +15,12 @@
 //! - Entrypoints `draw_*` return `Vec<RoughPath>`, matching what the rquickjs
 //!   oracle extracts from `node.children`.
 //!
-//! License: Apache-2.0. Derived from rough.js (MIT, Preet Shihn).
+//! SPDX-License-Identifier: MIT
+//!
+//! Derived from rough.js — Copyright (c) 2019 Preet Shihn, MIT License.
+//! See `src/sketch/LICENSE` for the full MIT text. This file remains under the
+//! upstream MIT license, distributed alongside the rest of the crate (MPL-2.0)
+//! as permitted by MPL-2.0 §3.3 (Larger Work).
 
 use std::cell::Cell;
 use std::fmt::Write as _;
