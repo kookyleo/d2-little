@@ -1,5 +1,15 @@
 # d2-little
 
+> **This repository is no longer the development home for d2-little.**
+>
+> The project has been merged into
+> [**Actrium/supramark**](https://github.com/Actrium/supramark) via `git subtree`
+> and now lives at
+> [`crates/d2-little/`](https://github.com/Actrium/supramark/tree/main/crates/d2-little).
+> Ongoing development and issues are handled there.
+>
+> The history here remains available for reference.
+
 Lightweight D2 → SVG converter: a pure-Rust port of the
 [d2lang](https://d2lang.com) pipeline (parser → IR → graph → dagre
 layout → SVG). Builds to native or `wasm32-unknown-unknown`, has no C
